@@ -3,7 +3,7 @@
 import logging
 import re
 import sys
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from typing import Any
 
 import structlog
@@ -24,18 +24,22 @@ def _scrub_string(value: str) -> str:
 
 
 def _scrub(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
     if isinstance(value, str):
         return _scrub_string(value)
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return _scrub_mapping(value)
-    if isinstance(value, (list, tuple)):
-        return type(value)(_scrub(v) for v in value)
-    return value
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_scrub(v) for v in value]
+    # Unknown objects (exceptions, models, ...) are stringified so their text is scrubbed too.
+    return _scrub_string(str(value))
 
 
-def _scrub_mapping(data: MutableMapping[str, Any]) -> dict[str, Any]:
+def _scrub_mapping(data: Mapping[Any, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for key, value in data.items():
+    for raw_key, value in data.items():
+        key = str(raw_key)
         if _SENSITIVE_KEY.search(key) and not key.endswith("_file"):
             out[key] = _MASK
         else:

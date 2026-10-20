@@ -62,3 +62,33 @@ def test_level_filtering(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging("WARNING", json_output=True)
     get_logger("test").info("quiet")
     assert capsys.readouterr().out == ""
+
+
+class _Holder:
+    def __repr__(self) -> str:
+        return "Holder(key=trk_leakme123)"
+
+
+def test_redacts_secret_inside_arbitrary_object() -> None:
+    out = redact(
+        None, "info", {"event": "x", "obj": _Holder(), "err": ValueError("Bearer abc.def")}
+    )
+    assert "trk_leakme123" not in str(out["obj"])
+    assert "abc.def" not in str(out["err"])
+
+
+def test_redacts_secret_inside_set_and_nested_tuple() -> None:
+    out = redact(None, "info", {"event": "x", "s": {"trk_inset1"}, "t": (("trk_deep2",),)})
+    assert "trk_inset1" not in str(out["s"])
+    assert "trk_deep2" not in str(out["t"])
+
+
+def test_non_string_keys_do_not_crash_and_are_scrubbed() -> None:
+    out = redact(None, "info", {"event": "x", "m": {1: "ok", ("password",): "p"}})
+    assert set(out["m"]) == {"1", "('password',)"}
+    assert out["m"]["1"] == "ok"
+
+
+def test_primitives_pass_through() -> None:
+    out = redact(None, "info", {"event": "x", "n": 3, "f": 1.5, "b": True, "none": None})
+    assert (out["n"], out["f"], out["b"], out["none"]) == (3, 1.5, True, None)
