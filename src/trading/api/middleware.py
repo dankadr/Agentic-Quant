@@ -15,6 +15,9 @@ _REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 CallNext = Callable[[Request], Awaitable[Response]]
 
+# Metric labels must come from a fixed set, or a client can mint unlimited time series.
+_KNOWN_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Accept a well-formed ``X-Request-ID`` or generate one; echo it and bind it to the logs."""
@@ -44,4 +47,5 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         finally:
             route = request.scope.get("route")
             template = getattr(route, "path", None) or "unmatched"
-            HTTP_REQUESTS.labels(request.method, template, str(status)).inc()
+            method = request.method if request.method in _KNOWN_METHODS else "OTHER"
+            HTTP_REQUESTS.labels(method, template, str(status)).inc()
