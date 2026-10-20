@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
@@ -108,3 +110,9 @@ def test_downgrade_upgrade_roundtrip(database_url: str) -> None:
     with admin.connect() as conn:
         conn.execute(text("DROP DATABASE roundtrip"))
     admin.dispose()
+
+
+def test_sessions_use_utc(db: Session) -> None:
+    assert db.execute(text("select current_setting('TimeZone')")).scalar_one() == "UTC"
+    ts = db.execute(text("select now()")).scalar_one()
+    assert ts.utcoffset() == timedelta(0)

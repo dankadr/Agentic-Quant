@@ -25,6 +25,7 @@ class ApiProblem(Exception):
         title: str,
         detail: str | None = None,
         extra: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(f"{code}: {title}")
         self.status = status
@@ -32,6 +33,7 @@ class ApiProblem(Exception):
         self.title = title
         self.detail = detail
         self.extra = dict(extra or {})
+        self.headers = dict(headers or {})
 
 
 def problem_response(request: Request, problem: ApiProblem) -> JSONResponse:
@@ -46,7 +48,9 @@ def problem_response(request: Request, problem: ApiProblem) -> JSONResponse:
         "request_id": request_id,
         **problem.extra,
     }
-    headers = {"X-Request-ID": request_id} if request_id else None
+    headers = dict(problem.headers)
+    if request_id:
+        headers["X-Request-ID"] = request_id
     return JSONResponse(body, status_code=problem.status, media_type=PROBLEM_JSON, headers=headers)
 
 

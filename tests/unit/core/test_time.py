@@ -19,3 +19,16 @@ def test_ensure_utc_converts_new_york() -> None:
 
 def test_isoformat_z() -> None:
     assert isoformat_z(datetime(2026, 10, 19, 13, 30, tzinfo=UTC)) == "2026-10-19T13:30:00Z"
+
+
+def test_utc_datetime_type_serializes_with_z_suffix() -> None:
+    from pydantic import BaseModel
+
+    from trading.core.time import UtcDatetime
+
+    class M(BaseModel):
+        ts: UtcDatetime
+
+    ny = datetime(2026, 10, 19, 9, 30, tzinfo=ZoneInfo("America/New_York"))
+    assert M(ts=ny).model_dump_json() == '{"ts":"2026-10-19T13:30:00Z"}'
+    assert M(ts=ny).model_dump(mode="json") == {"ts": "2026-10-19T13:30:00Z"}

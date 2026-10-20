@@ -48,7 +48,12 @@ extend-exclude = ["docs", ".superpowers"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S", "DTZ", "PL", "RUF"]
-ignore = ["PLR0913", "PLR2004", "PLR0911", "PLR0912", "PLR0915", "RUF012"]
+ignore = ["PLR0913", "PLR0917", "PLR2004", "PLR0911", "PLR0912", "PLR0915", "RUF012"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+  "fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.Path", "typer.Option", "typer.Argument",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "PLC0415"]

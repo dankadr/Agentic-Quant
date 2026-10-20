@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, sessionmaker
 import trading
 from trading.api.middleware import MetricsMiddleware, RequestIdMiddleware
 from trading.api.problems import register_handlers
-from trading.api.routes import health
+from trading.api.routes import audit, control, health, system
 from trading.core.clock import Clock
 from trading.core.config import AppConfig, Settings
 
@@ -27,4 +27,7 @@ def create_app(
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(RequestIdMiddleware)  # added last = outermost
     app.include_router(health.router)
+    app.include_router(system.router)
+    app.include_router(control.router)
+    app.include_router(audit.router)
     return app
