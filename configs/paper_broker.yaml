@@ -1,0 +1,14 @@
+paper_broker:
+  latency_ms: 500
+  slippage_bps: '2'
+  max_participation_rate: '0.05'
+  quote_max_age_seconds: 5
+  commission_per_order_usd: '0.00'
+  sell_fee_rate: '0.0000278'        # PLACEHOLDER fee rate — verify current SEC/FINRA values
+  taf_per_share_usd: '0.000166'     # PLACEHOLDER fee rate — verify current SEC/FINRA values
+  taf_max_per_trade_usd: '8.30'     # PLACEHOLDER fee rate — verify current SEC/FINRA values
+  fractional_shares: true
+  fractional_increment: '0.0001'
+  settlement_days: 1
+  use_unsettled_funds: false
+  seed: 7

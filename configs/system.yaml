@@ -1,0 +1,13 @@
+system:
+  mode: PAPER_ONLY
+  timezone: America/New_York
+  starting_cash_usd: '1000.00'
+  require_fresh_market_data: true
+
+# Initial universe: a suggestion pending owner decision 2, not a recommendation.
+universe:
+  - {symbol: SPY,  asset_type: ETF,    sector: Broad Market, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: QQQ,  asset_type: ETF,    sector: Broad Market, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: IWM,  asset_type: ETF,    sector: Broad Market, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: AAPL, asset_type: EQUITY, sector: Technology,   tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: MSFT, asset_type: EQUITY, sector: Technology,   tick_size: '0.01', lot_size: '1', fractional_eligible: true}

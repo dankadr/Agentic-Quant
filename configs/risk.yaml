@@ -1,0 +1,17 @@
+risk:
+  max_gross_exposure_pct: '0.80'
+  max_symbol_exposure_pct: '0.10'
+  max_sector_exposure_pct: '0.30'
+  max_daily_loss_pct: '0.01'
+  max_drawdown_pct: '0.05'
+  max_new_entries_per_day: 10
+  max_open_symbols: 3
+  min_cash_reserve_pct: '0.20'
+  allow_margin: false
+  allow_short: false
+  allow_options: false
+  allow_crypto: false
+  max_bar_age_seconds: 90
+  entry_cutoff_minutes_before_close: 15
+  max_spread_bps: '25'
+  unknown_order_grace_seconds: 30
