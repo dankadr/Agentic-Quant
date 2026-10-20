@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.types import Text
 
 from trading.core.hashing import canonical_json
+from trading.monitoring.logging import scrub_text
 
 _MAX_ERROR_CHARS = 2000
 _MAX_BACKOFF_SECONDS = 300
@@ -125,22 +126,40 @@ def claim(
     )
 
 
-def complete(session: Session, job_id: UUID, *, now: datetime) -> None:
-    session.execute(
+def complete(
+    session: Session, job_id: UUID, *, worker_id: str, attempts: int, now: datetime
+) -> bool:
+    """Mark the job succeeded, only if this exact claim (worker + attempt) still owns it.
+
+    Returns False when the lease expired and the job was reclaimed: the stale result is dropped.
+    """
+    row = session.execute(
         text(
             "UPDATE jobs SET state = 'SUCCEEDED', lease_until = NULL, locked_by = NULL,"
             " updated_at = :now WHERE id = :id AND state = 'RUNNING'"
+            " AND locked_by = :worker AND attempts = :attempts RETURNING id"
         ),
-        {"id": job_id, "now": now},
-    )
+        {"id": job_id, "now": now, "worker": worker_id, "attempts": attempts},
+    ).one_or_none()
+    return row is not None
 
 
-def fail(session: Session, job_id: UUID, *, error: str, now: datetime) -> JobState:
-    """Record a failure: requeue with exponential backoff, or DEAD after max attempts."""
+def fail(
+    session: Session, job_id: UUID, *, worker_id: str, attempts: int, error: str, now: datetime
+) -> JobState | None:
+    """Record a failure: requeue with exponential backoff, or DEAD after max attempts.
+
+    Returns None (and changes nothing) when this claim no longer owns the job.
+    """
     row = session.execute(
-        text("SELECT attempts, max_attempts FROM jobs WHERE id = :id FOR UPDATE"),
-        {"id": job_id},
-    ).one()
+        text(
+            "SELECT attempts, max_attempts FROM jobs WHERE id = :id AND state = 'RUNNING'"
+            " AND locked_by = :worker AND attempts = :attempts FOR UPDATE"
+        ),
+        {"id": job_id, "worker": worker_id, "attempts": attempts},
+    ).one_or_none()
+    if row is None:
+        return None
     dead = row.attempts >= row.max_attempts
     delay = timedelta(seconds=min(2**row.attempts, _MAX_BACKOFF_SECONDS))
     session.execute(
@@ -152,7 +171,7 @@ def fail(session: Session, job_id: UUID, *, error: str, now: datetime) -> JobSta
             "id": job_id,
             "state": (JobState.DEAD if dead else JobState.QUEUED).value,
             "at": now if dead else now + delay,
-            "err": error[:_MAX_ERROR_CHARS],
+            "err": scrub_text(error)[:_MAX_ERROR_CHARS],
             "now": now,
         },
     )

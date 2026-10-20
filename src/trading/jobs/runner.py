@@ -51,8 +51,23 @@ class JobRunner:
                 _log.exception("job_failed", job_id=str(job.id), kind=job.kind)
                 error = f"{type(exc).__name__}: {exc}"
         with self._sf.begin() as session:
+            now = self._clock.now()
             if error is None:
-                complete(session, job.id, now=self._clock.now())
+                owned = complete(
+                    session, job.id, worker_id=self._worker_id, attempts=job.attempts, now=now
+                )
             else:
-                fail(session, job.id, error=error, now=self._clock.now())
+                owned = (
+                    fail(
+                        session,
+                        job.id,
+                        worker_id=self._worker_id,
+                        attempts=job.attempts,
+                        error=error,
+                        now=now,
+                    )
+                    is not None
+                )
+            if not owned:
+                _log.warning("job_claim_lost", job_id=str(job.id), kind=job.kind)
         return True

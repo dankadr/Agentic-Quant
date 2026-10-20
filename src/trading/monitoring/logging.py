@@ -17,7 +17,8 @@ _SECRET_PATTERNS = (
 _MASK = "***"
 
 
-def _scrub_string(value: str) -> str:
+def scrub_text(value: str) -> str:
+    """Mask secret-looking substrings (bearer tokens, API keys) in free text."""
     for pattern in _SECRET_PATTERNS:
         value = pattern.sub(_MASK, value)
     return value
@@ -27,13 +28,13 @@ def _scrub(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
-        return _scrub_string(value)
+        return scrub_text(value)
     if isinstance(value, Mapping):
         return _scrub_mapping(value)
     if isinstance(value, (list, tuple, set, frozenset)):
         return [_scrub(v) for v in value]
     # Unknown objects (exceptions, models, ...) are stringified so their text is scrubbed too.
-    return _scrub_string(str(value))
+    return scrub_text(str(value))
 
 
 def _scrub_mapping(data: Mapping[Any, Any]) -> dict[str, Any]:

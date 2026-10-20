@@ -68,3 +68,18 @@ def test_runner_handler_exception_records_error_and_backs_off(
     assert runner.run_once() is False  # backed off: not yet due
     clock.advance(timedelta(seconds=3))
     assert runner.run_once() is True
+
+
+def test_runner_redacts_secrets_from_persisted_error(
+    db: Session, session_factory: sessionmaker[Session], clock: ManualClock
+):
+    def leak(job: Job) -> None:
+        raise RuntimeError("upstream said Authorization: Bearer abc.def key trk_s3cr3t")
+
+    _add(session_factory, clock, "ping")
+    _runner(session_factory, clock, {"ping": leak}).run_once()
+    error = _state(db)[2]
+    assert error is not None
+    assert "abc.def" not in error
+    assert "trk_s3cr3t" not in error
+    assert "RuntimeError" in error

@@ -141,7 +141,7 @@ def test_complete_marks_succeeded(
     with session_factory.begin() as s:
         claim(s, worker_id="w1", now=clock.now(), lease_for=LEASE)
     with session_factory.begin() as s:
-        complete(s, jid, now=clock.now())
+        complete(s, jid, worker_id="w1", attempts=1, now=clock.now())
     row = _row(db, jid)
     assert row["state"] == "SUCCEEDED"
     assert row["locked_by"] is None
@@ -154,7 +154,10 @@ def test_fail_backoff_then_dead(
     with session_factory.begin() as s:
         claim(s, worker_id="w", now=clock.now(), lease_for=LEASE)
     with session_factory.begin() as s:
-        assert fail(s, jid, error="boom", now=clock.now()) is JobState.QUEUED
+        assert (
+            fail(s, jid, worker_id="w", attempts=1, error="boom", now=clock.now())
+            is JobState.QUEUED
+        )
     row = _row(db, jid)
     assert row["scheduled_at"] == clock.now() + timedelta(seconds=2)
     assert row["last_error"] == "boom"
@@ -162,7 +165,42 @@ def test_fail_backoff_then_dead(
     with session_factory.begin() as s:
         claim(s, worker_id="w", now=clock.now(), lease_for=LEASE)
     with session_factory.begin() as s:
-        assert fail(s, jid, error="x" * 5000, now=clock.now()) is JobState.DEAD
+        assert (
+            fail(s, jid, worker_id="w", attempts=2, error="x" * 5000, now=clock.now())
+            is JobState.DEAD
+        )
     row = _row(db, jid)
     assert row["state"] == "DEAD"
     assert len(str(row["last_error"])) == 2000
+
+
+def test_stale_worker_cannot_complete_reclaimed_job(
+    db: Session, session_factory: sessionmaker[Session], clock: ManualClock
+):
+    jid = _enqueue(session_factory, clock, "k")
+    with session_factory.begin() as s:
+        claim(s, worker_id="w1", now=clock.now(), lease_for=LEASE)
+    clock.advance(timedelta(minutes=2))
+    with session_factory.begin() as s:
+        claim(s, worker_id="w2", now=clock.now(), lease_for=LEASE)
+    with session_factory.begin() as s:  # w1 wakes up late
+        assert complete(s, jid, worker_id="w1", attempts=1, now=clock.now()) is False
+    row = _row(db, jid)
+    assert (row["state"], row["locked_by"], row["attempts"]) == ("RUNNING", "w2", 2)
+    with session_factory.begin() as s:
+        assert complete(s, jid, worker_id="w2", attempts=2, now=clock.now()) is True
+
+
+def test_stale_worker_cannot_fail_reclaimed_job(
+    db: Session, session_factory: sessionmaker[Session], clock: ManualClock
+):
+    jid = _enqueue(session_factory, clock, "k")
+    with session_factory.begin() as s:
+        claim(s, worker_id="w1", now=clock.now(), lease_for=LEASE)
+    clock.advance(timedelta(minutes=2))
+    with session_factory.begin() as s:
+        claim(s, worker_id="w2", now=clock.now(), lease_for=LEASE)
+    with session_factory.begin() as s:
+        assert fail(s, jid, worker_id="w1", attempts=1, error="late", now=clock.now()) is None
+    row = _row(db, jid)
+    assert (row["state"], row["locked_by"], row["last_error"]) == ("RUNNING", "w2", None)
