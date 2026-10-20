@@ -1,0 +1,105 @@
+# PAPER_ONLY stack. There are no broker credentials, variables or secrets anywhere in this file.
+name: robinhood-trading
+
+x-app-env: &app-env
+  TRADING_DB_HOST: postgres
+  TRADING_DB_PORT: "5432"
+  TRADING_DB_NAME: trading
+  TRADING_DB_USER: trading_app
+  TRADING_DB_PASSWORD_FILE: /run/secrets/db_app_password
+  TRADING_LOG_JSON: "true"
+  TRADING_LOG_LEVEL: INFO
+
+x-app: &app
+  image: robinhood-trading:local
+  build: .
+  restart: unless-stopped
+  environment: *app-env
+  secrets: [db_app_password]
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_superuser_password
+    secrets: [db_superuser_password, db_owner_password, db_app_password]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: robinhood-trading:local
+    build: .
+    command: ["migrate"]
+    restart: "no"
+    environment:
+      <<: *app-env
+      TRADING_DB_USER: trading_owner
+      TRADING_DB_PASSWORD_FILE: /run/secrets/db_owner_password
+    secrets: [db_owner_password]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: ["api"]
+    ports:
+      - "127.0.0.1:8000:8000"  # loopback only; expose to the tailnet with `tailscale serve`
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/v1/health/live', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    healthcheck:
+      test: ["CMD", "trading", "healthcheck", "worker"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
+  scheduler:
+    <<: *app
+    command: ["scheduler"]
+    healthcheck:
+      test: ["CMD", "trading", "healthcheck", "scheduler"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on: [api, worker, scheduler]
+
+volumes:
+  pgdata:
+  promdata:
+
+secrets:
+  db_superuser_password:
+    file: ./secrets/db_superuser_password
+  db_owner_password:
+    file: ./secrets/db_owner_password
+  db_app_password:
+    file: ./secrets/db_app_password

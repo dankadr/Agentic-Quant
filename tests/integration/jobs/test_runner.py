@@ -83,3 +83,26 @@ def test_runner_redacts_secrets_from_persisted_error(
     assert "abc.def" not in error
     assert "trk_s3cr3t" not in error
     assert "RuntimeError" in error
+
+
+def test_runner_counts_job_outcomes(
+    db: Session, session_factory: sessionmaker[Session], clock: ManualClock
+):
+    from prometheus_client import REGISTRY
+
+    def sample(kind: str, outcome: str) -> float:
+        labels = {"kind": kind, "outcome": outcome}
+        return REGISTRY.get_sample_value("trading_jobs_processed_total", labels) or 0.0
+
+    ok_before, bad_before = sample("count-ok", "succeeded"), sample("count-bad", "failed")
+
+    def boom(job: Job) -> None:
+        raise RuntimeError("x")
+
+    _add(session_factory, clock, "count-ok", key="a")
+    _add(session_factory, clock, "count-bad", key="b")
+    runner = _runner(session_factory, clock, {"count-ok": lambda j: None, "count-bad": boom})
+    runner.run_once()
+    runner.run_once()
+    assert sample("count-ok", "succeeded") == ok_before + 1
+    assert sample("count-bad", "failed") == bad_before + 1

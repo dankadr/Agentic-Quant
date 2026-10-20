@@ -1,0 +1,11 @@
+.git
+.venv
+.superpowers
+secrets
+tests
+docs
+__pycache__
+*.pyc
+.mypy_cache
+.ruff_cache
+.pytest_cache

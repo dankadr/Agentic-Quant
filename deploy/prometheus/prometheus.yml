@@ -1,0 +1,11 @@
+# Metrics ports 9100-9102 are only reachable on the Compose network, never published to the host.
+# No credentials and no per-symbol / per-account labels are scraped.
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: trading-api
+    static_configs: [{targets: ["api:9100"]}]
+  - job_name: trading-worker
+    static_configs: [{targets: ["worker:9101"]}]
+  - job_name: trading-scheduler
+    static_configs: [{targets: ["scheduler:9102"]}]

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from trading.core.clock import Clock
 from trading.jobs.queue import Job, claim, complete, fail
 from trading.monitoring.logging import get_logger
+from trading.monitoring.metrics import JOBS_PROCESSED
 
 Handler = Callable[[Job], None]
 _log = get_logger(__name__)
@@ -68,6 +69,7 @@ class JobRunner:
                     )
                     is not None
                 )
+            JOBS_PROCESSED.labels(job.kind, "succeeded" if error is None else "failed").inc()
             if not owned:
                 _log.warning("job_claim_lost", job_id=str(job.id), kind=job.kind)
         return True
