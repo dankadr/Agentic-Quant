@@ -27,6 +27,7 @@ from trading.db.migrate import upgrade
 from trading.jobs.lease import Lease
 from trading.monitoring.logging import configure_logging
 from trading.monitoring.metrics import start_metrics_server
+from trading.risk.halts import NotInHaltError, clear_drawdown_halt
 from trading.services.handlers import WorkerContext
 from trading.services.health import check_health
 from trading.services.scheduler import run_scheduler
@@ -210,3 +211,26 @@ def ingest_csv(
             }
         )
     )
+
+
+@admin_app.command("clear-drawdown-halt")
+def clear_drawdown_halt_command(
+    reason: str = typer.Option(..., help="Why the halt is being cleared (audited)."),
+) -> None:
+    """Clear a HALTED_DRAWDOWN risk state after review. Resets peak equity; always audited."""
+    engine = make_engine(Settings().resolved_database_url())
+    try:
+        with make_session_factory(engine).begin() as session:
+            state = clear_drawdown_halt(
+                session,
+                actor="operator-cli",
+                reason=reason,
+                request_id=None,
+                now=SystemClock().now(),
+            )
+    except NotInHaltError:
+        typer.echo("risk state is not HALTED_DRAWDOWN; nothing to clear", err=True)
+        raise typer.Exit(1) from None
+    finally:
+        engine.dispose()
+    typer.echo(json.dumps({"risk_state": state.risk_state.value, "version": state.version}))

@@ -36,7 +36,7 @@ def make_instrument(db: Session, symbol: str = "SPY", fractional: bool = True) -
         tick_size=Decimal("0.01"),
         lot_size=Decimal(1),
         fractional_eligible=fractional,
-        sector="Broad Market",
+        sector="Technology" if symbol in ("AAPL", "MSFT") else "Broad Market",
         active=True,
     )
     db.add(row)
