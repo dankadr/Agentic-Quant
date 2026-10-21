@@ -7,15 +7,17 @@ latest closed bar's volume and by displayed size. The bar's high/low/close are n
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import ROUND_UP, Decimal
+from decimal import Decimal
 
 from trading.core.config import PaperBrokerConfig
 from trading.core.enums import OrderType, Side
+from trading.core.fees import estimate_fees
 from trading.core.money import ceil_to_increment, floor_to_increment, quantize_cash
 from trading.data.instruments import InstrumentInfo, qty_increment
 from trading.data.models import Bar, Quote
 
 _BPS = Decimal(10000)
+__all__ = ["FillDecision", "VenueOrderView", "estimate_fees", "evaluate_fill"]
 
 
 @dataclass(frozen=True)
@@ -38,15 +40,6 @@ class FillDecision:
     price: Decimal
     fees: Decimal
     slippage_estimate: Decimal
-
-
-def estimate_fees(side: Side, qty: Decimal, price: Decimal, cfg: PaperBrokerConfig) -> Decimal:
-    """Commission on every order; regulatory fees on sells only. Rounded up (conservative)."""
-    fees = cfg.commission_per_order_usd
-    if side is Side.SELL:
-        fees += qty * price * cfg.sell_fee_rate
-        fees += min(qty * cfg.taf_per_share_usd, cfg.taf_max_per_trade_usd)
-    return quantize_cash(fees, ROUND_UP)
 
 
 def _usable(quote: Quote | None, now: datetime, cfg: PaperBrokerConfig) -> Quote | None:
