@@ -277,6 +277,7 @@ _STATEMENTS = [
     """
     CREATE TABLE order_events (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        seq bigint GENERATED ALWAYS AS IDENTITY,
         order_id uuid NOT NULL REFERENCES orders(id),
         ts timestamptz NOT NULL,
         from_status text,
@@ -285,7 +286,7 @@ _STATEMENTS = [
         payload_json jsonb NOT NULL DEFAULT '{}'::jsonb
     )
     """,
-    "CREATE INDEX ix_order_events_order_ts ON order_events (order_id, ts)",
+    "CREATE INDEX ix_order_events_order_seq ON order_events (order_id, seq)",
     """
     CREATE TABLE fills (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

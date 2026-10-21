@@ -267,7 +267,7 @@ def test_venue_state_is_independent_of_application_tables(make_broker, clock, db
     broker.submit_order(request())
     tick(broker, clock)
     for table in ("orders", "fills", "cash_ledger", "positions", "order_intents"):
-        assert db.execute(text(f"select count(*) from {table}")).scalar_one() == 0  # noqa: S608
+        assert db.execute(text(f"select count(*) from {table}")).scalar_one() == 0
 
 
 def test_open_account_is_idempotent(make_broker, db: Session) -> None:  # type: ignore[no-untyped-def]

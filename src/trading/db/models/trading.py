@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import BigInteger, ForeignKey, Identity
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -72,6 +72,8 @@ class Order(Base):
 class OrderEvent(Base):
     __tablename__ = "order_events"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    # Strict insertion order: timestamps can tie, this cannot.
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True))
     order_id: Mapped[UUID] = mapped_column(ForeignKey("orders.id"))
     ts: Mapped[datetime]
     from_status: Mapped[str | None]

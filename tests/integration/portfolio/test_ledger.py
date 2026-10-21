@@ -68,9 +68,7 @@ def test_partial_fills_update_cash_position_fees_remaining(db: Session) -> None:
         "FILLED",
     )
     assert row.version == 3
-    events = db.execute(
-        text("select from_status, to_status from order_events order by ts, id")
-    ).all()
+    events = db.execute(text("select from_status, to_status from order_events order by seq")).all()
     assert [tuple(e) for e in events] == [
         ("ACKNOWLEDGED", "PARTIALLY_FILLED"),
         ("PARTIALLY_FILLED", "FILLED"),
