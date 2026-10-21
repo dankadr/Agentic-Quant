@@ -7,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.core.clock import Clock
+from trading.data.calendar import MarketCalendar
 from trading.jobs.lease import SCHEDULER_LEASE, acquire_lease, release_lease, renew_lease
 from trading.jobs.queue import enqueue
 from trading.jobs.schedule import plan_jobs
@@ -17,7 +18,9 @@ from trading.services.worker import EXIT_LEASE_LOST, EXIT_OK
 _log = get_logger(__name__)
 
 
-def tick(session_factory: sessionmaker[Session], clock: Clock, calendar: object | None) -> None:
+def tick(
+    session_factory: sessionmaker[Session], clock: Clock, calendar: MarketCalendar | None
+) -> None:
     """Plan and enqueue the jobs due now. Dedupe keys make this idempotent."""
     for spec in plan_jobs(clock.now(), calendar):
         with session_factory.begin() as session:
@@ -35,7 +38,7 @@ def run_scheduler(
     session_factory: sessionmaker[Session],
     clock: Clock,
     holder: str,
-    calendar: object | None,
+    calendar: MarketCalendar | None,
     stop: threading.Event,
     lease_ttl: timedelta = timedelta(seconds=30),
     interval: float = 10.0,

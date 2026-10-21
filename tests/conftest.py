@@ -1,7 +1,7 @@
 """Shared fixtures. Integration tests run against a real PostgreSQL (testcontainers)."""
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -55,6 +55,28 @@ def clock() -> ManualClock:
     return ManualClock(T0)
 
 
+def truncate_all(session_factory: sessionmaker[Session]) -> None:
+    """Empty every application table and restore the fail-closed seed state."""
+    with session_factory.begin() as cleanup:
+        tables = cleanup.execute(
+            text(
+                "SELECT quote_ident(schemaname) || '.' || quote_ident(tablename) "
+                "FROM pg_tables WHERE schemaname IN ('public', 'paper_venue') "
+                "AND tablename <> 'alembic_version'"
+            )
+        ).scalars()
+        names = ", ".join(tables)
+        if names:
+            cleanup.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+        seed_defaults(cleanup, T0)
+
+
+@pytest.fixture
+def reset_db(session_factory: sessionmaker[Session]) -> Callable[[], None]:
+    """Mid-test reset, e.g. to run the same replay twice from a clean database."""
+    return lambda: truncate_all(session_factory)
+
+
 @pytest.fixture
 def db(session_factory: sessionmaker[Session]) -> Iterator[Session]:
     session = session_factory()
@@ -63,18 +85,7 @@ def db(session_factory: sessionmaker[Session]) -> Iterator[Session]:
     finally:
         session.rollback()
         session.close()
-        with session_factory.begin() as cleanup:
-            tables = cleanup.execute(
-                text(
-                    "SELECT quote_ident(schemaname) || '.' || quote_ident(tablename) "
-                    "FROM pg_tables WHERE schemaname IN ('public', 'paper_venue') "
-                    "AND tablename <> 'alembic_version'"
-                )
-            ).scalars()
-            names = ", ".join(tables)
-            if names:
-                cleanup.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
-            seed_defaults(cleanup, T0)
+        truncate_all(session_factory)
 
 
 @pytest.fixture(scope="session")

@@ -114,11 +114,11 @@ def test_no_fill_before_latency() -> None:
 
 @pytest.mark.parametrize(
     "bad",
-    ["missing", "stale_6s", "crossed", "zero_bid"],
+    ["missing", "stale", "crossed", "zero_bid"],
 )
 def test_no_fill_on_bad_quote(bad: str) -> None:
     quotes = {
-        "stale_6s": quote(ts=NOW - timedelta(seconds=6)),
+        "stale": quote(ts=NOW - timedelta(seconds=CFG.quote_max_age_seconds + 1)),
         "crossed": quote(bid="100.05", ask="100.00"),
         "zero_bid": quote(bid="0", ask="100.00"),
     }
@@ -130,7 +130,7 @@ def test_no_fill_on_bad_quote(bad: str) -> None:
 
 
 def test_quote_exactly_at_max_age_is_usable() -> None:
-    assert fill(order(), q=quote(ts=NOW - timedelta(seconds=5))) is not None
+    assert fill(order(), q=quote(ts=NOW - timedelta(seconds=CFG.quote_max_age_seconds))) is not None
 
 
 def test_no_fill_without_bar_or_volume() -> None:
