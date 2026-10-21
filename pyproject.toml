@@ -66,7 +66,7 @@ files = ["src"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["exchange_calendars.*", "testcontainers.*", "prometheus_client.*"]
+module = ["exchange_calendars.*", "pandas.*", "testcontainers.*", "prometheus_client.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
