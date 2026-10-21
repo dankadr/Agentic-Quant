@@ -421,3 +421,31 @@ def test_metrics_count_status_transitions(env: Env) -> None:
         REGISTRY.get_sample_value("trading_orders_total", {"status": "ACKNOWLEDGED"}) == before + 1
     )
     assert CFG.system.mode == "PAPER_ONLY"
+
+
+# ---- hardening from the automated security review -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad", ["orb-v1", "orb v1", "", "a/b", "orb_v1-20261019", "1orb", "x" * 65]
+)
+def test_strategy_id_must_be_a_safe_identifier(env: Env, bad: str) -> None:
+    from trading.execution.manager import InvalidStrategyId
+
+    with pytest.raises(InvalidStrategyId):
+        env.place(strategy=bad)
+    assert env.scalar("select count(*) from order_intents") == 0
+
+
+def test_client_order_id_collision_is_not_misreported_as_decision_reuse(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    env.place()
+    monkeypatch.setattr(
+        "trading.execution.manager.make_client_order_id", lambda *a: "paper-orb_v1-20261019-0001"
+    )
+    with pytest.raises(IntegrityError):
+        env.place()
+    assert env.scalar("select count(*) from orders") == 1

@@ -8,6 +8,7 @@ Submission is two-phase so a crash can never produce a duplicate order:
 Every write transaction first asserts the executor lease fence.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from uuid import UUID
@@ -46,6 +47,7 @@ from trading.risk.models import ProposedOrder
 from trading.risk.service import RecordedDecision
 
 _log = get_logger(__name__)
+_STRATEGY_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
 _FILL_OVERLAP = timedelta(minutes=1)
 
 
@@ -55,6 +57,10 @@ class RiskNotApproved(TradingError):
 
 class DecisionAlreadyUsed(TradingError):
     """A risk decision authorises exactly one order intent."""
+
+
+class InvalidStrategyId(TradingError):
+    """Strategy ids are embedded in client order ids, so they use a strict charset (no '-')."""
 
 
 class SessionNotStarted(TradingError):
@@ -119,6 +125,8 @@ class ExecutionManager:
     ) -> UUID:
         """Persist the immutable intent and a CREATED order, in the caller's transaction."""
         now = self._fence(session)
+        if not _STRATEGY_ID.fullmatch(proposal.strategy_id):
+            raise InvalidStrategyId(f"invalid strategy id {proposal.strategy_id!r}")
         row = session.get(RiskDecisionRow, decision.decision_id)
         if row is None or not row.allowed or not decision.evaluation.allowed:
             raise RiskNotApproved("risk decision is not an allowed, persisted decision")
@@ -173,13 +181,21 @@ class ExecutionManager:
             is_entry=is_entry,
             created_at=now,
         )
-        session.add(intent)
         try:
-            session.flush()
+            with (
+                session.begin_nested()
+            ):  # SAVEPOINT: a failed insert must not poison the caller's txn
+                session.add(intent)
+                session.flush()
         except IntegrityError as exc:
-            raise DecisionAlreadyUsed(
-                f"risk decision {row.id} already has an order intent"
-            ) from exc
+            reused = session.scalar(
+                select(OrderIntent.id).where(OrderIntent.risk_decision_id == row.id)
+            )
+            if reused is not None:
+                raise DecisionAlreadyUsed(
+                    f"risk decision {row.id} already has an order intent"
+                ) from exc
+            raise  # any other constraint failure (e.g. an id collision) must surface as itself
         order = Order(
             account_id=proposal.account_id,
             intent_id=intent.id,

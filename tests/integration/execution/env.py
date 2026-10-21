@@ -42,6 +42,10 @@ NOW = datetime(2026, 10, 19, 15, 0, tzinfo=UTC)
 REF = "paper-primary"
 
 
+class Crash(Exception):
+    """Raised by test hooks to simulate a crash between two steps of a workflow."""
+
+
 class SpyBroker:
     """Wraps a PaperBroker, counting submits and optionally running a hook before each one."""
 
@@ -49,12 +53,16 @@ class SpyBroker:
         self.inner = inner
         self.submit_calls = 0
         self.before_submit = None  # type: ignore[var-annotated]
+        self.after_submit = None  # type: ignore[var-annotated]
 
     def submit_order(self, req: BrokerOrderRequest) -> BrokerOrderState:
         self.submit_calls += 1
         if self.before_submit is not None:
             self.before_submit()
-        return self.inner.submit_order(req)
+        state = self.inner.submit_order(req)
+        if self.after_submit is not None:
+            self.after_submit()
+        return state
 
     def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
         return getattr(self.inner, name)
