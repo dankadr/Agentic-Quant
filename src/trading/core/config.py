@@ -4,29 +4,24 @@ import socket
 from collections.abc import Mapping
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Literal
 from urllib.parse import quote
 
 import yaml
-from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from trading.core.enums import AssetType
 from trading.core.errors import TradingError
 from trading.core.hashing import content_hash
+from trading.core.money import NoFloatDecimal
 
 
 class ConfigError(TradingError):
     """Invalid or missing configuration. The message names the offending file."""
 
 
-def _reject_float(v: Any) -> Any:
-    if isinstance(v, float):
-        raise ValueError("floats are not allowed for money/ratios; quote the value as a string")
-    return v
-
-
-Dec = Annotated[Decimal, BeforeValidator(_reject_float)]
+Dec = NoFloatDecimal
 
 
 class _Frozen(BaseModel):

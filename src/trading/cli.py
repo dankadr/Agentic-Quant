@@ -1,8 +1,11 @@
 """Command line entrypoint for all services and admin tools."""
 
+import json
 import signal
 import threading
+from datetime import datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 
 import typer
 import uvicorn
@@ -14,6 +17,11 @@ from trading.api.app import create_app
 from trading.api.auth import Role, create_principal
 from trading.core.clock import SystemClock
 from trading.core.config import AppConfig, Settings, load_config
+from trading.core.time import ensure_utc
+from trading.data.calendar import XnysCalendar
+from trading.data.ingest import ingest_bars, ingest_corporate_actions, ingest_quotes
+from trading.data.instruments import upsert_universe
+from trading.data.replay_provider import CsvReplayProvider
 from trading.db.engine import make_engine, make_session_factory
 from trading.db.migrate import upgrade
 from trading.jobs.lease import Lease
@@ -149,3 +157,56 @@ def healthcheck(role: ServiceRole) -> None:
     finally:
         engine.dispose()
     raise typer.Exit(0 if healthy else 1)
+
+
+def _parse_utc(value: str, option: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise typer.BadParameter(f"{option}: invalid ISO-8601 timestamp {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise typer.BadParameter(f"{option}: naive timestamp {value!r}; a timezone is required")
+    return ensure_utc(parsed)
+
+
+@app.command("ingest-csv")
+def ingest_csv(
+    path: Path = typer.Option(..., help="Directory with bars.csv / quotes.csv."),
+    start: str = typer.Option(..., help="Inclusive start, ISO-8601 with timezone."),
+    end: str = typer.Option(..., help="Exclusive end, ISO-8601 with timezone."),
+) -> None:
+    """Load CSV bars, quotes and corporate actions for the configured universe."""
+    start_dt, end_dt = _parse_utc(start, "--start"), _parse_utc(end, "--end")
+    settings = Settings()
+    config = load_config(settings.config_dir)
+    calendar = XnysCalendar(start_dt.date() - timedelta(days=7), end_dt.date() + timedelta(days=7))
+    provider = CsvReplayProvider(path)
+    symbols = [u.symbol for u in config.universe]
+    clock = SystemClock()
+    engine = make_engine(settings.resolved_database_url())
+    try:
+        with make_session_factory(engine).begin() as session:
+            upsert_universe(session, config.universe)
+            bars = ingest_bars(
+                session, provider, symbols=symbols, start=start_dt, end=end_dt,
+                calendar=calendar, clock=clock,
+            )  # fmt: skip
+            quotes = ingest_quotes(
+                session, provider, symbols=symbols, start=start_dt, end=end_dt,
+                calendar=calendar, clock=clock,
+            )  # fmt: skip
+            actions = ingest_corporate_actions(
+                session, provider, symbols=symbols, start=start_dt.date(), end=end_dt.date(),
+                clock=clock,
+            )  # fmt: skip
+    finally:
+        engine.dispose()
+    typer.echo(
+        json.dumps(
+            {
+                "bars": bars.to_dict(),
+                "quotes": quotes.to_dict(),
+                "corporate_actions": actions.to_dict(),
+            }
+        )
+    )

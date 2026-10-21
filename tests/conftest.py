@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.core.clock import ManualClock
+from trading.data.calendar import MarketCalendar
 from trading.db.engine import make_engine, make_session_factory
 from trading.db.migrate import upgrade
 from trading.db.seed import seed_defaults
@@ -74,3 +75,12 @@ def db(session_factory: sessionmaker[Session]) -> Iterator[Session]:
             if names:
                 cleanup.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
             seed_defaults(cleanup, T0)
+
+
+@pytest.fixture(scope="session")
+def calendar() -> "MarketCalendar":
+    from datetime import date
+
+    from trading.data.calendar import XnysCalendar
+
+    return XnysCalendar(date(2026, 1, 1), date(2027, 12, 31))

@@ -1,6 +1,9 @@
 """Decimal helpers. Binary floats are never accepted for money or quantity."""
 
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN, Decimal
+from typing import Annotated, Any
+
+from pydantic import BeforeValidator
 
 from trading.core.enums import Side
 
@@ -38,3 +41,13 @@ def trade_cash_amount(side: Side, qty: Decimal, price: Decimal) -> Decimal:
     """Signed cash effect of a trade: BUY is negative, SELL is positive."""
     gross = quantize_cash(qty * price)
     return -gross if side is Side.BUY else gross
+
+
+def _reject_float(v: Any) -> Any:
+    if isinstance(v, float):
+        raise ValueError("floats are not allowed for money/quantities; use a string or Decimal")
+    return v
+
+
+NoFloatDecimal = Annotated[Decimal, BeforeValidator(_reject_float)]
+"""Pydantic Decimal that refuses binary floats (YAML/JSON numbers must be quoted strings)."""
