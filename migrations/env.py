@@ -4,8 +4,8 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 
 from trading.core.config import Settings
+from trading.db import models  # noqa: F401
 from trading.db.base import Base
-from trading.db.models import ops  # noqa: F401
 
 config = context.config
 target_metadata = Base.metadata
