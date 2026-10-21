@@ -34,13 +34,14 @@ def instrument(symbol: str = "SPY", **kw: Any) -> InstrumentInfo:
 
 
 def symbol_view(symbol: str, *, bid: str = "99.99", ask: str = "100.00", stale: bool = False,
-                tradable: bool = True, no_quote: bool = False, now: datetime = NOW) -> SymbolView:  # fmt: skip
-    quote = None if no_quote else Quote(symbol=symbol, ts=now, bid=D(bid), ask=D(ask), bid_size=None,
-                                        ask_size=None, provider="p")  # fmt: skip
+                tradable: bool = True, no_quote: bool = False, now: datetime = NOW,
+                quote_ts: datetime | None = None, quote_flags: tuple[str, ...] = ()) -> SymbolView:  # fmt: skip
+    quote = None if no_quote else Quote(symbol=symbol, ts=quote_ts or now, bid=D(bid), ask=D(ask),
+                                        bid_size=None, ask_size=None, provider="p")  # fmt: skip
     bar = Bar(symbol=symbol, interval="1m", ts=now - timedelta(minutes=1), open=D(100), high=D(100),
               low=D(100), close=D(100), volume=D(1000), provider="p", source_seq=None)  # fmt: skip
     return SymbolView(symbol=symbol, instrument_id=uuid4(), last_bar=bar, quote=quote,
-                      bar_age_seconds=0, stale=stale, tradable=tradable)  # fmt: skip
+                      bar_age_seconds=0, stale=stale, tradable=tradable, quote_flags=quote_flags)  # fmt: skip
 
 
 def portfolio(
@@ -81,6 +82,7 @@ def evaluate(
     limit: str | None = "100.00",
     otype: OrderType = OrderType.LIMIT,
     now: datetime = NOW,
+    as_of: datetime | None = None,
     trading_state: TradingState = TradingState.PAPER_RUNNING,
     risk_state: RiskState = RiskState.NORMAL,
     pf: PortfolioState | str | None = "default",
@@ -101,7 +103,7 @@ def evaluate(
     state = portfolio() if pf == "default" else pf
     assert state is None or isinstance(state, PortfolioState)
     market = MarketSnapshot(
-        id=uuid4(), as_of=now, provider="p",
+        id=uuid4(), as_of=as_of or now, provider="p",
         symbols=views if views is not None else {symbol: symbol_view(symbol, now=now)},
         quality_status="OK", data_hash="h",
     )  # fmt: skip

@@ -17,6 +17,7 @@ from trading.core.fees import estimate_fees
 from trading.core.money import is_multiple_of
 from trading.data.calendar import CalendarUnavailable, MarketCalendar
 from trading.data.instruments import qty_increment
+from trading.data.models import BLOCKING_FLAGS, QualityFlag
 from trading.data.snapshot import MarketSnapshot
 from trading.risk.models import AccountView, ProposedOrder, RiskEvaluation, RiskReason
 
@@ -98,20 +99,33 @@ class DeterministicRiskEngine:
             elif is_entry and session.close_at - now <= cutoff:
                 deny(RejectionCode.MARKET_CLOSED, "entry_cutoff")
 
-        # 7-9: signal and data freshness, quote sanity
+        # 7-9: signal and data freshness, quote sanity. The snapshot's own stale/tradable verdict
+        # is only a hint: freshness is re-derived here from `now`, because this engine is the
+        # independent control and must not trust a reused or mislabelled snapshot.
         if proposal.signal_expires_at is not None and now >= proposal.signal_expires_at:
             deny(RejectionCode.SIGNAL_EXPIRED)
         if view is not None:
+            max_age = timedelta(seconds=policy.max_bar_age_seconds)
             if view.stale or not view.tradable:
                 deny(RejectionCode.STALE_MARKET_DATA, "stale" if view.stale else "blocking_flag")
+            if market.as_of > now:
+                deny(RejectionCode.STALE_MARKET_DATA, "snapshot_from_future")
+            elif now - market.as_of > max_age:
+                deny(RejectionCode.STALE_MARKET_DATA, "snapshot_age")
+            if quote is not None and quote.ts <= now and now - quote.ts > max_age:
+                deny(RejectionCode.STALE_MARKET_DATA, "quote_age")
             if quote is None:
                 deny(RejectionCode.INVALID_QUOTE, "no_quote")
+            elif quote.ts > now:
+                deny(RejectionCode.INVALID_QUOTE, "future")
             elif quote.bid <= 0:
                 deny(RejectionCode.INVALID_QUOTE, "non_positive")
             elif quote.ask < quote.bid:
                 deny(RejectionCode.INVALID_QUOTE, "crossed")
             elif quote.spread_bps > policy.max_spread_bps:
                 deny(RejectionCode.INVALID_QUOTE, "spread")
+            if any(QualityFlag(f) in BLOCKING_FLAGS for f in view.quote_flags):
+                deny(RejectionCode.INVALID_QUOTE, "quote_flag")
 
         # 10-11: strategy and duplicates
         if proposal.strategy_id not in account.enabled_strategies:

@@ -159,6 +159,58 @@ def test_blocking_flag_data_rejected(calendar) -> None:  # type: ignore[no-untyp
     assert codes(result) == ["STALE_MARKET_DATA"]
 
 
+# ---- the engine must not trust the snapshot's own freshness verdict -----------------------------
+
+
+@pytest.mark.parametrize(("age_s", "allowed"), [(0, True), (90, True), (91, False), (3600, False)])
+def test_old_snapshot_rejected_even_if_it_claims_to_be_fresh(
+    calendar, age_s: int, allowed: bool
+) -> None:  # type: ignore[no-untyped-def]
+    old = NOW - timedelta(seconds=age_s)
+    result = evaluate(calendar, as_of=old, views={"SPY": symbol_view("SPY", now=NOW)})
+    assert result.allowed is allowed
+    if not allowed:
+        assert reasons(result) == [("STALE_MARKET_DATA", "snapshot_age")]
+
+
+def test_snapshot_from_the_future_rejected(calendar) -> None:  # type: ignore[no-untyped-def]
+    result = evaluate(calendar, as_of=NOW + timedelta(seconds=1))
+    assert reasons(result) == [("STALE_MARKET_DATA", "snapshot_from_future")]
+
+
+@pytest.mark.parametrize(("age_s", "allowed"), [(0, True), (90, True), (91, False)])
+def test_old_quote_rejected(calendar, age_s: int, allowed: bool) -> None:  # type: ignore[no-untyped-def]
+    view = symbol_view("SPY", quote_ts=NOW - timedelta(seconds=age_s))
+    result = evaluate(calendar, views={"SPY": view})
+    assert result.allowed is allowed
+    if not allowed:
+        assert reasons(result) == [("STALE_MARKET_DATA", "quote_age")]
+
+
+def test_quote_from_the_future_rejected(calendar) -> None:  # type: ignore[no-untyped-def]
+    view = symbol_view("SPY", quote_ts=NOW + timedelta(seconds=1))
+    assert reasons(evaluate(calendar, views={"SPY": view})) == [("INVALID_QUOTE", "future")]
+
+
+@pytest.mark.parametrize(
+    "flag", ["NON_POSITIVE_PRICE", "OHLC_INCONSISTENT", "OUTSIDE_SESSION", "DUPLICATE_CONFLICT"]
+)
+def test_blocking_quote_flag_rejected(calendar, flag: str) -> None:  # type: ignore[no-untyped-def]
+    view = symbol_view("SPY", quote_flags=(flag,))
+    assert reasons(evaluate(calendar, views={"SPY": view})) == [("INVALID_QUOTE", "quote_flag")]
+
+
+def test_informational_quote_flag_allowed(calendar) -> None:  # type: ignore[no-untyped-def]
+    assert evaluate(
+        calendar, views={"SPY": symbol_view("SPY", quote_flags=("OUT_OF_ORDER",))}
+    ).allowed
+
+
+def test_stale_reasons_precede_invalid_quote_reasons(calendar) -> None:  # type: ignore[no-untyped-def]
+    view = symbol_view("SPY", bid="100.05", ask="100.00", quote_ts=NOW - timedelta(seconds=120))
+    assert codes(evaluate(calendar, views={"SPY": view})) == ["STALE_MARKET_DATA", "INVALID_QUOTE"]
+
+
 @pytest.mark.parametrize(
     ("bid", "ask", "allowed"),
     [("99.875", "100.125", True), ("99.874", "100.126", False), ("99.99", "100.00", True)],
