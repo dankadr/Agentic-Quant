@@ -23,6 +23,6 @@
 
 ## Open items
 
-Secrets review and backup/restore drills are part of the operational gate (Plan D). Database role
-separation and the Compose stack have not been exercised in a real container run in the development
-environment used so far (see the smoke test in `tests/smoke`).
+Secrets review and backup/restore drills are part of the operational gate (Plan D). The Compose stack,
+role separation (owner vs app), migrations and operator flow are exercised against real containers by
+`make smoke` (`tests/smoke`).
