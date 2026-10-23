@@ -1,0 +1,3 @@
+# A signal whose TTL is already over when it is first seen: must never become an order.
+signals:
+  - {at: '2026-10-19T14:00:00Z', symbol: SPY, side: BUY, quantity: '0.15', order_type: LIMIT, limit_price: '560.00', strategy_id: orb_v1, ttl_seconds: 0}

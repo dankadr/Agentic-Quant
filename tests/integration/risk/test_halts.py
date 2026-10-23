@@ -37,8 +37,13 @@ def _row(db: Session, sql: str):  # type: ignore[no-untyped-def]
 
 def test_start_session_is_idempotent(db: Session) -> None:
     account_id = make_normal(db)
-    start_session(db, account_id=account_id, session_date=DAY, start_equity=D("1000"), now=T0)
-    start_session(db, account_id=account_id, session_date=DAY, start_equity=D("555"), now=T0)
+    first = start_session(
+        db, account_id=account_id, session_date=DAY, start_equity=D("1000"), now=T0
+    )
+    second = start_session(
+        db, account_id=account_id, session_date=DAY, start_equity=D("555"), now=T0
+    )
+    assert (first, second) == (True, False)  # True only when a NEW session row was opened
     assert _row(db, "select count(*) from trading_sessions") == 1
     assert _row(db, "select start_equity from trading_sessions") == D("1000.0000")
 

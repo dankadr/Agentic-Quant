@@ -92,3 +92,41 @@ def test_non_string_keys_do_not_crash_and_are_scrubbed() -> None:
 def test_primitives_pass_through() -> None:
     out = redact(None, "info", {"event": "x", "n": 3, "f": 1.5, "b": True, "none": None})
     assert (out["n"], out["f"], out["b"], out["none"]) == (3, 1.5, True, None)
+
+
+def test_typed_scalars_survive_redaction_unchanged() -> None:
+    from datetime import UTC, date, datetime
+    from decimal import Decimal
+    from uuid import UUID
+
+    values = {
+        "d": Decimal("0.10000000"),
+        "t": datetime(2026, 10, 19, 13, 30, tzinfo=UTC),
+        "day": date(2026, 10, 19),
+        "u": UUID(int=7),
+    }
+    out = redact(None, "info", {"event": "x", **values})
+    for key, value in values.items():
+        assert out[key] == value
+        assert type(out[key]) is type(value)
+
+
+def test_json_logs_render_typed_scalars_as_text(capsys: pytest.CaptureFixture[str]) -> None:
+    from decimal import Decimal
+
+    configure_logging("INFO", json_output=True)
+    get_logger("test").info("priced", price=Decimal("1.50"))
+    record = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert record["price"] == "1.50"
+
+
+def test_logging_survives_a_stream_closed_after_configuration() -> None:
+    """Order-dependent flake: configure under a captured stream, close it, log from another test."""
+    import contextlib
+    import io
+
+    first = io.StringIO()
+    with contextlib.redirect_stdout(first):
+        configure_logging("INFO", json_output=True)
+    first.close()
+    get_logger("test").info("still-works")  # must not raise "I/O operation on closed file"

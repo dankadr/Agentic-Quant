@@ -2,9 +2,11 @@
 
 import logging
 import re
-import sys
 from collections.abc import Mapping, MutableMapping
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 import structlog
 from structlog.typing import FilteringBoundLogger
@@ -24,8 +26,12 @@ def scrub_text(value: str) -> str:
     return value
 
 
+_PASS_THROUGH = (bool, int, float, Decimal, datetime, date, UUID)
+
+
 def _scrub(value: Any) -> Any:
-    if value is None or isinstance(value, (bool, int, float)):
+    # Typed scalars cannot carry a secret and must keep their type (the audit trail relies on it).
+    if value is None or isinstance(value, _PASS_THROUGH):
         return value
     if isinstance(value, str):
         return scrub_text(value)
@@ -57,7 +63,9 @@ def redact(
 
 def configure_logging(level: str = "INFO", json_output: bool = True) -> None:
     renderer: Any = (
-        structlog.processors.JSONRenderer() if json_output else structlog.dev.ConsoleRenderer()
+        structlog.processors.JSONRenderer(default=str)
+        if json_output
+        else structlog.dev.ConsoleRenderer()
     )
     structlog.configure(
         processors=[
@@ -69,7 +77,7 @@ def configure_logging(level: str = "INFO", json_output: bool = True) -> None:
             renderer,
         ],
         wrapper_class=structlog.make_filtering_bound_logger(logging.getLevelName(level.upper())),
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
+        logger_factory=structlog.PrintLoggerFactory(),  # resolves sys.stdout per logger, not once
         cache_logger_on_first_use=False,
     )
 

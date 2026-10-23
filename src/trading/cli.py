@@ -3,7 +3,8 @@
 import json
 import signal
 import threading
-from datetime import datetime, timedelta
+from dataclasses import asdict
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 
@@ -24,11 +25,13 @@ from trading.data.instruments import upsert_universe
 from trading.data.replay_provider import CsvReplayProvider
 from trading.db.engine import make_engine, make_session_factory
 from trading.db.migrate import upgrade
+from trading.execution.replay import ReplayError, replay_session
 from trading.jobs.lease import Lease
 from trading.monitoring.logging import configure_logging
 from trading.monitoring.metrics import start_metrics_server
 from trading.risk.halts import NotInHaltError, clear_drawdown_halt
-from trading.services.handlers import WorkerContext
+from trading.services.bootstrap import build_runtime
+from trading.services.handlers import WorkerContext, reconcile_on_start
 from trading.services.health import check_health
 from trading.services.scheduler import run_scheduler
 from trading.services.worker import run_worker
@@ -101,17 +104,36 @@ def api() -> None:
     uvicorn.run(application, host="0.0.0.0", port=API_PORT, log_config=None)  # noqa: S104
 
 
+def _calendar() -> XnysCalendar:
+    today = SystemClock().now().date()
+    return XnysCalendar(today - timedelta(days=30), today + timedelta(days=400))
+
+
 @app.command()
 def worker() -> None:
     """Run the trading worker (the only process allowed to reach a broker adapter)."""
     settings, config, session_factory = _bootstrap("worker")
     clock = SystemClock()
+    calendar = _calendar()
 
     def ctx_factory(lease: Lease) -> WorkerContext:
-        return WorkerContext(
-            settings=settings, config=config, session_factory=session_factory, clock=clock,
+        # No market-data provider is configured yet (open decision 1): ticks are no-ops until then.
+        runtime = build_runtime(
+            session_factory=session_factory,
+            config=config,
+            clock=clock,
             lease=lease,
-        )  # fmt: skip
+            calendar=calendar,
+            provider=None,
+        )
+        return WorkerContext(
+            settings=settings,
+            config=config,
+            session_factory=session_factory,
+            clock=clock,
+            lease=lease,
+            runtime=runtime,
+        )
 
     code = run_worker(
         session_factory=session_factory,
@@ -119,6 +141,7 @@ def worker() -> None:
         worker_id=settings.worker_id,
         ctx_factory=ctx_factory,
         stop=_stop_on_signals(),
+        startup_hooks=[reconcile_on_start],
     )
     raise typer.Exit(code)
 
@@ -131,7 +154,7 @@ def scheduler() -> None:
         session_factory=session_factory,
         clock=SystemClock(),
         holder=settings.worker_id,
-        calendar=None,
+        calendar=_calendar(),
         stop=_stop_on_signals(),
     )
     raise typer.Exit(code)
@@ -234,3 +257,33 @@ def clear_drawdown_halt_command(
     finally:
         engine.dispose()
     typer.echo(json.dumps({"risk_state": state.risk_state.value, "version": state.version}))
+
+
+@app.command()
+def replay(
+    fixtures: Path = typer.Option(..., help="Directory with bars.csv / quotes.csv."),
+    session_date: str = typer.Option(..., "--date", help="Session date, YYYY-MM-DD."),
+    script: Path | None = typer.Option(None, help="YAML of scripted proposals."),
+) -> None:
+    """Replay one recorded session deterministically (use a scratch database)."""
+    settings = Settings()
+    config = load_config(settings.config_dir)
+    engine = make_engine(settings.resolved_database_url())
+    try:
+        result = replay_session(
+            make_session_factory(engine),
+            fixtures_dir=fixtures,
+            session_date=date.fromisoformat(session_date),
+            script=script,
+            config=config,
+        )
+    except ReplayError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    finally:
+        engine.dispose()
+    typer.echo(
+        json.dumps(
+            {k: str(v) if not isinstance(v, int | str) else v for k, v in asdict(result).items()}
+        )
+    )

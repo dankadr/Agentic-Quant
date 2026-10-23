@@ -79,6 +79,7 @@ def reset_db(session_factory: sessionmaker[Session]) -> Callable[[], None]:
 
 @pytest.fixture
 def db(session_factory: sessionmaker[Session]) -> Iterator[Session]:
+    truncate_all(session_factory)  # start clean even if an earlier run was interrupted
     session = session_factory()
     try:
         yield session

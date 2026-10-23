@@ -27,8 +27,10 @@ class NotInHaltError(TradingError):
 
 def start_session(
     session: Session, *, account_id: UUID, session_date: date, start_equity: Decimal, now: datetime
-) -> None:
+) -> bool:
     """Open the trading session row. Idempotent: a restart on the same day changes nothing.
+
+    Returns True only when a NEW session row was opened.
 
     Only a genuinely NEW session clears a daily-loss halt (decision C6).
     """
@@ -38,10 +40,13 @@ def start_session(
         .on_conflict_do_nothing()
         .returning(TradingSession.session_date)
     ).first()
-    if inserted is not None and get_system_state(session).risk_state is RiskState.HALTED_DAILY_LOSS:
+    if inserted is None:
+        return False
+    if get_system_state(session).risk_state is RiskState.HALTED_DAILY_LOSS:
         set_risk_state(
             session, risk_state=RiskState.NORMAL, reason="new_session", actor="system", now=now
         )
+    return True
 
 
 def evaluate_halts(
