@@ -12,16 +12,20 @@ from trading.api.auth import Role, create_principal
 from trading.control.state import RiskState, set_risk_state
 from trading.core.clock import ManualClock
 from trading.core.config import Settings, load_config
+from trading.data.calendar import MarketCalendar
 from trading.jobs.lease import EXECUTOR_LEASE, acquire_lease
 
 
 @pytest.fixture
-def app(session_factory: sessionmaker[Session], clock: ManualClock) -> FastAPI:
+def app(
+    session_factory: sessionmaker[Session], clock: ManualClock, calendar: MarketCalendar
+) -> FastAPI:
     return create_app(
         settings=Settings(),
         config=load_config(Path("configs")),
         session_factory=session_factory,
         clock=clock,
+        calendar=calendar,
     )
 
 

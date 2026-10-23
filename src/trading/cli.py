@@ -287,3 +287,17 @@ def replay(
             {k: str(v) if not isinstance(v, int | str) else v for k, v in asdict(result).items()}
         )
     )
+
+
+@app.command()
+def openapi() -> None:
+    """Print the OpenAPI schema (no database needed)."""
+    application = create_app(
+        settings=Settings(),
+        config=load_config(Settings().config_dir),
+        session_factory=make_session_factory(
+            make_engine("postgresql+psycopg://x:y@127.0.0.1:1/none")
+        ),
+        clock=SystemClock(),
+    )
+    typer.echo(json.dumps(application.openapi(), indent=2, sort_keys=True))

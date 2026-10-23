@@ -42,7 +42,13 @@ def test_status_initial(client: TestClient, viewer_key: str) -> None:
         "risk_state": "UNKNOWN",
         "risk_reason": None,
         "version": 1,
-        "session": None,
+        "session": {
+            "date": "2026-10-19",
+            "open_at": "2026-10-19T13:30:00Z",
+            "close_at": "2026-10-19T20:00:00Z",
+            "is_open": True,
+            "is_half_day": False,
+        },
         "last_data_at": None,
         "last_reconciled_at": None,
     }

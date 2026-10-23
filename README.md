@@ -1,6 +1,93 @@
 # robinhood-trading
 
-Paper-only multi-agent quant trading system. **No live trading. No broker credentials.**
-Master specification: `docs/spec/mvp-spec-v0.1.md`. Build plans: `docs/superpowers/plans/`.
+A **paper-only** multi-agent quant trading system. There is no live trading, no broker credential
+and no Robinhood integration anywhere in this repository (no supported Robinhood order API has been
+verified; see `docs/superpowers/plans/2026-10-20-roadmap-and-spec-review.md` §1.3).
 
-Setup, test and run commands are completed in Task 26.
+- Master specification: `docs/spec/mvp-spec-v0.1.md`
+- Build plans and decisions: `docs/superpowers/plans/`, `docs/decisions/`
+- Architecture: `docs/architecture/overview.md` · Security: `docs/security/notes.md`
+- Runbooks: `docs/runbooks/` · API contract: `docs/api-contracts/openapi.json`
+
+**Status (Plan A):** infrastructure, database, durable jobs, fenced leases, audit, API, paper broker,
+ledger, reconciliation, risk engine, calendar-aware scheduling and deterministic replay are built.
+Strategies (ORB/VWAP), the allocator, research agents and the ChatGPT MCP come in Plans B–C.
+
+## Requirements
+
+Python 3.12, [uv](https://docs.astral.sh/uv/), Docker + Docker Compose v2.
+
+## Setup
+
+```bash
+uv sync                                   # install pinned dependencies (uv.lock)
+./scripts/init-secrets.sh                 # random DB passwords in ./secrets (never overwritten)
+docker compose up -d --build              # postgres -> migrate -> api, worker, scheduler, prometheus
+curl -s localhost:8000/v1/health/ready    # database ok, executor_lease held
+docker compose run --rm api admin create-api-key --name me --role operator   # prints the key ONCE
+```
+
+The stack starts **paused** with risk state `UNKNOWN` (fail closed). `market_data` reads
+`not_configured` until a licensed provider is chosen (open decision 1), and ticks are no-ops until then.
+
+## Test
+
+```bash
+make lint type test        # ruff, mypy --strict, pytest (integration tests need a Postgres, below)
+make smoke                 # docker compose end-to-end check (acceptance test 1)
+```
+
+Integration, replay and chaos tests use a real PostgreSQL. By default they start one with
+testcontainers (needs a running Docker). To use an existing server instead:
+
+```bash
+export TEST_DATABASE_URL='postgresql+psycopg://user@host/dbname'   # a scratch database
+uv run pytest
+```
+
+The full suite takes a few minutes because it replays whole synthetic sessions.
+
+## Replay a recorded session (deterministic)
+
+Replay takes the executor lease, so run it on a **scratch database**, never next to a live worker:
+
+```bash
+export TRADING_DATABASE_URL='postgresql+psycopg://user@host/scratch'
+uv run trading migrate
+uv run trading replay \
+  --fixtures tests/fixtures/replay/2026-10-19 --date 2026-10-19 \
+  --script tests/fixtures/replay/scripts/basic.yaml
+```
+
+It prints `result_hash`, order/fill counts and final equity. Running it twice on clean databases
+prints the same hash. The fixtures are **synthetic** (see `tests/fixtures/replay/2026-10-19/README.md`).
+
+## Paper run
+
+```bash
+KEY=...   # operator key from create-api-key
+curl -s -H "Authorization: Bearer $KEY" localhost:8000/v1/system/status          # note "version"
+curl -s -X POST localhost:8000/v1/control/resume-paper \
+  -H "Authorization: Bearer $KEY" -H "Idempotency-Key: $(uuidgen)" \
+  -H 'Content-Type: application/json' -d '{"reason":"start paper session","expected_version":2}'
+```
+
+`resume-paper` refuses with `503 NOT_READY` (and a `checks` object) unless the database is up, the
+executor lease is held, the risk state is `NORMAL` and market data is not stale. Live-hours paper
+trading additionally needs a market data provider adapter.
+
+## Useful commands
+
+| Command | Purpose |
+|---------|---------|
+| `uv run trading openapi > docs/api-contracts/openapi.json` | regenerate the API contract (a test checks it is current) |
+| `uv run trading admin create-api-key --name N --role viewer\|operator` | create an API key (printed once, stored hashed) |
+| `uv run trading admin clear-drawdown-halt --reason "..."` | explicit, audited clearing of a drawdown halt |
+| `uv run trading ingest-csv --path DIR --start ISO --end ISO` | load CSV bars/quotes into the database |
+
+## Known limitations
+
+- No market-data provider yet: live-hours paper trading is not possible until one is chosen.
+- Corporate actions are ingested and the ledger can apply them, but the paper venue does not model
+  them, so they are not applied automatically (it would break reconciliation).
+- The scripted intent source is a placeholder for the strategies and allocator (Plan B).

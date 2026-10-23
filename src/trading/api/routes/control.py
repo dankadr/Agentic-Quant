@@ -87,7 +87,9 @@ def resume_paper(
     """Only after readiness checks pass: DB reachable, executor lease held, risk state NORMAL."""
 
     def action() -> tuple[int, dict[str, Any]]:
-        readiness = compute_readiness(request.app.state.session_factory, clock)
+        readiness = compute_readiness(
+            request.app.state.session_factory, clock, request.app.state.calendar
+        )
         risk_state = get_system_state(session).risk_state
         checks = {
             "database": readiness.database,
