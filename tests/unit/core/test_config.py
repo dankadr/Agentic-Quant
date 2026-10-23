@@ -33,7 +33,7 @@ def test_loads_repo_configs() -> None:
     assert cfg.risk.max_new_entries_per_day == 10
     assert cfg.risk.max_open_symbols == 3
     assert len(cfg.limits_version) == 16
-    assert {u.symbol for u in cfg.universe} == {"SPY", "QQQ", "IWM", "AAPL", "MSFT"}
+    assert {u.symbol for u in cfg.universe} == {"SPY", "QQQ", "IWM", "DIA", "TQQQ", "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN"}
     assert cfg.strategies["orb_v1"].allocation_pct == Decimal("0.35")
     assert cfg.strategies["consensus_shadow"].shadow_only is True
 
