@@ -1,0 +1,6 @@
+# Scripted proposals for replay tests (times are UTC, instruments are SYNTHETIC).
+# Limits are generous ceilings/floors: the paper broker fills at the quote, never at the limit.
+signals:
+  - {at: '2026-10-19T14:00:00Z', symbol: SPY, side: BUY,  quantity: '0.15', order_type: LIMIT, limit_price: '560.00', strategy_id: orb_v1, ttl_seconds: 60}
+  - {at: '2026-10-19T15:00:00Z', symbol: QQQ, side: BUY,  quantity: '0.10', order_type: LIMIT, limit_price: '480.00', strategy_id: orb_v1, ttl_seconds: 60}
+  - {at: '2026-10-19T18:00:00Z', symbol: SPY, side: SELL, quantity: '0.15', order_type: LIMIT, limit_price: '400.00', strategy_id: orb_v1, ttl_seconds: 60}

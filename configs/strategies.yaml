@@ -1,0 +1,22 @@
+# Allocation percentages are planning sleeves: the maximum notional a strategy may hold.
+# Global risk limits always win (decision C1). Shadow sleeves never deploy capital.
+strategies:
+  orb_v1:
+    enabled: true
+    allocation_pct: '0.35'
+  vwap_v1:
+    enabled: true
+    allocation_pct: '0.00'   # assign within the technical sleeve after research
+  fundamental_watchlist:
+    enabled: true
+    shadow_only: true
+    allocation_pct: '0.20'
+  macro_research:
+    enabled: true
+    allocation_pct: '0.15'
+  consensus_shadow:
+    enabled: true
+    shadow_only: true
+    allocation_pct: '0.20'
+  cash_reserve:
+    allocation_pct: '0.10'

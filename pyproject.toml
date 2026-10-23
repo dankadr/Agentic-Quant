@@ -1,0 +1,78 @@
+[project]
+name = "trading"
+version = "0.1.0"
+description = "Paper-only multi-agent quant trading system"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.32",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "sqlalchemy>=2.0.36",
+  "psycopg[binary]>=3.2",
+  "alembic>=1.14",
+  "structlog>=24.4",
+  "prometheus-client>=0.21",
+  "exchange-calendars>=4.6",
+  "typer>=0.15",
+  "pyyaml>=6.0",
+]
+
+[project.scripts]
+trading = "trading.cli:app"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "hypothesis>=6.120",
+  "httpx>=0.28",
+  "testcontainers[postgres]>=4.9",
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "types-PyYAML",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trading"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["docs", ".superpowers"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "DTZ", "PL", "RUF"]
+ignore = ["PLR0913", "PLR0917", "PLR2004", "PLR0911", "PLR0912", "PLR0915", "RUF012"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+  "fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.Path", "typer.Option", "typer.Argument",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S608", "PLC0415", "E501", "RUF059"]
+"migrations/**" = ["S608", "E501"]
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["exchange_calendars.*", "pandas.*", "testcontainers.*", "prometheus_client.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: needs a PostgreSQL database",
+  "smoke: drives docker compose (excluded by default)",
+]
+addopts = "-m 'not smoke' -q"
