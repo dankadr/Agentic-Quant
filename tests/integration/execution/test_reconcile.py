@@ -3,14 +3,14 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
-from trading.execution.reconcile import reconcile_account
 
-from tests.integration.execution.env import CFG, NOW, Crash, Env, build_env
+from tests.integration.execution.env import CFG, NOW, Crash, D, Env, build_env
 from trading.brokers.base import BrokerOrderRequest
 from trading.brokers.paper.faults import FaultPlan
 from trading.control.state import RiskState, get_system_state, set_risk_state
 from trading.core.clock import ManualClock
 from trading.core.enums import OrderType, Side, TimeInForce
+from trading.execution.reconcile import reconcile_account
 from trading.execution.state_machine import OrderStatus
 from trading.jobs.lease import LeaseLost
 
@@ -260,3 +260,102 @@ def test_repeated_reconciliation_is_idempotent(env: Env) -> None:
     assert (first.status, second.status) == ("OK", "OK")
     assert env.scalar("select count(*) from fills") == 1
     assert env.scalar("select count(*) from reconciliation_runs") == 2
+
+
+# ---- final review fixes ----------------------------------------------------------------------------
+
+
+def _failing_broker(env: Env):  # type: ignore[no-untyped-def]
+    from trading.brokers.paper.broker import PaperBroker
+
+    return PaperBroker(env.sf, account_ref="paper-primary", config=CFG.paper_broker,
+                       instruments=env.instruments, clock=env.clock, faults=FaultPlan(unavailable=True))  # fmt: skip
+
+
+def _evaluate_halts(env: Env, equity: str, day=None):  # type: ignore[no-untyped-def]
+    from tests.integration.execution.env import DAY
+    from tests.integration.risk.helpers import pf_for
+    from trading.risk.halts import evaluate_halts
+
+    with env.sf.begin() as s:
+        return evaluate_halts(s, account_id=env.account_id, state=pf_for(env.account_id, equity),
+                              session_date=day or DAY, policy=CFG.risk, now=env.clock.now())  # fmt: skip
+
+
+def _risk(env: Env) -> RiskState:
+    with env.sf() as s:
+        return get_system_state(s).risk_state
+
+
+def test_drawdown_halt_survives_a_reconciliation_failure_and_partial_recovery(env: Env) -> None:
+    """Review C1: only an operator may lift a drawdown halt, never a later clean reconciliation."""
+    from trading.risk.halts import clear_drawdown_halt
+
+    assert _evaluate_halts(env, "940") is RiskState.HALTED_DRAWDOWN
+    assert run(env, _failing_broker(env)).status == "ERROR"
+    assert _risk(env) is RiskState.RECONCILIATION_REQUIRED
+    assert run(env).status == "OK"
+    assert _risk(env) is RiskState.HALTED_DRAWDOWN  # restored, not NORMAL
+    assert _evaluate_halts(env, "960") is RiskState.HALTED_DRAWDOWN  # 4% below peak: still halted
+    with env.sf.begin() as s:
+        clear_drawdown_halt(s, actor="op", reason="reviewed", request_id=None, now=env.clock.now())
+    assert _risk(env) is RiskState.NORMAL
+    assert run(env, _failing_broker(env)).status == "ERROR"
+    assert run(env).status == "OK"
+    assert _risk(env) is RiskState.NORMAL  # a cleared halt does not come back
+
+
+def test_daily_loss_halt_survives_a_reconciliation_failure_until_the_next_session(env: Env) -> None:
+    from datetime import date
+
+    from trading.risk.halts import start_session
+
+    assert _evaluate_halts(env, "985") is RiskState.HALTED_DAILY_LOSS
+    assert run(env, _failing_broker(env)).status == "ERROR"
+    assert run(env).status == "OK"
+    assert (
+        _risk(env) is RiskState.HALTED_DAILY_LOSS
+    )  # equity could even have recovered; still halted
+    with env.sf.begin() as s:
+        start_session(s, account_id=env.account_id, session_date=date(2026, 10, 20),
+                      start_equity=D("985"), now=env.clock.now() + timedelta(days=1))  # fmt: skip
+    assert _risk(env) is RiskState.NORMAL  # a NEW session clears the daily halt
+
+
+def test_abandoned_created_and_risk_approved_orders_are_rejected(env: Env) -> None:
+    """Review I3: nothing reaches the broker before SUBMITTING commits, so these are safe to drop."""
+    from trading.execution.transitions import transition_order
+
+    created = env.place()
+    approved = env.place()
+    with env.sf.begin() as s:
+        from sqlalchemy import select
+
+        from trading.db.models.trading import Order
+
+        order = s.scalars(select(Order).where(Order.id == approved).with_for_update()).one()
+        transition_order(s, order, OrderStatus.RISK_APPROVED, reason=None, now=env.clock.now())
+    report = run(env)
+    assert report.status == "OK"
+    assert report.resolved == ("paper-orb_v1-20261019-0001", "paper-orb_v1-20261019-0002")
+    for oid in (created, approved):
+        row = env.row(oid)
+        assert (row.status, row.status_reason) == ("REJECTED", "ABANDONED_BEFORE_SUBMIT")
+    assert env.spy.submit_calls == 0
+
+
+def test_late_delivery_to_the_venue_is_cancelled_and_flagged(env: Env) -> None:
+    """Review I1: a stale worker's late submit for an order we already rejected must not rest unseen."""
+    from decimal import Decimal
+
+    _crash_before_broker_call(env)
+    env.clock.advance(timedelta(seconds=30))
+    assert run(env).status == "OK"  # rejected NOT_FOUND_AT_BROKER
+    env.broker.submit_order(BrokerOrderRequest(COID, "SPY", Side.BUY, OrderType.LIMIT, Decimal("0.5"),
+                                               Decimal("100.05"), TimeInForce.DAY))  # fmt: skip
+    report = run(env)
+    assert report.status == "MISMATCH"
+    assert ("LATE_DELIVERY", COID) in [(m.kind, m.subject) for m in report.mismatches]
+    assert env.broker.get_order(COID).status.value == "CANCELED"  # type: ignore[union-attr]
+    assert run(env).status == "OK"
+    assert _risk(env) is RiskState.NORMAL

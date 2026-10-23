@@ -43,3 +43,46 @@ def test_healthcheck_cli_exit_code_reflects_lease(
     db.commit()
     assert runner.invoke(app, ["healthcheck", "worker"]).exit_code == 0
     assert runner.invoke(app, ["healthcheck", "bogus"]).exit_code != 0
+
+
+def test_health_matches_a_per_process_holder_of_this_worker(
+    db: Session, clock: ManualClock
+) -> None:
+    """Review I2: holders are unique per process ('<worker_id>:<pid>:<nonce>'), health matches the prefix."""
+    from trading.services.health import new_holder_id
+
+    settings = Settings(worker_id="me")
+    holder = new_holder_id("me")
+    assert holder.startswith("me:")
+    assert new_holder_id("me") != holder
+    acquire_lease(
+        db, name=EXECUTOR_LEASE, holder=holder, now=clock.now(), ttl=timedelta(seconds=30)
+    )
+    assert check_health("worker", db, settings, clock) is True
+    assert (
+        check_health("worker", db, Settings(worker_id="m"), clock) is False
+    )  # not a mere string prefix
+    assert check_health("worker", db, Settings(worker_id="me:1"), clock) is False
+
+
+def test_two_processes_sharing_a_worker_id_cannot_both_hold_the_lease(
+    db: Session, clock: ManualClock
+) -> None:
+    from trading.services.health import new_holder_id
+
+    first = acquire_lease(
+        db,
+        name=EXECUTOR_LEASE,
+        holder=new_holder_id("host"),
+        now=clock.now(),
+        ttl=timedelta(seconds=30),
+    )
+    second = acquire_lease(
+        db,
+        name=EXECUTOR_LEASE,
+        holder=new_holder_id("host"),
+        now=clock.now(),
+        ttl=timedelta(seconds=30),
+    )
+    assert first is not None
+    assert second is None

@@ -13,13 +13,24 @@
   and request id.
 - **Network.** The API is published on 127.0.0.1 only; expose it with `tailscale serve`, never
   `tailscale funnel`. Metrics ports (9100-9102) are not published to the host.
-- **Fencing.** Every worker write asserts the executor lease token inside its transaction.
+- **Fencing.** Every worker write asserts the executor lease token inside its transaction, and again
+  immediately before a broker call and before any venue mutation. Lease holders are unique per process
+  (`<worker_id>:<pid>:<nonce>`), so two processes sharing a worker id cannot share a lease. A handler
+  that hits `LeaseLost` or a database error stops the worker (exit 3) instead of recording a job failure.
+- **Orders are bound to their decision.** The execution manager re-checks the persisted decision
+  (allowed, same account/instrument/snapshot/dedupe key, **identical order terms**, not older than 5 min).
 - **Fail closed.** Missing data, unknown risk state, reconciliation mismatch, calendar gaps and database
   errors all block new orders.
 - **Untrusted input.** The risk engine re-derives data freshness from decision time and does not trust a
   snapshot's own verdict. Agent output (Plan C) will be schema-validated and can only propose.
 - **No live path.** `mode` is `Literal["PAPER_ONLY"]`; `accounts.mode` is CHECK-constrained; margin,
   short, options and crypto flags are `Literal[False]`.
+
+## Known gaps (tracked)
+
+- The API, worker and scheduler share one database role (`trading_app`); the code boundary is enforced
+  by tests (the API/scheduler entrypoints never load broker code) but a per-service DB role split is
+  still to do (Plan D hardening).
 
 ## Open items
 

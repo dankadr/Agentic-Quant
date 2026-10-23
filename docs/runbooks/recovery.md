@@ -13,11 +13,25 @@ match the broker.
 
 ## An order is `UNKNOWN` (or stuck `SUBMITTING`)
 
-Reconciliation resolves it by asking the broker. It never resubmits.
+Reconciliation resolves it by asking the broker. It never resubmits. It also runs inside the session
+whenever a tick finds `RECONCILIATION_REQUIRED` or an order in limbo, not only at start and end.
 
 - Broker has the order → adopted (`ACKNOWLEDGED`, or `CANCELED`/`EXPIRED` via `ACKNOWLEDGED`).
 - Broker has no record → `PENDING` for 30 s (`unknown_order_grace_seconds`), then `REJECTED`
   with reason `NOT_FOUND_AT_BROKER`. Any new attempt needs a fresh risk decision.
+
+## Orders that never reached the broker
+
+`CREATED` / `RISK_APPROVED` orders left by a crash are rejected by reconciliation with reason
+`ABANDONED_BEFORE_SUBMIT` (nothing can have reached the broker before `SUBMITTING` commits).
+
+## A late delivery from a stale worker
+
+If a paused/hung worker's submit lands after the new leader gave up on the order, reconciliation reports
+`LATE_DELIVERY`, cancels the resting broker order, and the next run is clean. If that order already
+*filled* before reconciliation, the fill cannot be applied to a rejected order: the run ends `ERROR`
+and the system stays in `RECONCILIATION_REQUIRED` until an operator books the correction with a ledger
+adjustment (there is no tooling for that yet; see the Plan A report).
 
 ## `RECONCILIATION_REQUIRED`
 
@@ -33,6 +47,11 @@ entries via `reverse_ledger_entry`), then the next clean reconciliation restores
   automatically when a *new* session starts. A same-day restart does not clear it.
 - **Drawdown** (>= 5% below peak): blocks new entries; exits stay allowed. Cleared only by
   `trading admin clear-drawdown-halt --reason "..."` (audited, resets the peak to the latest snapshot).
+
+Both halts are **persisted** (`accounts.drawdown_halted_at`, `trading_sessions.daily_loss_halted_at`).
+A reconciliation problem or an unknown state temporarily replaces a halt with `RECONCILIATION_REQUIRED`
+/ `UNKNOWN`; when the next reconciliation is clean, the halt is **restored**, never silently lifted,
+even if equity has partly recovered.
 
 ## Kill switch
 

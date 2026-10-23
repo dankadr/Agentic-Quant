@@ -35,6 +35,20 @@ class RecordedDecision:
     evaluation: RiskEvaluation
 
 
+def proposal_terms(proposal: ProposedOrder) -> dict[str, object]:
+    """The economic terms of a proposal. Persisted with the decision and re-checked by the
+    execution manager, so an order can never carry terms the risk engine did not evaluate."""
+    return {
+        "symbol": proposal.instrument.symbol,
+        "side": proposal.side,
+        "quantity": proposal.quantity,
+        "order_type": proposal.order_type,
+        "limit_price": proposal.limit_price,
+        "time_in_force": proposal.time_in_force,
+        "strategy_id": proposal.strategy_id,
+    }
+
+
 def build_account_view(
     session: Session,
     *,
@@ -115,13 +129,7 @@ def evaluate_and_record(
     # The FK column is only set when the signal is persisted; the id is always kept in the summary.
     signal_row = session.get(Signal, proposal.signal_id) if proposal.signal_id is not None else None
     summary = {
-        "symbol": proposal.instrument.symbol,
-        "side": proposal.side,
-        "quantity": proposal.quantity,
-        "order_type": proposal.order_type,
-        "limit_price": proposal.limit_price,
-        "time_in_force": proposal.time_in_force,
-        "strategy_id": proposal.strategy_id,
+        **proposal_terms(proposal),
         "signal_id": proposal.signal_id,
         "signal_expires_at": proposal.signal_expires_at,
         "notional": evaluation.notional,

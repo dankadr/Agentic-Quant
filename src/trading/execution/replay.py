@@ -20,7 +20,7 @@ from trading.core.errors import TradingError
 from trading.core.hashing import content_hash
 from trading.data.calendar import XnysCalendar
 from trading.data.replay_provider import CsvReplayProvider
-from trading.db.models.portfolio import EquitySnapshot
+from trading.db.models.portfolio import Account, EquitySnapshot
 from trading.execution.intents import NullIntentSource, ScriptedIntentSource
 from trading.jobs.lease import EXECUTOR_LEASE, acquire_lease, release_lease
 from trading.services.bootstrap import build_runtime
@@ -57,6 +57,12 @@ def replay_session(
         raise ReplayError(f"{session_date} is not a trading session")
     clock = ManualClock(info.open_at - timedelta(minutes=30))
     account_name = f"replay-{session_date.isoformat()}"
+    with session_factory() as session:
+        foreign = [n for n in session.scalars(select(Account.name)) if not n.startswith("replay-")]
+    if foreign:
+        raise ReplayError(
+            f"this database holds non-replay accounts {foreign}; replay only on a scratch database"
+        )
     with session_factory.begin() as session:
         lease = acquire_lease(
             session, name=EXECUTOR_LEASE, holder="replay", now=clock.now(), ttl=timedelta(days=2)
@@ -64,60 +70,65 @@ def replay_session(
     if lease is None:
         raise ReplayError("the executor lease is held by another process; replay on a scratch DB")
 
-    provider = CsvReplayProvider(fixtures_dir)
-    runtime = build_runtime(
-        session_factory=session_factory,
-        config=config,
-        clock=clock,
-        lease=lease,
-        calendar=calendar,
-        provider=provider,
-        provider_name=provider.name,
-        account_name=account_name,
-        intents=ScriptedIntentSource.from_yaml(script) if script else NullIntentSource(),
-    )
-    processor = runtime.processor
-    first_minute = info.open_at + _ONE_MINUTE
-    if resume:
-        with session_factory() as session:
-            last = session.scalar(
-                select(func.max(EquitySnapshot.ts)).where(
-                    EquitySnapshot.account_id == runtime.account_id,
-                    EquitySnapshot.kind == "INTRADAY",
-                )
-            )
-        if last is None:
-            raise ReplayError("nothing to resume: no processed ticks")
-        first_minute = last.replace(second=0, microsecond=0) + _ONE_MINUTE
-        clock.set(last)
-
-    processor.start_session(session_date)
-    with session_factory.begin() as session:
-        version = get_system_state(session).version
-        set_trading_state(
-            session,
-            target=TradingState.PAPER_RUNNING,
-            expected_version=version,
-            actor="replay",
-            reason="replay",
-            request_id=None,
-            now=clock.now(),
-        )
-
     interrupted = False
-    minute = first_minute
-    while minute <= info.close_at:
-        if stop_after is not None and minute > stop_after:
-            interrupted = True
-            break
-        clock.set(minute + timedelta(seconds=5))
-        processor.run_tick(minute)
-        minute += _ONE_MINUTE
-    if not interrupted:
-        clock.set(info.close_at + timedelta(minutes=5))
-        processor.end_session(session_date)
+    try:
+        provider = CsvReplayProvider(fixtures_dir)
+        runtime = build_runtime(
+            session_factory=session_factory,
+            config=config,
+            clock=clock,
+            lease=lease,
+            calendar=calendar,
+            provider=provider,
+            provider_name=provider.name,
+            account_name=account_name,
+            intents=ScriptedIntentSource.from_yaml(script) if script else NullIntentSource(),
+        )
+        processor = runtime.processor
+        first_minute = info.open_at + _ONE_MINUTE
+        if resume:
+            with session_factory() as session:
+                last = session.scalar(
+                    select(func.max(EquitySnapshot.ts)).where(
+                        EquitySnapshot.account_id == runtime.account_id,
+                        EquitySnapshot.kind == "INTRADAY",
+                    )
+                )
+            if last is None:
+                raise ReplayError("nothing to resume: no processed ticks")
+            first_minute = last.replace(second=0, microsecond=0) + _ONE_MINUTE
+            clock.set(last)
+
+        processor.start_session(session_date)
         with session_factory.begin() as session:
-            release_lease(session, lease)
+            version = get_system_state(session).version
+            set_trading_state(
+                session,
+                target=TradingState.PAPER_RUNNING,
+                expected_version=version,
+                actor="replay",
+                reason="replay",
+                request_id=None,
+                now=clock.now(),
+            )
+
+        minute = first_minute
+        while minute <= info.close_at:
+            if stop_after is not None and minute > stop_after:
+                interrupted = True
+                break
+            clock.set(minute + timedelta(seconds=5))
+            processor.run_tick(minute)
+            minute += _ONE_MINUTE
+        if not interrupted:
+            clock.set(info.close_at + timedelta(minutes=5))
+            processor.end_session(session_date)
+            with session_factory.begin() as session:
+                release_lease(session, lease)
+    except BaseException:
+        with session_factory.begin() as session:
+            release_lease(session, lease)  # a crashed replay must not lock out the real worker
+        raise
     return _summarize(session_factory)
 
 

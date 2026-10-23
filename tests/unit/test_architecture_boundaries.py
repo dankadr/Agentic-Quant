@@ -50,6 +50,27 @@ def test_importing_the_api_never_loads_broker_code() -> None:
     assert out.stdout.strip() == ""
 
 
+@pytest.mark.parametrize(
+    "entrypoint", ["trading.cli", "trading.services.scheduler", "trading.api.app"]
+)
+def test_non_worker_entrypoints_never_load_broker_code(entrypoint: str) -> None:
+    """Review I4: the API/scheduler containers run `trading.cli`, so it must not pull in brokers."""
+    code = (
+        f"import sys, {entrypoint}\n"
+        "bad = sorted(m for m in sys.modules if m.startswith(('trading.brokers', 'trading.execution.manager', 'trading.services.bootstrap')))\n"
+        "print(','.join(bad))\n"
+    )
+    out = subprocess.run(  # noqa: S603
+        [sys.executable, "-I", "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=True,
+        env={"PYTHONPATH": str(ROOT / "src")},
+    )
+    assert out.stdout.strip() == ""
+
+
 def test_no_module_outside_the_worker_constructs_a_broker() -> None:
     allowed = {"src/trading/services/bootstrap.py", "src/trading/brokers/paper/broker.py"}
     constructors = [

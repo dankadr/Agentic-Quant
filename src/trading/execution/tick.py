@@ -26,7 +26,7 @@ from trading.data.provider import MarketDataProvider
 from trading.data.snapshot import MarketSnapshot, build_snapshot
 from trading.db.models.market import Instrument, MarketBar
 from trading.db.models.portfolio import Position, TradingSession
-from trading.db.models.trading import RiskDecisionRow
+from trading.db.models.trading import Order, RiskDecisionRow
 from trading.execution.intents import IntentSource, ProposalRequest
 from trading.execution.manager import ExecutionManager
 from trading.execution.reconcile import ReconciliationReport, reconcile_account
@@ -45,6 +45,7 @@ from trading.risk.service import build_account_view, evaluate_and_record
 
 _log = get_logger(__name__)
 _ONE_MINUTE = timedelta(minutes=1)
+_STUCK_STATUSES = ("UNKNOWN", "SUBMITTING", "CREATED", "RISK_APPROVED")
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,27 @@ class PaperTickProcessor:
             now = self._fence(session)
             set_risk_state(session, risk_state=state, reason=reason, actor="system", now=now)
 
+    def _assert_fenced(self) -> None:
+        """Prove we still hold the lease before mutating the venue (it has no fence of its own)."""
+        with self._sf.begin() as session:
+            self._fence(session)
+
+    def _needs_reconcile(self) -> bool:
+        """In-session recovery: a stuck risk state or an order in limbo must not wait for the
+        end of the day (it would block exits and hold reserved cash)."""
+        with self._sf() as session:
+            if get_system_state(session).risk_state is RiskState.RECONCILIATION_REQUIRED:
+                return True
+            stuck = session.scalar(
+                select(Order.id)
+                .where(
+                    Order.account_id == self._account_id,
+                    Order.status.in_(_STUCK_STATUSES),
+                )
+                .limit(1)
+            )
+            return stuck is not None
+
     def _current_risk(self) -> RiskState:
         with self._sf() as session:
             return get_system_state(session).risk_state
@@ -239,6 +261,7 @@ class PaperTickProcessor:
         info = self._calendar.session_on(session_date)
         if info is None:
             return
+        self._assert_fenced()
         self._broker.expire_day_orders(session_close=info.close_at)
         self._manager.sync_fills()
         report = self.reconcile()
@@ -312,8 +335,11 @@ class PaperTickProcessor:
         quotes = {s: v.quote for s, v in snapshot.symbols.items() if v.quote is not None}
         bars = {s: v.last_bar for s, v in snapshot.symbols.items() if v.last_bar is not None}
         try:
+            self._assert_fenced()
             self._broker.process_tick(quotes=quotes, bars=bars)
             fills_applied = self._manager.sync_fills()
+            if self._needs_reconcile():
+                self.reconcile()
         except LeaseLost:
             raise
         except TradingError as exc:

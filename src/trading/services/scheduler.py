@@ -13,7 +13,7 @@ from trading.jobs.queue import enqueue
 from trading.jobs.schedule import plan_jobs
 from trading.monitoring.logging import get_logger
 from trading.monitoring.metrics import LEASE_HELD
-from trading.services.worker import EXIT_LEASE_LOST, EXIT_OK
+from trading.services.exit_codes import EXIT_LEASE_LOST, EXIT_OK
 
 _log = get_logger(__name__)
 

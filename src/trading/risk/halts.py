@@ -8,7 +8,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -90,6 +90,7 @@ def evaluate_halts(
         return current
 
     if current is not RiskState.HALTED_DRAWDOWN and peak - equity >= policy.max_drawdown_pct * peak:
+        account.drawdown_halted_at = account.drawdown_halted_at or now  # survives reconciliation
         _halt(session, RiskState.HALTED_DRAWDOWN, "DRAWDOWN", equity, row.start_equity, peak, now)
         return RiskState.HALTED_DRAWDOWN
     if (
@@ -128,12 +129,34 @@ def _halt(
     )
 
 
+def restore_halt_state(session: Session, account_id: UUID) -> RiskState | None:
+    """The halt that must still be in force, from PERSISTED markers (never from equity alone).
+
+    Reconciliation and unknown-state handling temporarily replace a HALTED_* state; when they
+    clear, the halt must come back. A drawdown halt is lifted only by ``clear_drawdown_halt``;
+    a daily-loss halt only by the start of a new session.
+    """
+    account = session.get(Account, account_id)
+    if account is not None and account.drawdown_halted_at is not None:
+        return RiskState.HALTED_DRAWDOWN
+    latest = session.scalars(
+        select(TradingSession)
+        .where(TradingSession.account_id == account_id)
+        .order_by(TradingSession.session_date.desc())
+        .limit(1)
+    ).first()
+    if latest is not None and latest.daily_loss_halted_at is not None:
+        return RiskState.HALTED_DAILY_LOSS
+    return None
+
+
 def clear_drawdown_halt(
     session: Session, *, actor: str, reason: str, request_id: str | None, now: datetime
 ) -> SystemState:
     """Operator action: leave HALTED_DRAWDOWN and reset peak equity to the latest snapshot."""
     if get_system_state(session, for_update=True).risk_state is not RiskState.HALTED_DRAWDOWN:
         raise NotInHaltError("risk state is not HALTED_DRAWDOWN")
+    session.execute(update(Account).values(drawdown_halted_at=None))
     latest = session.scalars(
         select(EquitySnapshot).order_by(EquitySnapshot.ts.desc()).limit(1)
     ).first()

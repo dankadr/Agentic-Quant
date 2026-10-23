@@ -8,6 +8,7 @@ Submission is two-phase so a crash can never produce a duplicate order:
 Every write transaction first asserts the executor lease fence.
 """
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -31,6 +32,7 @@ from trading.core.clock import Clock
 from trading.core.config import AppConfig
 from trading.core.enums import OrderType, Side, TimeInForce
 from trading.core.errors import TradingError
+from trading.core.hashing import canonical_json
 from trading.core.ids import make_client_order_id
 from trading.data.calendar import NEW_YORK, MarketCalendar
 from trading.db.models.market import Instrument
@@ -44,11 +46,12 @@ from trading.monitoring.logging import get_logger
 from trading.monitoring.metrics import ORDERS_BY_STATUS
 from trading.portfolio.ledger import apply_fill
 from trading.risk.models import ProposedOrder
-from trading.risk.service import RecordedDecision
+from trading.risk.service import RecordedDecision, proposal_terms
 
 _log = get_logger(__name__)
 _STRATEGY_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
 _FILL_OVERLAP = timedelta(minutes=1)
+_MAX_DECISION_AGE = timedelta(minutes=5)
 
 
 class RiskNotApproved(TradingError):
@@ -138,6 +141,11 @@ class ExecutionManager:
             raise RiskNotApproved("risk decision market snapshot mismatch")
         if row.dedupe_key != proposal.dedupe_key:
             raise RiskNotApproved("risk decision dedupe key mismatch")
+        if now - row.ts > _MAX_DECISION_AGE:
+            raise RiskNotApproved("risk decision too old to act on")
+        expected = json.loads(canonical_json(proposal_terms(proposal)))
+        if {key: row.proposal_json.get(key) for key in expected} != expected:
+            raise RiskNotApproved("order terms differ from the terms the risk engine evaluated")
         if (
             session.scalar(select(OrderIntent.id).where(OrderIntent.risk_decision_id == row.id))
             is not None
@@ -240,6 +248,8 @@ class ExecutionManager:
         request, early = self._prepare_submit(order_id)
         if request is None:
             return early if early is not None else OrderStatus.UNKNOWN
+        with self._sf.begin() as session:
+            self._fence(session)  # last check before leaving the transaction boundary
         outcome = self._call_broker(request)
         return self._record_outcome(order_id, outcome)
 

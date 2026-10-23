@@ -20,6 +20,7 @@ class Account(Base):
     currency: Mapped[str]
     status: Mapped[str]
     peak_equity: Mapped[Decimal] = mapped_column(CASH)
+    drawdown_halted_at: Mapped[datetime | None]
     created_at: Mapped[datetime]
 
 

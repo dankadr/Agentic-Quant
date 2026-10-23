@@ -6,6 +6,7 @@ new attempt needs a fresh risk decision. Any mismatch, pending item or error put
 RECONCILIATION_REQUIRED, which blocks all new orders (entries and exits) until a clean run.
 """
 
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -15,7 +16,14 @@ from uuid import UUID
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from trading.brokers.base import BrokerAdapter, BrokerOrderState, BrokerOrderStatus
+from trading.brokers.base import (
+    BrokerAdapter,
+    BrokerOrderState,
+    BrokerOrderStatus,
+    BrokerRejected,
+    BrokerTimeout,
+    BrokerUnavailable,
+)
 from trading.control.state import RiskState, get_system_state, mark_reconciled, set_risk_state
 from trading.core.clock import Clock
 from trading.core.config import AppConfig
@@ -25,20 +33,25 @@ from trading.db.models.market import Instrument
 from trading.db.models.portfolio import CashLedgerEntry, Position, ReconciliationRun
 from trading.db.models.trading import FillRow, Order
 from trading.execution.manager import ExecutionManager
-from trading.execution.state_machine import OPEN_AT_BROKER, OrderStatus
+from trading.execution.state_machine import OPEN_AT_BROKER, TERMINAL, OrderStatus
 from trading.execution.transitions import transition_order
 from trading.jobs.lease import Lease, LeaseLost, assert_fence
 from trading.jobs.outbox import emit_event
 from trading.monitoring.audit import record_audit
+from trading.risk.halts import restore_halt_state
 
 _CASH_TOLERANCE = Decimal("0.0001")
 _LIMBO = (OrderStatus.SUBMITTING, OrderStatus.UNKNOWN)
-_CANDIDATES = (*_LIMBO, *OPEN_AT_BROKER)
+# Nothing reaches the broker before SUBMITTING commits, so these can only be abandoned work.
+_ABANDONED = (OrderStatus.CREATED, OrderStatus.RISK_APPROVED)
+_CANDIDATES = (*_ABANDONED, *_LIMBO, *OPEN_AT_BROKER)
+_REJECTED_LOCALLY = (OrderStatus.REJECTED, OrderStatus.CANCELED, OrderStatus.EXPIRED)
 
 
 @dataclass(frozen=True)
 class Mismatch:
-    # ORPHAN_BROKER_ORDER | MISSING_AT_BROKER | FILLED_QTY | POSITION | CASH | LEDGER_INTERNAL
+    # ORPHAN_BROKER_ORDER | LATE_DELIVERY | STATUS | MISSING_AT_BROKER | FILLED_QTY | POSITION
+    # | CASH | LEDGER_INTERNAL
     kind: str
     subject: str
     local: str
@@ -108,7 +121,7 @@ def reconcile_account(
         )
         session.add(run)
         session.flush()
-        _apply_risk_outcome(session, status, report_json, now)
+        _apply_risk_outcome(session, account_id, status, report_json, now)
         record_audit(
             session,
             actor="system",
@@ -130,14 +143,20 @@ def reconcile_account(
 
 
 def _apply_risk_outcome(
-    session: Session, status: str, report_json: dict[str, Any], now: datetime
+    session: Session, account_id: UUID, status: str, report_json: dict[str, Any], now: datetime
 ) -> None:
     current = get_system_state(session, for_update=True).risk_state
     if status == "OK":
         mark_reconciled(session, now=now)
         if current in (RiskState.UNKNOWN, RiskState.RECONCILIATION_REQUIRED):
+            # A halt that was in force before the reconciliation problem must come back.
+            halt = restore_halt_state(session, account_id)
             set_risk_state(
-                session, risk_state=RiskState.NORMAL, reason="reconciled", actor="system", now=now
+                session,
+                risk_state=halt or RiskState.NORMAL,
+                reason="reconciled" if halt is None else "reconciled; halt restored",
+                actor="system",
+                now=now,
             )
         return
     if current is not RiskState.RECONCILIATION_REQUIRED:
@@ -182,15 +201,24 @@ def _resolve_orders(
             )
             .order_by(Order.client_order_id)
         ).all()
-        local_ids = set(session.scalars(select(Order.client_order_id)))
     for order_id, client_order_id in candidates:
-        state = broker.get_order(client_order_id)
         with sf.begin() as session:
             now = clock.now()
             assert_fence(session, lease, now=now)
             order = session.scalars(
                 select(Order).where(Order.id == order_id).with_for_update()
             ).one()
+            if OrderStatus(order.status) in _ABANDONED:
+                transition_order(
+                    session,
+                    order,
+                    OrderStatus.REJECTED,
+                    reason="ABANDONED_BEFORE_SUBMIT",
+                    now=now,
+                )
+                found.resolved.append(client_order_id)
+                continue
+            state = broker.get_order(client_order_id)
             _reconcile_order(session, order, state, now, grace, found)
             if state is not None and state.filled_qty != order.filled_qty:
                 found.mismatches.append(
@@ -198,11 +226,22 @@ def _resolve_orders(
                         "FILLED_QTY", client_order_id, str(order.filled_qty), str(state.filled_qty)
                     )
                 )
+    with sf() as session:
+        local_status = dict(session.execute(select(Order.client_order_id, Order.status)).all())
     for state in broker.list_open_orders():
-        if state.client_order_id not in local_ids:
+        coid = state.client_order_id
+        local = local_status.get(coid)
+        if local is None:
             found.mismatches.append(
-                Mismatch("ORPHAN_BROKER_ORDER", state.client_order_id, "absent", state.status.value)
+                Mismatch("ORPHAN_BROKER_ORDER", coid, "absent", state.status.value)
             )
+        elif OrderStatus(local) in _REJECTED_LOCALLY:
+            # A stale worker's submit landed after we gave up on the order: stop it resting.
+            found.mismatches.append(Mismatch("LATE_DELIVERY", coid, local, state.status.value))
+            with suppress(BrokerRejected, BrokerTimeout, BrokerUnavailable):
+                broker.cancel_order(coid)
+        elif OrderStatus(local) in TERMINAL:
+            found.mismatches.append(Mismatch("STATUS", coid, local, state.status.value))
 
 
 def _reconcile_order(

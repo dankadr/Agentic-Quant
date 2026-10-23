@@ -296,3 +296,106 @@ def test_bad_payload_fails_the_job_instead_of_crashing_the_worker(
         )
         == 1
     )
+
+
+# ---- final review: in-session reconciliation and fencing before venue mutations -----------------
+
+
+def test_a_tick_heals_reconciliation_required_in_session(
+    db: Session,
+    session_factory: sessionmaker[Session],
+    clock: ManualClock,
+    calendar: MarketCalendar,
+) -> None:
+    """Review I7: one transient failure must not block exits until the session ends."""
+    ctx = make_ctx(db, session_factory, clock, calendar, provider=True)
+    build_handlers(ctx)["session_start"](
+        job("session_start", session_date="2026-10-19")
+    )  # session open
+    with session_factory.begin() as s:
+        set_risk_state(
+            s,
+            risk_state=RiskState.RECONCILIATION_REQUIRED,
+            reason="blip",
+            actor="t",
+            now=clock.now(),
+        )
+    build_handlers(ctx)["paper_tick"](job("paper_tick", minute="2026-10-19T13:31:00Z"))
+    with session_factory() as s:
+        assert get_system_state(s).risk_state is RiskState.NORMAL
+
+
+def test_a_tick_resolves_orders_stuck_in_limbo(
+    db: Session,
+    session_factory: sessionmaker[Session],
+    clock: ManualClock,
+    calendar: MarketCalendar,
+) -> None:
+    from tests.integration.portfolio.helpers import new_order
+
+    ctx = make_ctx(db, session_factory, clock, calendar, provider=True)
+    assert ctx.runtime is not None
+    build_handlers(ctx)["session_start"](
+        job("session_start", session_date="2026-10-19")
+    )  # session already open
+    db.rollback()
+    new_order(
+        db, ctx.runtime.account_id, "stuck-1", status="UNKNOWN"
+    )  # created at T0, long past the grace
+    db.commit()
+    build_handlers(ctx)["paper_tick"](job("paper_tick", minute="2026-10-19T13:31:00Z"))
+    assert (
+        count(
+            session_factory,
+            "select count(*) from orders where status = 'REJECTED' and status_reason = 'NOT_FOUND_AT_BROKER'",
+        )
+        == 1
+    )
+
+
+def test_end_session_fences_before_touching_the_venue(
+    db: Session,
+    session_factory: sessionmaker[Session],
+    clock: ManualClock,
+    calendar: MarketCalendar,
+) -> None:
+    from decimal import Decimal
+
+    from trading.brokers.base import BrokerOrderRequest
+    from trading.core.enums import OrderType, Side, TimeInForce
+    from trading.jobs.lease import LeaseLost
+
+    ctx = make_ctx(
+        db,
+        session_factory,
+        clock,
+        calendar,
+        provider=True,
+        at=datetime(
+            2026, 10, 19, 19, 0, tzinfo=UTC
+        ),  # the resting order is placed before the close
+    )
+    assert ctx.runtime is not None
+    ctx.runtime.broker.submit_order(
+        BrokerOrderRequest(
+            "resting-1",
+            "SPY",
+            Side.BUY,
+            OrderType.LIMIT,
+            Decimal("0.5"),
+            Decimal("1.00"),
+            TimeInForce.DAY,
+        )
+    )
+    clock.set(datetime(2026, 10, 19, 20, 5, tzinfo=UTC))
+    with session_factory.begin() as s:
+        s.execute(text("update leases set holder = 'thief', fencing_token = fencing_token + 1"))
+    with pytest.raises(LeaseLost):
+        ctx.runtime.processor.end_session(datetime(2026, 10, 19, tzinfo=UTC).date())
+    assert (
+        count(
+            session_factory,
+            "select count(*) from paper_venue.venue_orders where status = 'ACCEPTED'",
+        )
+        == 1
+    )  # not expired

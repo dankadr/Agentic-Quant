@@ -25,16 +25,11 @@ from trading.data.instruments import upsert_universe
 from trading.data.replay_provider import CsvReplayProvider
 from trading.db.engine import make_engine, make_session_factory
 from trading.db.migrate import upgrade
-from trading.execution.replay import ReplayError, replay_session
 from trading.jobs.lease import Lease
 from trading.monitoring.logging import configure_logging
 from trading.monitoring.metrics import start_metrics_server
 from trading.risk.halts import NotInHaltError, clear_drawdown_halt
-from trading.services.bootstrap import build_runtime
-from trading.services.handlers import WorkerContext, reconcile_on_start
-from trading.services.health import check_health
-from trading.services.scheduler import run_scheduler
-from trading.services.worker import run_worker
+from trading.services.health import check_health, new_holder_id
 
 API_PORT = 8000
 METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102}
@@ -112,6 +107,12 @@ def _calendar() -> XnysCalendar:
 @app.command()
 def worker() -> None:
     """Run the trading worker (the only process allowed to reach a broker adapter)."""
+    # Imported here, not at module level: the API and scheduler containers run this same CLI
+    # and must never load broker code.
+    from trading.services.bootstrap import build_runtime  # noqa: PLC0415
+    from trading.services.handlers import WorkerContext, reconcile_on_start  # noqa: PLC0415
+    from trading.services.worker import run_worker  # noqa: PLC0415
+
     settings, config, session_factory = _bootstrap("worker")
     clock = SystemClock()
     calendar = _calendar()
@@ -138,7 +139,7 @@ def worker() -> None:
     code = run_worker(
         session_factory=session_factory,
         clock=clock,
-        worker_id=settings.worker_id,
+        worker_id=new_holder_id(settings.worker_id),
         ctx_factory=ctx_factory,
         stop=_stop_on_signals(),
         startup_hooks=[reconcile_on_start],
@@ -149,11 +150,13 @@ def worker() -> None:
 @app.command()
 def scheduler() -> None:
     """Run the single-leader scheduler."""
+    from trading.services.scheduler import run_scheduler  # noqa: PLC0415
+
     settings, _config, session_factory = _bootstrap("scheduler")
     code = run_scheduler(
         session_factory=session_factory,
         clock=SystemClock(),
-        holder=settings.worker_id,
+        holder=new_holder_id(settings.worker_id),
         calendar=_calendar(),
         stop=_stop_on_signals(),
     )
@@ -266,6 +269,8 @@ def replay(
     script: Path | None = typer.Option(None, help="YAML of scripted proposals."),
 ) -> None:
     """Replay one recorded session deterministically (use a scratch database)."""
+    from trading.execution.replay import ReplayError, replay_session  # noqa: PLC0415
+
     settings = Settings()
     config = load_config(settings.config_dir)
     engine = make_engine(settings.resolved_database_url())

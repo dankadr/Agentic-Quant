@@ -134,3 +134,25 @@ def test_placeholder_roles_are_known(role: str) -> None:
     from trading.services.health import lease_name_for
 
     assert lease_name_for(role) in {"executor", "scheduler"}
+
+
+@pytest.mark.parametrize("which", ["lease_lost", "database"])
+def test_worker_exits_nonzero_when_a_handler_hits_lease_loss_or_a_database_error(
+    db: Session, session_factory: sessionmaker[Session], which: str
+) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    from trading.jobs.lease import LeaseLost
+
+    def boom(job):  # type: ignore[no-untyped-def]
+        raise (
+            LeaseLost("taken over")
+            if which == "lease_lost"
+            else OperationalError("x", {}, Exception("down"))
+        )
+
+    _enqueue_heartbeat(session_factory)
+    worker = start_worker(session_factory, handlers_factory=lambda ctx: {"heartbeat": boom})
+    worker.thread.join(10)
+    assert not worker.thread.is_alive()
+    assert worker.result["code"] == 3

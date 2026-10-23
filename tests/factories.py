@@ -62,6 +62,7 @@ def make_risk_decision(
     allowed: bool = True,
     dedupe_key: str = "k1",
     now: datetime = T0,
+    proposal_json: dict | None = None,  # type: ignore[type-arg]
 ) -> RiskDecisionRow:
     row = RiskDecisionRow(
         signal_id=None,
@@ -74,7 +75,7 @@ def make_risk_decision(
         market_snapshot_id=snapshot.id,
         portfolio_snapshot_id=None,
         dedupe_key=dedupe_key,
-        proposal_json={},
+        proposal_json=proposal_json or {},
     )
     db.add(row)
     db.flush()

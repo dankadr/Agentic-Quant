@@ -35,6 +35,7 @@ _STATEMENTS = [
         currency text NOT NULL CHECK (currency = 'USD'),
         status text NOT NULL CHECK (status IN ('ACTIVE', 'CLOSED')),
         peak_equity numeric(20,4) NOT NULL,
+        drawdown_halted_at timestamptz,
         created_at timestamptz NOT NULL
     )
     """,

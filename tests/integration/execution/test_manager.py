@@ -15,7 +15,7 @@ from trading.control.state import (
     set_trading_state,
 )
 from trading.core.clock import ManualClock
-from trading.core.enums import Side
+from trading.core.enums import OrderType, Side, TimeInForce
 from trading.execution.manager import DecisionAlreadyUsed, RiskNotApproved
 from trading.execution.state_machine import OrderStatus
 from trading.jobs.lease import LeaseLost
@@ -125,6 +125,19 @@ def test_decision_must_match_the_proposal(env: Env) -> None:
             )
 
 
+def _terms(info) -> dict:  # type: ignore[no-untyped-def,type-arg]
+    import json
+    from uuid import uuid4
+
+    from trading.core.hashing import canonical_json
+    from trading.risk.models import ProposedOrder
+    from trading.risk.service import proposal_terms
+
+    return json.loads(canonical_json(proposal_terms(ProposedOrder(
+        uuid4(), info, Side.BUY, D("0.5"), OrderType.LIMIT, D("100.05"), TimeInForce.DAY, "orb_v1", None, None, "dk",
+    ))))  # fmt: skip
+
+
 def test_decision_cannot_be_reused(env: Env) -> None:
     from tests.factories import make_risk_decision, make_snapshot
     from trading.core.enums import OrderType, TimeInForce
@@ -143,6 +156,7 @@ def test_decision_cannot_be_reused(env: Env) -> None:
             snapshot,
             dedupe_key="dk",
             now=NOW,
+            proposal_json=_terms(info),
         )  # type: ignore[arg-type]
         decision = RecordedDecision(row.id, RiskEvaluation(True, (), "v1", True, None))
         proposal = ProposedOrder(env.account_id, info, Side.BUY, D("0.5"), OrderType.LIMIT, D("100.05"),
@@ -449,3 +463,42 @@ def test_client_order_id_collision_is_not_misreported_as_decision_reuse(
     with pytest.raises(IntegrityError):
         env.place()
     assert env.scalar("select count(*) from orders") == 1
+
+
+# ---- final review: tie the order to the decision, and fence right before the broker call ----------
+
+
+@pytest.mark.parametrize(
+    "tampered",
+    [{"quantity": "0.1"}, {"side": "SELL"}, {"limit_price": "90.00"}, {"strategy_id": "other_v1"}, {"symbol": "QQQ"},
+     {"order_type": "MARKET"}],
+)  # fmt: skip
+def test_order_terms_must_match_the_recorded_decision(env: Env, tampered: dict) -> None:  # type: ignore[type-arg]
+    with pytest.raises(RiskNotApproved, match="terms"):
+        env.place(stored_terms=tampered)
+    assert env.scalar("select count(*) from order_intents") == 0
+
+
+def test_a_stale_decision_cannot_be_used(env: Env) -> None:
+    with pytest.raises(RiskNotApproved, match="too old"):
+        env.place(decision_age=timedelta(minutes=10))
+    assert env.place(decision_age=timedelta(seconds=30))  # a fresh-enough decision is fine
+
+
+def test_lease_lost_just_before_the_broker_call_never_reaches_the_broker(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order_id = env.place()
+    original = env.manager._prepare_submit
+
+    def prepare_then_lose_the_lease(oid):  # type: ignore[no-untyped-def]
+        result = original(oid)
+        _steal_lease(env)  # e.g. the process was paused right after committing SUBMITTING
+        return result
+
+    monkeypatch.setattr(env.manager, "_prepare_submit", prepare_then_lose_the_lease)
+    with pytest.raises(LeaseLost):
+        env.manager.submit(order_id)
+    assert env.spy.submit_calls == 0
+    assert env.broker.get_order("paper-orb_v1-20261019-0001") is None
+    assert env.status(order_id) == "SUBMITTING"  # the next leader's reconciliation resolves it

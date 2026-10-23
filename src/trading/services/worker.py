@@ -13,16 +13,21 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.core.clock import Clock
-from trading.jobs.lease import EXECUTOR_LEASE, Lease, acquire_lease, release_lease, renew_lease
+from trading.jobs.lease import (
+    EXECUTOR_LEASE,
+    Lease,
+    LeaseLost,
+    acquire_lease,
+    release_lease,
+    renew_lease,
+)
 from trading.jobs.outbox import dispatch_pending
-from trading.jobs.runner import JobRunner
+from trading.jobs.runner import Handler, JobRunner
 from trading.monitoring.logging import get_logger
 from trading.monitoring.metrics import LEASE_HELD
+from trading.services.exit_codes import EXIT_LEASE_LOST, EXIT_OK, EXIT_STARTUP_FAILED
 from trading.services.handlers import WorkerContext, build_handlers
 
-EXIT_OK = 0
-EXIT_STARTUP_FAILED = 1
-EXIT_LEASE_LOST = 3
 _log = get_logger(__name__)
 
 
@@ -67,6 +72,7 @@ def run_worker(
     poll: float = 1.0,
     acquire_retry: float = 5.0,
     startup_hooks: Sequence[Callable[[WorkerContext], None]] = (),
+    handlers_factory: Callable[[WorkerContext], dict[str, Handler]] = build_handlers,
 ) -> int:
     lease = _acquire(session_factory, clock, worker_id, lease_ttl, stop, acquire_retry)
     if lease is None:
@@ -83,7 +89,11 @@ def run_worker(
         return EXIT_STARTUP_FAILED
 
     runner = JobRunner(
-        session_factory, build_handlers(ctx), clock=clock, worker_id=worker_id, lease_for=lease_ttl
+        session_factory,
+        handlers_factory(ctx),
+        clock=clock,
+        worker_id=worker_id,
+        lease_for=lease_ttl,
     )
     renew_every = lease_ttl / 3
     last_renew = clock.now()
@@ -104,7 +114,7 @@ def run_worker(
                 dispatch_pending(session, {}, now=clock.now())
             if not worked:
                 stop.wait(poll)
-    except SQLAlchemyError:
+    except (SQLAlchemyError, LeaseLost):
         # Cannot prove we still hold the lease: stop processing and let the supervisor restart us.
         _log.critical("worker_database_failure", worker_id=worker_id, exc_info=True)
         LEASE_HELD.labels(EXECUTOR_LEASE).set(0)

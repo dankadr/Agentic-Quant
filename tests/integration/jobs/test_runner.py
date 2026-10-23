@@ -106,3 +106,29 @@ def test_runner_counts_job_outcomes(
     runner.run_once()
     assert sample("count-ok", "succeeded") == ok_before + 1
     assert sample("count-bad", "failed") == bad_before + 1
+
+
+def test_runner_lets_lease_loss_and_database_errors_escape(
+    db: Session, session_factory: sessionmaker[Session], clock: ManualClock
+):
+    """Review I6: a fenced-out or database-less worker must stop, not record a job failure."""
+    import pytest
+    from sqlalchemy.exc import OperationalError
+
+    from trading.jobs.lease import LeaseLost
+
+    def lost(job: Job) -> None:
+        raise LeaseLost("taken over")
+
+    def db_down(job: Job) -> None:
+        raise OperationalError("select 1", {}, Exception("connection refused"))
+
+    for kind, handler, exc in (("lost", lost, LeaseLost), ("down", db_down, OperationalError)):
+        _add(session_factory, clock, kind, key=kind)
+        with pytest.raises(exc):
+            _runner(session_factory, clock, {kind: handler}).run_once()
+    states = dict(db.execute(text("select kind, state from jobs")).all())
+    assert states == {
+        "lost": "RUNNING",
+        "down": "RUNNING",
+    }  # left for lease-expiry reclaim, not failed

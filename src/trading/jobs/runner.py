@@ -3,9 +3,11 @@
 from collections.abc import Callable, Mapping
 from datetime import timedelta
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.core.clock import Clock
+from trading.jobs.lease import LeaseLost
 from trading.jobs.queue import Job, claim, complete, fail
 from trading.monitoring.logging import get_logger
 from trading.monitoring.metrics import JOBS_PROCESSED
@@ -48,6 +50,10 @@ class JobRunner:
         else:
             try:
                 handler(job)
+            except (LeaseLost, SQLAlchemyError):
+                # Fenced out, or the database is failing: stop the worker; the job's lease
+                # expires and it is reclaimed. Never record this as an ordinary job failure.
+                raise
             except Exception as exc:
                 _log.exception("job_failed", job_id=str(job.id), kind=job.kind)
                 error = f"{type(exc).__name__}: {exc}"
