@@ -69,8 +69,9 @@ prints the same hash. The fixtures are **synthetic** (see `tests/fixtures/replay
 ## Backtest and research
 
 `trading backtest` replays several sessions through the production tick path with one persistent
-paper account (also **scratch database only**; `--reset` wipes it, and it refuses any database that
-holds a non-replay/backtest account):
+paper account (also **scratch database only**: the database name must contain `scratch`, `test`, `replay` or
+`backtest`, and it refuses a database holding any non-replay/backtest account or API principal;
+`--reset` wipes it):
 
 ```bash
 uv run trading backtest --fixtures DIR --start 2026-10-19 --end 2026-10-23 --reset

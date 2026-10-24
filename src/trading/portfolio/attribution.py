@@ -53,7 +53,16 @@ def record_attribution(
 
     qty = _split(sign * fill.qty, weights, _QTY_Q)
     fees = _split(fill.fees, magnitudes, Decimal("0.0001"))
-    pnl = _split(quantize_cash(realized), magnitudes, Decimal("0.0001"))
+    # Realized gross P&L belongs to the strategies that reduced the position; a buying leg on a net
+    # SELL is an internal transfer. Every strategy still bears its share of the fees.
+    gross = quantize_cash(realized + fill.fees)
+    reducers = {s: m for s, m in magnitudes.items() if weights[s] < 0}
+    gross_share = (
+        _split(gross, reducers, Decimal("0.0001"))
+        if reducers
+        else dict.fromkeys(strategies, Decimal(0))
+    )
+    pnl = {s: gross_share.get(s, Decimal(0)) - fees[s] for s in strategies}
 
     known = set(session.scalars(select(Strategy.id).where(Strategy.id.in_(strategies))))
     for strategy in strategies:

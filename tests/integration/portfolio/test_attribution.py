@@ -113,3 +113,18 @@ def test_duplicate_fill_does_not_duplicate_attribution(db: Session) -> None:
     fill(db, account_id, order, "e1", "0.5", "100")
     assert fill(db, account_id, order, "e1", "0.5", "100") is None
     assert db.execute(text("select count(*) from strategy_attribution")).scalar_one() == 1
+
+
+def test_realized_pnl_goes_only_to_the_strategies_that_reduced_the_position(db: Session) -> None:
+    """Review I4: on a net SELL the buying leg is an internal transfer and earns no realized P&L."""
+    account_id = setup(db)
+    buy = new_order(db, account_id, "b1", qty="1", limit="101", strategy_ids=["orb_v1"])
+    fill(db, account_id, buy, "e1", "1", "100")
+    sell = new_order(db, account_id, "s1", side="SELL", qty="0.6", limit="109", strategy_ids=["orb_v1", "vwap_v1"],
+                     attribution={"orb_v1": "-1.0", "vwap_v1": "0.4"})  # fmt: skip
+    fill(db, account_id, sell, "e2", "0.6", "110", fees="0.14")
+    out = rows(db)
+    total_gross = sum((v[2] + v[1] for k, v in out.items() if k in ("orb_v1", "vwap_v1")), D(0))
+    assert total_gross == D("6.0000")  # all of the gross P&L, nothing invented or lost
+    vwap = out["vwap_v1"]
+    assert vwap[2] == -vwap[1]  # the transfer leg carries only its share of fees
