@@ -130,6 +130,7 @@ trading additionally needs a market data provider adapter.
 | `uv run trading admin create-api-key --name N --role viewer\|operator` | create an API key (printed once, stored hashed) |
 | `uv run trading admin clear-drawdown-halt --reason "..."` | explicit, audited clearing of a drawdown halt |
 | `uv run trading backtest --fixtures DIR --start D --end D` | multi-day backtest (scratch DB) |
+| `uv run trading report --date D` | end-of-day report: data coverage, strategies, costs, P&L |
 | `uv run trading ingest-csv --path DIR --start ISO --end ISO` | load CSV bars/quotes into the database |
 
 ## Known limitations

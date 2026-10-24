@@ -217,6 +217,29 @@ def _alpaca_provider(settings: Settings) -> "AlpacaDataProvider | None":
     return AlpacaDataProvider.from_files(key, secret)
 
 
+@app.command()
+def report(
+    session_date: str = typer.Option(..., "--date", help="Session date, YYYY-MM-DD."),
+    provider: str = typer.Option("alpaca-iex", help="Market-data provider name to report on."),
+) -> None:
+    """Print the end-of-day report: data coverage, strategy activity, costs and P&L."""
+    from trading.monitoring.report import daily_report  # noqa: PLC0415
+
+    settings = Settings()
+    engine = make_engine(settings.resolved_database_url())
+    try:
+        with make_session_factory(engine)() as session:
+            body = daily_report(
+                session,
+                date.fromisoformat(session_date),
+                config=load_config(settings.config_dir),
+                provider=provider,
+            )
+    finally:
+        engine.dispose()
+    typer.echo(json.dumps(body, indent=2))
+
+
 @app.command("alpaca-check")
 def alpaca_check(
     symbol: str = typer.Option("SPY"),
