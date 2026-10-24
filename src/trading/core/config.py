@@ -166,6 +166,8 @@ class Settings(BaseSettings):
     log_json: bool = True
     worker_id: str = socket.gethostname()
     metrics_port: int | None = None
+    alpaca_key_id_file: Path | None = None  # market-data keys only; never trading keys
+    alpaca_secret_file: Path | None = None
 
     def resolved_database_url(self) -> str:
         if self.database_url:

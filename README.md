@@ -91,6 +91,23 @@ operator (`POST /v1/config-proposals/{id}/approve|reject`), and application at t
 start** (version bump, audited). Read endpoints: `/v1/strategies`, `/v1/signals`,
 `/v1/performance`, `/v1/config-proposals`.
 
+## Market data (Alpaca, free IEX feed)
+
+Put the Alpaca **market-data** key pair (a paper account's keys work; never trading keys) in
+`secrets/alpaca_key_id` and `secrets/alpaca_secret` (`scripts/init-secrets.sh` creates empty
+placeholders; empty means "not configured"). The adapter only talks to `data.alpaca.markets`
+(it refuses any other host) and has no order or account calls.
+
+```bash
+uv run trading alpaca-check --start 2026-10-23T14:30:00Z --end 2026-10-23T14:45:00Z   # no database
+uv run trading ingest-alpaca --start 2026-10-23T13:30:00Z --end 2026-10-23T20:00:00Z  # backfill
+```
+
+With keys present the worker ingests live bars and quotes each minute and trades **paper only**.
+IEX is a single venue, so bar volume is a small fraction of consolidated volume (thinly traded
+symbols such as DIA can fail the ORB `min_avg_volume` filter, by design). Quotes are the last quote
+per symbol-minute, one request each. Corporate actions are not fetched.
+
 ## Paper run
 
 ```bash
@@ -117,10 +134,9 @@ trading additionally needs a market data provider adapter.
 
 ## Known limitations
 
-- No market-data provider yet: live-hours paper trading is not possible until one is chosen.
+- Market data comes from Alpaca's free IEX feed only (see above); there is no consolidated (SIP) data.
 - Corporate actions are ingested and the ledger can apply them, but the paper venue does not model
   them, so they are not applied automatically (it would break reconciliation).
-- Strategies run in replay/backtest only until a market-data provider is wired; the scripted intent
-  source remains for tests. Synthetic backtests prove plumbing, not profitability.
+- Synthetic backtests prove plumbing, not profitability; the scripted intent source remains for tests.
 - TQQQ (leveraged) is in the universe at the owner's request, in its own sector bucket; it is
   outside the spec's "no leverage" intent and is capped by the same risk limits.
