@@ -195,15 +195,40 @@ def test_a_net_sell_when_the_exit_is_larger() -> None:
     assert req.limit_price == D("99.50")  # the most aggressive SELL limit
 
 
-def test_exactly_offsetting_signals_produce_no_order() -> None:
+def test_exactly_offsetting_signals_still_execute_the_exit() -> None:
+    """Review C2: an exit must never be swallowed by an equal entry; exits win, the entry waits."""
     held = (hold("vwap_v1", "0.8"),)
     signals = [
         signal("orb_v1", side=Side.BUY, notional="80", limit="100.00"),
         signal("vwap_v1", side=Side.SELL, limit="99.00"),
     ]
     result = alloc.allocate(signals, ctx(holdings=held, held_qty={"SPY": D("0.8")}))
+    (req,) = result.requests
+    assert (req.side, req.quantity) == (Side.SELL, D("0.8"))
+    assert req.attribution == {"vwap_v1": D("-0.8")}
+    reasons = {(n.strategy_id, n.reason) for n in result.notes if n.outcome == "DROPPED"}
+    assert reasons == {("orb_v1", "EXIT_PRIORITY")}
+
+
+def test_blocked_entries_are_dropped_so_an_exit_is_never_netted_into_a_deniable_buy() -> None:
+    """Review C2: during a halt or after the entry cutoff an opposing BUY must not poison the exit."""
+    held = (hold("vwap_v1", "0.3"),)
+    signals = [
+        signal("orb_v1", side=Side.BUY, notional="80", limit="100.10"),
+        signal("vwap_v1", side=Side.SELL, notional="30", limit="99.80"),
+    ]
+    result = alloc.allocate(
+        signals, ctx(holdings=held, held_qty={"SPY": D("0.3")}, entries_allowed=False)
+    )
+    (req,) = result.requests
+    assert (req.side, req.quantity) == (Side.SELL, D("0.3"))
+    assert req.attribution == {"vwap_v1": D("-0.3")}
+    assert ("orb_v1", "ENTRIES_BLOCKED") in {(n.strategy_id, n.reason) for n in result.notes}
+
+
+def test_blocked_entries_alone_produce_no_order() -> None:
+    result = alloc.allocate([signal()], ctx(entries_allowed=False))
     assert result.requests == ()
-    assert {n.reason for n in result.notes} == {"NETTED_TO_ZERO"}
 
 
 def test_never_creates_a_short_through_netting() -> None:

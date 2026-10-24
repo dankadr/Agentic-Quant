@@ -35,6 +35,9 @@ class World:
         self.calendar = calendar
         self.instruments = upsert_universe(db, CFG.universe)
         seed_strategies(db, CFG, now=T0)
+        db.execute(
+            text("update system_state set trading_state = 'PAPER_RUNNING', risk_state = 'NORMAL'")
+        )
         self.account_id = open_account(db)
         self.source = StrategyIntentSource(
             sf, account_id=self.account_id, calendar=calendar, config=CFG,
@@ -248,3 +251,11 @@ def test_same_inputs_give_the_same_proposals(world: World) -> None:
     assert [(r.symbol, r.side, r.quantity, r.limit_price) for r in first] == [
         (r.symbol, r.side, r.quantity, r.limit_price) for r in second
     ]
+
+
+def test_entries_are_not_proposed_while_halted(world: World) -> None:
+    """Review C2: strategies are unaware of halts; the allocator must not emit doomed entries."""
+    world.orb_day()
+    world.db.execute(text("update system_state set risk_state = 'HALTED_DAILY_LOSS'"))
+    assert world.propose() == ()
+    assert "ENTRIES_BLOCKED" in world.count("select rationale_json::text from allocation_decisions")

@@ -7,7 +7,7 @@ parameters are read from the ``strategies`` table, which only changes at session
 
 import json
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -15,6 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
+from trading.control.state import RiskState, TradingState
 from trading.core.config import AppConfig
 from trading.core.hashing import canonical_json
 from trading.data.calendar import MarketCalendar
@@ -146,6 +147,12 @@ class StrategyIntentSource:
                 sleeves={n: c.allocation_pct for n, c in self._config.strategies.items()},
                 max_symbol_pct=self._config.risk.max_symbol_exposure_pct,
                 paper_cfg=self._config.paper_broker,
+                entries_allowed=(
+                    exposure.trading_state is TradingState.PAPER_RUNNING
+                    and exposure.risk_state is RiskState.NORMAL
+                    and info.close_at - now
+                    > timedelta(minutes=self._config.risk.entry_cutoff_minutes_before_close)
+                ),
             )
             result = self._allocator.allocate(signals, ctx)
             self._persist(session, snapshot, signals, result.notes, result.targets, now)

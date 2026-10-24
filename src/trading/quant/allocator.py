@@ -40,6 +40,7 @@ class AllocationContext:
     sleeves: Mapping[str, Decimal]  # strategy -> allocation_pct
     max_symbol_pct: Decimal
     paper_cfg: PaperBrokerConfig
+    entries_allowed: bool = True  # False during halts / after the entry cutoff: exits only
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,8 @@ class SleeveAllocator:
                     drop(sig, "UNKNOWN_SYMBOL")
                 elif ctx.now >= sig.expires_at:
                     drop(sig, "EXPIRED")
+                elif sig.side is Side.BUY and not ctx.entries_allowed:
+                    drop(sig, "ENTRIES_BLOCKED")
                 elif (sig.strategy_id, symbol, sig.side.value) in ctx.in_flight:
                     drop(sig, "ORDER_IN_FLIGHT")
                 else:
@@ -176,9 +179,15 @@ class SleeveAllocator:
             if not legs_all:
                 continue
             net = sum((leg.qty for leg in buys), _ZERO) - sum((leg.qty for leg in sells), _ZERO)
+            if net == 0 and sells:
+                # An exit is never swallowed by an equal entry: exits win, the entry waits.
+                for leg in buys:
+                    drop(leg.signal, "EXIT_PRIORITY")
+                    sleeve_used[leg.strategy] -= leg.qty * (leg.signal.limit_price or mark or _ZERO)
+                buys = []
+                legs_all = list(sells)
+                net = -sum((leg.qty for leg in sells), _ZERO)
             if net == 0:
-                for leg in legs_all:
-                    drop(leg.signal, "NETTED_TO_ZERO")
                 continue
             side = Side.BUY if net > 0 else Side.SELL
             attribution: dict[str, Decimal] = defaultdict(Decimal)
