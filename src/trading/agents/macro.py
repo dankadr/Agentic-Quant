@@ -37,9 +37,9 @@ system. You receive ONLY numeric features about today's regular session so far. 
 any action; you only answer with one JSON object.
 
 Features: bars (minutes of data), breadth_above_vwap (share of the universe trading above its
-session VWAP, 0..1), indices.{SPY,QQQ,IWM}: return_pct (open to now, fraction), realized_vol_bps (std of
-1-minute returns in basis points), efficiency (0..1; near 1 = steady one-way move, near 0 = chop),
-range_pct (high-low over open).
+session VWAP, 0..1), indices.{SPY,QQQ,IWM}: return_pct (open to now, fraction),
+realized_vol_bps (std of 1-minute returns in basis points), efficiency (0..1; near 1 =
+steady one-way move, near 0 = chop), range_pct (high-low over open).
 
 Regimes: TRENDING (persistent one-way move, high efficiency, broad breadth), RANGING (mean-reverting
 chop, low efficiency), HIGH_VOLATILITY (unusually large moves/volatility regardless of direction),
