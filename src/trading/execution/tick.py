@@ -39,6 +39,7 @@ from trading.portfolio.valuation import (
     record_equity_snapshot,
     value_portfolio,
 )
+from trading.quant.proposals import apply_approved
 from trading.risk.halts import evaluate_halts, start_session
 from trading.risk.models import ProposedOrder, RiskEngine
 from trading.risk.service import build_account_view, evaluate_and_record
@@ -244,6 +245,8 @@ class PaperTickProcessor:
             )
             if opened:
                 record_equity_snapshot(session, state, kind="SESSION_START")
+                # The only place approved parameter changes go live: a new session, never a restart.
+                apply_approved(session, now=now)
 
     def _ensure_session(self, session_date: date) -> None:
         with self._sf() as session:
