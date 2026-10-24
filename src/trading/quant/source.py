@@ -33,7 +33,12 @@ from trading.quant.allocator import (
 )
 from trading.quant.bars import load_session_bars
 from trading.quant.flatten import FlattenStrategy
-from trading.quant.holdings import load_entered_today, load_holdings, load_in_flight
+from trading.quant.holdings import (
+    load_entered_today,
+    load_holdings,
+    load_in_flight,
+    load_open_buy_by_strategy,
+)
 from trading.quant.models import SignalProposal, SignalStrategy, StrategyInput
 from trading.quant.orb import OrbStrategy
 from trading.quant.vwap import VwapStrategy
@@ -151,6 +156,7 @@ class StrategyIntentSource:
                 open_buy_notional=exposure.open_buy_notional_by_symbol,
                 open_sell_qty=exposure.open_sell_qty_by_symbol,
                 in_flight=load_in_flight(session, self._account_id),
+                open_buy_by_strategy=load_open_buy_by_strategy(session, self._account_id),
                 instruments=self._instruments,
                 sleeves={n: c.allocation_pct for n, c in self._config.strategies.items()},
                 max_symbol_pct=self._config.risk.max_symbol_exposure_pct,

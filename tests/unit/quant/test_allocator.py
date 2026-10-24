@@ -324,3 +324,15 @@ def test_notional_never_exceeds_the_target_for_any_size(notional: str) -> None:
     result = alloc.allocate([signal(notional=notional)], ctx())
     for req in result.requests:
         assert req.quantity * (req.limit_price or D(0)) <= D(notional)
+
+
+def test_a_strategys_resting_buys_count_against_its_sleeve() -> None:
+    """Review I3: unfilled DAY buys can fill later, so the sleeve maximum must include them."""
+    sig = signal("orb_v1", symbol="QQQ", notional="80", limit="100.00")
+    # sleeve = 20% x $1000 = $200; $150 is already resting on SPY
+    result = alloc.allocate([sig], ctx(open_buy_by_strategy={"orb_v1": D("150")}))
+    (req,) = result.requests
+    assert req.quantity * D("100.00") <= D("50")
+    none_left = alloc.allocate([sig], ctx(open_buy_by_strategy={"orb_v1": D("200")}))
+    assert none_left.requests == ()
+    assert {n.reason for n in none_left.notes} == {"NO_BUDGET"}

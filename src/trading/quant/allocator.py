@@ -9,7 +9,7 @@ so fills can be split back to strategies. Nothing here can create a short.
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
@@ -40,6 +40,7 @@ class AllocationContext:
     sleeves: Mapping[str, Decimal]  # strategy -> allocation_pct
     max_symbol_pct: Decimal
     paper_cfg: PaperBrokerConfig
+    open_buy_by_strategy: Mapping[str, Decimal] = field(default_factory=dict)  # resting BUY $
     entries_allowed: bool = True  # False during halts / after the entry cutoff: exits only
 
 
@@ -161,6 +162,7 @@ class SleeveAllocator:
                 )
                 sleeve_left = (
                     pct * ctx.equity - exposure - sleeve_used[sig.strategy_id]
+                    - ctx.open_buy_by_strategy.get(sig.strategy_id, _ZERO)
                     + freed_by_strategy[sig.strategy_id]
                 )  # fmt: skip
                 cap = min(sig.target_notional_usd, sleeve_left, headroom)

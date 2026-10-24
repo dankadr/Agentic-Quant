@@ -40,3 +40,14 @@ def test_a_rounding_residue_is_not_a_holding(db: Session) -> None:
     _trade(db, acct, "b1", "BUY", "1.0", "100", T0)
     _trade(db, acct, "s1", "SELL", "0.99996667", "101", T0 + timedelta(hours=1))
     assert load_holdings(db, acct, DAY2) == ()
+
+
+def test_resting_buys_are_summed_per_strategy(db: Session) -> None:
+    from trading.quant.holdings import load_open_buy_by_strategy
+
+    seed_strategies(db, CFG, now=T0)
+    acct = open_account(db)
+    new_order(db, acct, "r1", qty="1.0", limit="100.00", strategy_ids=["orb_v1"])
+    new_order(db, acct, "r2", qty="1.0", limit="50.00", strategy_ids=["orb_v1", "vwap_v1"])
+    new_order(db, acct, "done", qty="1.0", limit="999", strategy_ids=["orb_v1"], status="FILLED")
+    assert load_open_buy_by_strategy(db, acct) == {"orb_v1": D("125"), "vwap_v1": D("25")}

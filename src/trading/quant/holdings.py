@@ -93,3 +93,20 @@ def load_in_flight(session: Session, account_id: UUID) -> frozenset[tuple[str, s
         {"acct": account_id, "terminal": list(_TERMINAL)},
     ).all()
     return frozenset((r.strategy_id, r.symbol, r.side) for r in rows)
+
+
+def load_open_buy_by_strategy(session: Session, account_id: UUID) -> dict[str, Decimal]:
+    """Unfilled BUY notional resting per strategy (split equally across a netted order's owners)."""
+    rows = session.execute(
+        text(
+            "SELECT s.strategy_id,"
+            " sum((o.qty - o.filled_qty) * coalesce(o.limit_price, 0)"
+            " / cardinality(n.strategy_ids)) AS notional"
+            " FROM orders o JOIN order_intents n ON n.id = o.intent_id"
+            " CROSS JOIN LATERAL unnest(n.strategy_ids) AS s(strategy_id)"
+            " WHERE o.account_id = :acct AND o.side = 'BUY' AND o.status NOT IN :terminal"
+            " GROUP BY s.strategy_id"
+        ).bindparams(bindparam("terminal", expanding=True)),
+        {"acct": account_id, "terminal": list(_TERMINAL)},
+    ).all()
+    return {r.strategy_id: Decimal(r.notional) for r in rows}
