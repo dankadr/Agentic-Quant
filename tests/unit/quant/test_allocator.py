@@ -336,3 +336,39 @@ def test_a_strategys_resting_buys_count_against_its_sleeve() -> None:
     none_left = alloc.allocate([sig], ctx(open_buy_by_strategy={"orb_v1": D("200")}))
     assert none_left.requests == ()
     assert {n.reason for n in none_left.notes} == {"NO_BUDGET"}
+
+
+def test_entry_scale_only_ever_shrinks_new_buys() -> None:
+    """Macro risk multiplier: scales a dependent strategy's entry size down, never up."""
+    full = alloc.allocate([signal(notional="80")], ctx()).requests[0].quantity
+    half = (
+        alloc.allocate([signal(notional="80")], ctx(entry_scale={"orb_v1": D("0.5")}))
+        .requests[0]
+        .quantity
+    )
+    assert half * D("100.10") <= D("40")
+    assert half < full
+    over = (
+        alloc.allocate([signal(notional="80")], ctx(entry_scale={"orb_v1": D("3")}))
+        .requests[0]
+        .quantity
+    )
+    assert over == full  # a scale above 1 is clamped: it can never grow an entry
+
+
+def test_a_zero_entry_scale_blocks_the_entry_but_never_the_exit() -> None:
+    held = (hold("orb_v1", "0.3"),)
+    blocked = alloc.allocate([signal(notional="80")], ctx(entry_scale={"orb_v1": D("0")}))
+    assert blocked.requests == ()
+    assert {n.reason for n in blocked.notes} == {"MACRO_BLOCK"}
+    exit_sig = signal("orb_v1", side=Side.SELL, limit="99.80")
+    result = alloc.allocate(
+        [exit_sig], ctx(holdings=held, held_qty={"SPY": D("0.3")}, entry_scale={"orb_v1": D("0")})
+    )
+    (req,) = result.requests
+    assert (req.side, req.quantity) == (Side.SELL, D("0.3"))
+
+
+def test_entry_scale_only_applies_to_the_named_strategies() -> None:
+    result = alloc.allocate([signal("vwap_v1", notional="60")], ctx(entry_scale={"orb_v1": D("0")}))
+    assert len(result.requests) == 1

@@ -41,6 +41,7 @@ class AllocationContext:
     max_symbol_pct: Decimal
     paper_cfg: PaperBrokerConfig
     open_buy_by_strategy: Mapping[str, Decimal] = field(default_factory=dict)  # resting BUY $
+    entry_scale: Mapping[str, Decimal] = field(default_factory=dict)  # macro multiplier, BUY only
     entries_allowed: bool = True  # False during halts / after the entry cutoff: exits only
 
 
@@ -165,7 +166,11 @@ class SleeveAllocator:
                     - ctx.open_buy_by_strategy.get(sig.strategy_id, _ZERO)
                     + freed_by_strategy[sig.strategy_id]
                 )  # fmt: skip
-                cap = min(sig.target_notional_usd, sleeve_left, headroom)
+                scale = min(ctx.entry_scale.get(sig.strategy_id, Decimal(1)), Decimal(1))
+                if scale <= 0:
+                    drop(sig, "MACRO_BLOCK")
+                    continue
+                cap = min(sig.target_notional_usd * scale, sleeve_left, headroom)
                 if cap <= 0:
                     drop(sig, "NO_BUDGET")
                     continue
