@@ -1,7 +1,7 @@
 """Strategy-facing types. Signals are advisory: they never carry broker instructions."""
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Protocol, Self
@@ -84,6 +84,7 @@ class StrategyInput:
     session: SessionInfo
     # (strategy_id, symbol) pairs already entered this session: one entry per symbol per session
     entered_today: frozenset[tuple[str, str]] = frozenset()
+    positions: Mapping[str, Decimal] = field(default_factory=dict)  # symbol -> total shares held
 
 
 class SignalStrategy(Protocol):

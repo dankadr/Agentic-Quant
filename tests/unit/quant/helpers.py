@@ -40,8 +40,9 @@ def make_input(
     holdings: tuple[Holding, ...] = (),
     entered: frozenset[tuple[str, str]] = frozenset(),
     untradable: frozenset[str] = frozenset(),
+    positions: dict[str, Decimal] | None = None,
 ) -> StrategyInput:
-    quotes = quotes or {s: ("100.29", "100.31") for s in bars}
+    quotes = quotes if quotes is not None else {s: ("100.29", "100.31") for s in bars}
     views = {
         s: view(s, now, bid=quotes[s][0], ask=quotes[s][1], tradable=s not in untradable)
         for s in bars
@@ -59,6 +60,7 @@ def make_input(
         now=now,
         session=session,
         entered_today=entered,
+        positions=positions or {},
     )
 
 
