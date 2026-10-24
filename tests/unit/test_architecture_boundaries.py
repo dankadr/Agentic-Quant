@@ -91,7 +91,7 @@ def test_strategy_and_agent_packages_cannot_import_brokers() -> None:
     assert offenders == []
 
 
-def test_only_pause_and_resume_mutate_state_through_the_api(app: FastAPI) -> None:
+def test_only_sanctioned_routes_mutate_state_through_the_api(app: FastAPI) -> None:
     """Acceptance test 9/10 groundwork: no route can place orders, change risk or go live."""
     paths = app.openapi()["paths"]
     mutating = {
@@ -100,7 +100,16 @@ def test_only_pause_and_resume_mutate_state_through_the_api(app: FastAPI) -> Non
         for method in operations
         if method.lower() not in {"get", "head", "options"}
     }
-    assert mutating == {("POST", "/v1/control/pause"), ("POST", "/v1/control/resume-paper")}
+    assert mutating == {
+        ("POST", "/v1/control/pause"),
+        ("POST", "/v1/control/resume-paper"),
+        # Parameter proposals: stored PENDING_REVIEW, reviewed by another principal, applied by the
+        # executor at the next session start. They cannot place orders or touch risk limits.
+        ("POST", "/v1/strategies/{strategy_id}/propose-config"),
+        ("POST", "/v1/config-proposals/{proposal_id}/approve"),
+        ("POST", "/v1/config-proposals/{proposal_id}/reject"),
+    }
+    assert not [p for _, p in mutating if "order" in p or "risk" in p or "mode" in p]
     assert len(paths) >= 9  # guard against the check passing because the schema came back empty
 
 

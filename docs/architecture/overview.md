@@ -36,8 +36,10 @@ flowchart LR
 
 - Only the worker constructs a broker adapter. `trading.api` never imports `trading.brokers`,
   the execution manager or the bootstrap, directly **or transitively**.
-- The API's only state-changing routes are `pause` and `resume-paper`. There is no route to place
-  orders, change risk limits or switch mode.
+- The API's only state-changing routes are `pause`, `resume-paper` and the strategy-config proposal
+  workflow (`propose-config`, `approve`, `reject`). There is no route to place orders, change risk
+  limits or switch mode; a proposal only edits strategy *parameters*, needs a second principal to
+  approve it, and is applied by the executor at the next session start.
 - Risk is code, not prompt: `DeterministicRiskEngine` is a pure function of typed inputs; nothing
   an agent or headline says can alter it.
 - Live mode cannot be expressed: `mode` is `Literal["PAPER_ONLY"]`, `accounts.mode` has a CHECK,
@@ -51,6 +53,17 @@ Submission is two-phase: (A) verify fence, persisted decision and system state, 
 the outcome. A timeout becomes `UNKNOWN` and is resolved by reconciliation against the broker, never
 by resubmitting. Every write first asserts the executor lease **fencing token**, so a stale process
 cannot write.
+
+## Quant layer (Plan B)
+
+`StrategyIntentSource` runs each tick: point-in-time bars -> pure strategies (`orb_v1`, `vwap_v1`,
+`eod_flatten`) -> validated `SignalProposal`s (persisted) -> `SleeveAllocator` -> `ProposedOrder`s
+-> the same risk engine and order path as above. The allocator nets opposing signals per symbol into
+one order (never a short) and records signed attribution weights; fills are split across strategies
+into `strategy_attribution` (qty, fees, realized P&L). Sleeves are *maximum* notionals
+(`allocation_pct x equity`); the 10% symbol cap is shared. Strategy parameters are read from the
+`strategies` table and change only via reviewed proposals applied at session start. Backtests reuse
+the production tick path (`drive_session`) against a scratch database and a `ManualClock`.
 
 ## Why the paper broker has its own schema
 

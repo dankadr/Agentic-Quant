@@ -295,6 +295,52 @@ def replay(
 
 
 @app.command()
+def backtest(
+    fixtures: Path = typer.Option(..., help="Directory with bars.csv / quotes.csv."),
+    start: str = typer.Option(..., help="First date, YYYY-MM-DD."),
+    end: str = typer.Option(..., help="Last date, YYYY-MM-DD."),
+    minutes_per_day: int | None = typer.Option(None, min=1, help="Shorten sessions (research)."),
+    reset: bool = typer.Option(False, "--reset", help="Wipe the scratch database first."),
+) -> None:
+    """Backtest the strategies over several sessions (use a scratch database)."""
+    from trading.quant.backtest import BacktestError, run_backtest  # noqa: PLC0415
+
+    settings = Settings()
+    config = load_config(settings.config_dir)
+    engine = make_engine(settings.resolved_database_url())
+    try:
+        result = run_backtest(
+            make_session_factory(engine),
+            fixtures_dir=fixtures,
+            start=date.fromisoformat(start),
+            end=date.fromisoformat(end),
+            config=config,
+            minutes_per_day=minutes_per_day,
+            reset=reset,
+        )
+    except BacktestError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    finally:
+        engine.dispose()
+    typer.echo(
+        json.dumps(
+            {
+                "sessions": [d.isoformat() for d in result.sessions],
+                "result_hash": result.result_hash,
+                "final_equity": str(result.final_equity),
+                "net_pnl": str(result.account.net_pnl),
+                "max_drawdown_pct": str(result.account.max_drawdown_pct),
+                "benchmark_return_pct": str(
+                    result.account.benchmark.return_pct if result.account.benchmark else None
+                ),
+                "strategy_net_pnl": {k: str(v.net_pnl) for k, v in result.strategies.items()},
+            }
+        )
+    )
+
+
+@app.command()
 def openapi() -> None:
     """Print the OpenAPI schema (no database needed)."""
     application = create_app(
