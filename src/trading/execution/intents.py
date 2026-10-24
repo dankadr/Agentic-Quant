@@ -4,8 +4,8 @@ A source only PROPOSES. Proposals still go through the risk engine and the execu
 nothing here can create an order.
 """
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -32,6 +32,8 @@ class ProposalRequest:
     strategy_id: str
     signal_id: UUID | None
     signal_expires_at: datetime | None
+    strategy_ids: tuple[str, ...] = ()
+    attribution: Mapping[str, Decimal] = field(default_factory=dict)
 
     @property
     def dedupe_key(self) -> str:

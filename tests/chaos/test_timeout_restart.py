@@ -5,7 +5,6 @@ from datetime import timedelta
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
-from trading.execution.reconcile import reconcile_account
 
 from tests.integration.execution.env import CFG, NOW, D, SpyBroker, build_env
 from trading.brokers.paper.broker import PaperBroker
@@ -13,6 +12,7 @@ from trading.brokers.paper.faults import FaultPlan
 from trading.control.state import RiskState, get_system_state
 from trading.core.clock import ManualClock
 from trading.execution.manager import ExecutionManager
+from trading.execution.reconcile import reconcile_account
 from trading.execution.state_machine import OrderStatus
 from trading.jobs.lease import EXECUTOR_LEASE, acquire_lease
 

@@ -14,10 +14,24 @@ import random
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-START_CENTS = {"SPY": 50000, "QQQ": 43000, "IWM": 21000, "AAPL": 23000, "MSFT": 42000}
+START_CENTS = {
+    "SPY": 50000,
+    "QQQ": 43000,
+    "IWM": 21000,
+    "AAPL": 23000,
+    "MSFT": 42000,
+    "DIA": 39000,
+    "NVDA": 14000,
+    "TQQQ": 8500,
+    "GOOGL": 17500,
+    "META": 58000,
+    "AMZN": 19000,
+}
 OPEN_UTC = (13, 30)  # 09:30 America/New_York in EDT
 MINUTES = 390
 HEADER_NOTE = "# SYNTHETIC — not market data"
+BAR_HEADER = "symbol,ts,open,high,low,close,volume,source_seq"
+QUOTE_HEADER = "symbol,ts,bid,ask,bid_size,ask_size"
 
 
 def _fmt(cents: int) -> str:
@@ -63,8 +77,8 @@ def generate(
         cutoff = datetime(day.year, day.month, day.day, hour, minute, tzinfo=UTC)
 
     close = {s: START_CENTS[s] for s in symbols}
-    bars = [HEADER_NOTE, "symbol,ts,open,high,low,close,volume,source_seq"]
-    quotes = [HEADER_NOTE, "symbol,ts,bid,ask,bid_size,ask_size"]
+    bars = [HEADER_NOTE, BAR_HEADER]
+    quotes = [HEADER_NOTE, QUOTE_HEADER]
     for minute in range(MINUTES):
         start = _ts(day, minute)
         for symbol in symbols:
@@ -93,18 +107,39 @@ def generate(
     return "\n".join(bars) + "\n", "\n".join(quotes) + "\n"
 
 
+def generate_range(days: list[date], symbols: list[str], seed: int) -> tuple[str, str]:
+    """Several sessions in one pair of files. Each day reseeds (``seed + index``) and restarts at
+    the same prices: this is synthetic data for plumbing tests, not a price history."""
+    bars, quotes = [HEADER_NOTE, BAR_HEADER], [HEADER_NOTE, QUOTE_HEADER]
+    for index, day in enumerate(days):
+        day_bars, day_quotes = generate(day, symbols, seed + index)
+        bars += [ln for ln in day_bars.splitlines() if ln and not ln.startswith(("#", "symbol,"))]
+        quotes += [
+            ln for ln in day_quotes.splitlines() if ln and not ln.startswith(("#", "symbol,"))
+        ]
+    return "\n".join(bars) + "\n", "\n".join(quotes) + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--date", required=True, type=date.fromisoformat)
+    parser.add_argument("--days", type=int, default=1, help="consecutive weekdays from --date")
     parser.add_argument("--symbols", required=True)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--drop-bars", action="append", default=[], metavar="SYM:HH:MM-HH:MM")
     parser.add_argument("--quotes-until", metavar="HH:MM")
     args = parser.parse_args()
-    bars, quotes = generate(
-        args.date, args.symbols.split(","), args.seed, args.drop_bars, args.quotes_until
-    )
+    symbols = args.symbols.split(",")
+    if args.days > 1:
+        days, cursor = [], args.date
+        while len(days) < args.days:
+            if cursor.weekday() < 5:
+                days.append(cursor)
+            cursor += timedelta(days=1)
+        bars, quotes = generate_range(days, symbols, args.seed)
+    else:
+        bars, quotes = generate(args.date, symbols, args.seed, args.drop_bars, args.quotes_until)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "bars.csv").write_text(bars)
     (args.out / "quotes.csv").write_text(quotes)

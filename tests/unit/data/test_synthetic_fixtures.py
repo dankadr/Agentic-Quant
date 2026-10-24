@@ -42,3 +42,17 @@ def test_fixtures_are_labelled_synthetic() -> None:
     for name in ("2026-10-19", "gaps"):
         for kind in ("bars.csv", "quotes.csv"):
             assert (FIXTURES / name / kind).read_text().startswith("# SYNTHETIC")
+
+
+def test_range_generator_concatenates_sessions_under_one_header() -> None:
+    gen = _generator()
+    days = [date(2026, 10, 19), date(2026, 10, 20)]
+    bars, quotes = gen.generate_range(days, ["SPY"], 7)
+    assert bars == gen.generate_range(days, ["SPY"], 7)[0]
+    assert bars.count("symbol,ts,open") == 1
+    assert quotes.count("symbol,ts,bid") == 1
+    assert "2026-10-19T13:30:00Z" in bars
+    assert "2026-10-20T13:30:00Z" in bars
+    first_day, _ = gen.generate(days[0], ["SPY"], 7)
+    assert all(line in bars for line in first_day.splitlines() if line.startswith("SPY,"))
+    assert bars.count("\nSPY,") == 2 * 390

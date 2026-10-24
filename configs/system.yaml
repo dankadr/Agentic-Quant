@@ -4,10 +4,19 @@ system:
   starting_cash_usd: '1000.00'
   require_fresh_market_data: true
 
-# Initial universe: a suggestion pending owner decision 2, not a recommendation.
+# Universe (owner decision 2). Liquid, tight-spread names. Sectors feed the 30% sector cap.
+# TQQQ is a 3x leveraged ETF: a $100 position behaves like ~$300 of QQQ and it decays in choppy
+# markets. It is bought with cash (no margin), but it departs from the spec's "no leverage" spirit,
+# so it sits in its own sector bucket and is added at the owner's explicit request.
 universe:
-  - {symbol: SPY,  asset_type: ETF,    sector: Broad Market, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
-  - {symbol: QQQ,  asset_type: ETF,    sector: Broad Market, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
-  - {symbol: IWM,  asset_type: ETF,    sector: Broad Market, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
-  - {symbol: AAPL, asset_type: EQUITY, sector: Technology,   tick_size: '0.01', lot_size: '1', fractional_eligible: true}
-  - {symbol: MSFT, asset_type: EQUITY, sector: Technology,   tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: SPY, asset_type: ETF, sector: Broad Market, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: QQQ, asset_type: ETF, sector: Broad Market, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: IWM, asset_type: ETF, sector: Broad Market, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: DIA, asset_type: ETF, sector: Broad Market, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: TQQQ, asset_type: ETF, sector: Leveraged ETF, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: AAPL, asset_type: EQUITY, sector: Technology, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: MSFT, asset_type: EQUITY, sector: Technology, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: NVDA, asset_type: EQUITY, sector: Technology, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: GOOGL, asset_type: EQUITY, sector: Communication, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: META, asset_type: EQUITY, sector: Communication, tick_size: '0.01', lot_size: '1', fractional_eligible: true}
+  - {symbol: AMZN, asset_type: EQUITY, sector: Consumer Discretionary, tick_size: '0.01', lot_size: '1', fractional_eligible: true}

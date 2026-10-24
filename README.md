@@ -9,9 +9,13 @@ verified; see `docs/superpowers/plans/2026-10-20-roadmap-and-spec-review.md` §1
 - Architecture: `docs/architecture/overview.md` · Security: `docs/security/notes.md`
 - Runbooks: `docs/runbooks/` · API contract: `docs/api-contracts/openapi.json`
 
-**Status (Plan A):** infrastructure, database, durable jobs, fenced leases, audit, API, paper broker,
-ledger, reconciliation, risk engine, calendar-aware scheduling and deterministic replay are built.
-Strategies (ORB/VWAP), the allocator, research agents and the ChatGPT MCP come in Plans B–C.
+**Status (Plans A–B):** infrastructure, database, durable jobs, fenced leases, audit, API, paper
+broker, ledger, reconciliation, risk engine, calendar-aware scheduling and deterministic replay
+(Plan A) plus the quant layer (Plan B): ORB and VWAP-reversion strategies, a sleeve allocator that
+nets signals into risk-checked orders with per-strategy attribution, end-of-day flattening, a
+multi-day backtest engine, performance reporting against a benchmark, walk-forward/sensitivity
+research tooling, and a reviewed strategy-config proposal workflow. Research agents and the ChatGPT
+MCP come in Plans C–D.
 
 ## Requirements
 
@@ -62,6 +66,31 @@ uv run trading replay \
 It prints `result_hash`, order/fill counts and final equity. Running it twice on clean databases
 prints the same hash. The fixtures are **synthetic** (see `tests/fixtures/replay/2026-10-19/README.md`).
 
+## Backtest and research
+
+`trading backtest` replays several sessions through the production tick path with one persistent
+paper account (also **scratch database only**: the database name must contain `scratch`, `test`, `replay` or
+`backtest`, and it refuses a database holding any non-replay/backtest account or API principal;
+`--reset` wipes it):
+
+```bash
+uv run trading backtest --fixtures DIR --start 2026-10-19 --end 2026-10-23 --reset
+```
+
+`trading.quant.research` provides `parameter_grid`, `walk_forward` (parameters chosen on train
+windows only, scored once on the next test window, final holdout never touched), `sensitivity`
+and `record_experiment` (every hypothesis is recorded, rejected ones included); p-values use a
+one-sided t-test with Holm correction. `backtest_evaluator` plugs a real backtest into them.
+Multi-day **synthetic** fixtures: `scripts/make_synthetic_fixtures.py --days N`.
+
+## Strategy parameters
+
+Parameters live in the `strategies` table and change only through
+`POST /v1/strategies/{id}/propose-config` (stored `PENDING_REVIEW`), a review by a *different*
+operator (`POST /v1/config-proposals/{id}/approve|reject`), and application at the **next session
+start** (version bump, audited). Read endpoints: `/v1/strategies`, `/v1/signals`,
+`/v1/performance`, `/v1/config-proposals`.
+
 ## Paper run
 
 ```bash
@@ -83,6 +112,7 @@ trading additionally needs a market data provider adapter.
 | `uv run trading openapi > docs/api-contracts/openapi.json` | regenerate the API contract (a test checks it is current) |
 | `uv run trading admin create-api-key --name N --role viewer\|operator` | create an API key (printed once, stored hashed) |
 | `uv run trading admin clear-drawdown-halt --reason "..."` | explicit, audited clearing of a drawdown halt |
+| `uv run trading backtest --fixtures DIR --start D --end D` | multi-day backtest (scratch DB) |
 | `uv run trading ingest-csv --path DIR --start ISO --end ISO` | load CSV bars/quotes into the database |
 
 ## Known limitations
@@ -90,4 +120,7 @@ trading additionally needs a market data provider adapter.
 - No market-data provider yet: live-hours paper trading is not possible until one is chosen.
 - Corporate actions are ingested and the ledger can apply them, but the paper venue does not model
   them, so they are not applied automatically (it would break reconciliation).
-- The scripted intent source is a placeholder for the strategies and allocator (Plan B).
+- Strategies run in replay/backtest only until a market-data provider is wired; the scripted intent
+  source remains for tests. Synthetic backtests prove plumbing, not profitability.
+- TQQQ (leveraged) is in the universe at the owner's request, in its own sector bucket; it is
+  outside the spec's "no leverage" intent and is capped by the same risk limits.

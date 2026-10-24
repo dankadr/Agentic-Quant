@@ -15,11 +15,13 @@ from trading.data.calendar import MarketCalendar
 from trading.data.instruments import upsert_universe
 from trading.data.provider import MarketDataProvider
 from trading.db.models.portfolio import Account
-from trading.execution.intents import IntentSource, NullIntentSource
+from trading.execution.intents import IntentSource
 from trading.execution.manager import ExecutionManager
 from trading.execution.tick import PaperTickProcessor
 from trading.jobs.lease import Lease
 from trading.portfolio.ledger import open_paper_account
+from trading.quant.registry import seed_strategies
+from trading.quant.source import StrategyIntentSource
 from trading.risk.engine import DeterministicRiskEngine
 
 
@@ -48,6 +50,7 @@ def build_runtime(
     """Get-or-create the paper account and venue, and wire the processor around them."""
     with session_factory.begin() as session:
         instruments = upsert_universe(session, config.universe)
+        seed_strategies(session, config, now=clock.now())
         account_id = session.scalar(select(Account.id).where(Account.name == account_name))
         if account_id is None:
             account_id = open_paper_account(
@@ -65,6 +68,14 @@ def build_runtime(
         faults=faults or FaultPlan(),
     )
     broker.open_account(config.system.starting_cash_usd)
+    intent_source = intents or StrategyIntentSource(
+        session_factory,
+        account_id=account_id,
+        calendar=calendar,
+        config=config,
+        instruments=instruments,
+        provider_name=provider_name,
+    )
     manager = ExecutionManager(
         session_factory, broker, clock=clock, lease=lease, calendar=calendar, config=config
     )
@@ -82,7 +93,7 @@ def build_runtime(
         engine=engine,
         provider=provider,
         provider_name=provider_name,
-        intents=intents or NullIntentSource(),
+        intents=intent_source,
         instruments=instruments,
         calendar=calendar,
         config=config,

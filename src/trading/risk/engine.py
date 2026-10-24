@@ -128,7 +128,8 @@ class DeterministicRiskEngine:
                 deny(RejectionCode.INVALID_QUOTE, "quote_flag")
 
         # 10-11: strategy and duplicates
-        if proposal.strategy_id not in account.enabled_strategies:
+        # Exits stay allowed for a disabled strategy: its shares must be flattenable.
+        if is_entry and any(s not in account.enabled_strategies for s in proposal.strategies):
             deny(RejectionCode.STRATEGY_DISABLED)
         if proposal.dedupe_key in account.consumed_dedupe_keys:
             deny(RejectionCode.DUPLICATE_INTENT)

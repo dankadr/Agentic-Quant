@@ -17,6 +17,7 @@ from trading.db.models.trading import FillRow, Order, OrderEvent
 from trading.execution.state_machine import OrderStatus, assert_transition
 from trading.jobs.outbox import emit_event
 from trading.monitoring.audit import record_audit
+from trading.portfolio.attribution import record_attribution
 
 
 class LedgerInvariantError(TradingError):
@@ -169,6 +170,10 @@ def apply_fill(
         position.qty -= fill.qty
         position.realized_pnl = quantize_cash(position.realized_pnl + realized)
         position.updated_at = now
+
+    record_attribution(
+        session, order=order, fill_id=row.id, fill=fill, realized=quantize_cash(realized)
+    )
 
     order.avg_fill_price = quantize_price(
         ((order.avg_fill_price or Decimal(0)) * order.filled_qty + fill.price * fill.qty)

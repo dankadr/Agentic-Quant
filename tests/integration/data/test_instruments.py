@@ -14,9 +14,21 @@ CFG = load_config(Path("configs"))
 def test_upsert_universe_idempotent(db: Session) -> None:
     first = upsert_universe(db, CFG.universe)
     second = upsert_universe(db, CFG.universe)
-    assert set(first) == {"SPY", "QQQ", "IWM", "AAPL", "MSFT"}
+    assert set(first) == {
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DIA",
+        "TQQQ",
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "GOOGL",
+        "META",
+        "AMZN",
+    }
     assert {s: i.id for s, i in first.items()} == {s: i.id for s, i in second.items()}
-    assert db.execute(text("select count(*) from instruments")).scalar_one() == 5
+    assert db.execute(text("select count(*) from instruments")).scalar_one() == 11
 
 
 def test_instrument_fields(db: Session) -> None:
@@ -44,7 +56,7 @@ def test_load_instruments_only_active(db: Session) -> None:
     upsert_universe(db, CFG.universe)
     db.execute(text("update instruments set active = false where symbol = 'IWM'"))
     assert "IWM" not in load_instruments(db)
-    assert len(load_instruments(db)) == 4
+    assert len(load_instruments(db)) == 10
 
 
 def test_qty_increment_whole_vs_fractional(db: Session) -> None:

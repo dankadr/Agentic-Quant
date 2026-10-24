@@ -4,7 +4,7 @@ import socket
 from collections.abc import Mapping
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote
 
 import yaml
@@ -83,6 +83,7 @@ class StrategyConfig(_Frozen):
     enabled: bool = True
     allocation_pct: Dec
     shadow_only: bool = False
+    params: Mapping[str, Any] = {}
 
 
 class _SystemFile(_Frozen):
