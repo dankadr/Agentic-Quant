@@ -201,7 +201,11 @@ class SleeveAllocator:
                 order_type=OrderType.LIMIT,
                 limit_price=limit,
                 strategy_id=order[0],
-                signal_id=uuid5(NAMESPACE_URL, "|".join(sorted(str(i) for i in contributing))),
+                signal_id=(
+                    next(iter(contributing))
+                    if len(contributing) == 1
+                    else uuid5(NAMESPACE_URL, "|".join(sorted(str(i) for i in contributing)))
+                ),
                 signal_expires_at=min(s.expires_at for s in contributing.values()),
                 strategy_ids=tuple(order),
                 attribution={k: attribution[k] for k in order},
