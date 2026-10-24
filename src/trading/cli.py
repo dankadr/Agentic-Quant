@@ -308,6 +308,34 @@ def ingest_csv(
     _ingest(CsvReplayProvider(path), start, end)
 
 
+@app.command("alpaca-export")
+def alpaca_export(
+    start: str = typer.Option(..., help="Inclusive start, ISO-8601 with timezone."),
+    end: str = typer.Option(..., help="Exclusive end, ISO-8601 with timezone."),
+    out: Path = typer.Option(..., help="Directory to write bars.csv / quotes.csv."),
+) -> None:
+    """Download Alpaca (IEX) bars and quotes for the universe as replay/backtest CSV fixtures."""
+    from trading.data.alpaca_provider import ProviderError  # noqa: PLC0415
+    from trading.data.export import export_csv  # noqa: PLC0415
+
+    settings = Settings()
+    provider = _alpaca_provider(settings)
+    if provider is None:
+        typer.echo("no Alpaca key files (secrets/alpaca_key_id, secrets/alpaca_secret)", err=True)
+        raise typer.Exit(1)
+    symbols = [u.symbol for u in load_config(settings.config_dir).universe]
+    try:
+        counts = export_csv(
+            provider, symbols, _parse_utc(start, "--start"), _parse_utc(end, "--end"), out
+        )
+    except ProviderError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    finally:
+        provider.close()
+    typer.echo(json.dumps(counts))
+
+
 @app.command("ingest-alpaca")
 def ingest_alpaca(
     start: str = typer.Option(..., help="Inclusive start, ISO-8601 with timezone."),
