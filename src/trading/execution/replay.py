@@ -21,7 +21,7 @@ from trading.core.hashing import content_hash
 from trading.data.calendar import XnysCalendar
 from trading.data.replay_provider import CsvReplayProvider
 from trading.db.models.portfolio import Account, EquitySnapshot
-from trading.execution.intents import NullIntentSource, ScriptedIntentSource
+from trading.execution.intents import ScriptedIntentSource
 from trading.jobs.lease import EXECUTOR_LEASE, acquire_lease, release_lease
 from trading.services.bootstrap import build_runtime
 
@@ -82,7 +82,7 @@ def replay_session(
             provider=provider,
             provider_name=provider.name,
             account_name=account_name,
-            intents=ScriptedIntentSource.from_yaml(script) if script else NullIntentSource(),
+            intents=ScriptedIntentSource.from_yaml(script) if script else None,  # None = strategies
         )
         processor = runtime.processor
         first_minute = info.open_at + _ONE_MINUTE

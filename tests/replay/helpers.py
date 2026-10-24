@@ -49,3 +49,8 @@ def decision_reasons(sf: sessionmaker[Session]) -> list[list[tuple[str, str]]]:
 def scalar(sf: sessionmaker[Session], sql: str):  # type: ignore[no-untyped-def]
     with sf() as s:
         return s.execute(text(sql)).scalar_one()
+
+
+def rows_of(sf: sessionmaker[Session], sql: str):  # type: ignore[no-untyped-def]
+    with sf() as s:
+        return [tuple(r) for r in s.execute(text(sql)).all()]
