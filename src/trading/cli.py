@@ -37,6 +37,7 @@ API_PORT = 8000
 METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102}
 
 if TYPE_CHECKING:
+    from trading.agents.llm import LlmClient
     from trading.data.alpaca_provider import AlpacaDataProvider
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -109,6 +110,18 @@ def _calendar() -> XnysCalendar:
     return XnysCalendar(today - timedelta(days=30), today + timedelta(days=400))
 
 
+def _llm_client(settings: Settings, config: AppConfig) -> "LlmClient | None":
+    """The research-agent model client, if any agent is enabled and a key file is present."""
+    from trading.agents.llm import LlmClient  # noqa: PLC0415
+
+    if not (config.agents.macro.enabled or config.agents.evaluator.enabled):
+        return None
+    key_file = settings.llm_api_key_file or Path("secrets/llm_api_key")
+    if not (key_file.exists() and key_file.read_text().strip()):
+        return None
+    return LlmClient.from_file(config.agents.llm, key_file)
+
+
 @app.command()
 def worker() -> None:
     """Run the trading worker (the only process allowed to reach a broker adapter)."""
@@ -122,6 +135,7 @@ def worker() -> None:
     clock = SystemClock()
     calendar = _calendar()
     provider = _alpaca_provider(settings)
+    llm = _llm_client(settings, config)
 
     def ctx_factory(lease: Lease) -> WorkerContext:
         # Without Alpaca data keys ticks are no-ops (fail closed); with them the worker trades
@@ -142,6 +156,7 @@ def worker() -> None:
             clock=clock,
             lease=lease,
             runtime=runtime,
+            llm=llm,
         )
 
     code = run_worker(
@@ -167,6 +182,7 @@ def scheduler() -> None:
         holder=new_holder_id(settings.worker_id),
         calendar=_calendar(),
         stop=_stop_on_signals(),
+        agents=_config.agents,
     )
     raise typer.Exit(code)
 

@@ -7,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.core.clock import Clock
+from trading.core.config import AgentsConfig
 from trading.data.calendar import MarketCalendar
 from trading.jobs.lease import SCHEDULER_LEASE, acquire_lease, release_lease, renew_lease
 from trading.jobs.queue import enqueue
@@ -19,10 +20,13 @@ _log = get_logger(__name__)
 
 
 def tick(
-    session_factory: sessionmaker[Session], clock: Clock, calendar: MarketCalendar | None
+    session_factory: sessionmaker[Session],
+    clock: Clock,
+    calendar: MarketCalendar | None,
+    agents: AgentsConfig | None = None,
 ) -> None:
     """Plan and enqueue the jobs due now. Dedupe keys make this idempotent."""
-    for spec in plan_jobs(clock.now(), calendar):
+    for spec in plan_jobs(clock.now(), calendar, agents=agents):
         with session_factory.begin() as session:
             enqueue(
                 session,
@@ -40,6 +44,7 @@ def run_scheduler(
     holder: str,
     calendar: MarketCalendar | None,
     stop: threading.Event,
+    agents: AgentsConfig | None = None,
     lease_ttl: timedelta = timedelta(seconds=30),
     interval: float = 10.0,
     acquire_retry: float = 5.0,
@@ -71,7 +76,7 @@ def run_scheduler(
                     LEASE_HELD.labels(SCHEDULER_LEASE).set(0)
                     return EXIT_LEASE_LOST
                 last_renew = now
-            tick(session_factory, clock, calendar)
+            tick(session_factory, clock, calendar, agents)
             stop.wait(interval)
     except SQLAlchemyError:
         _log.critical("scheduler_database_failure", exc_info=True)

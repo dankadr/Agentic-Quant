@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from trading.core.config import AgentsConfig
 from trading.core.time import ensure_utc, isoformat_z
 from trading.data.calendar import NEW_YORK, CalendarUnavailable, MarketCalendar, SessionInfo
 from trading.monitoring.logging import get_logger
@@ -20,6 +21,9 @@ SESSION_START_LEAD = timedelta(minutes=30)
 TICK_DELAY = timedelta(seconds=5)
 SESSION_END_DELAY = timedelta(minutes=5)
 PLANNING_WINDOW = timedelta(minutes=2)
+AGENT_DELAY = timedelta(seconds=20)  # after the tick of the same minute has ingested its bars
+MACRO_LAST_BEFORE_CLOSE = timedelta(minutes=30)
+EVALUATOR_DELAY = timedelta(minutes=10)
 _ONE_MINUTE = timedelta(minutes=1)
 
 
@@ -31,7 +35,7 @@ class JobSpec:
     payload: Mapping[str, Any]
 
 
-def plan_session_jobs(session: SessionInfo) -> list[JobSpec]:
+def plan_session_jobs(session: SessionInfo, *, agents: AgentsConfig | None = None) -> list[JobSpec]:
     """Every job of one trading session, regardless of the current time."""
     day = session.session_date.isoformat()
     jobs = [
@@ -49,6 +53,28 @@ def plan_session_jobs(session: SessionInfo) -> list[JobSpec]:
             JobSpec("paper_tick", f"paper_tick:{stamp}", minute + TICK_DELAY, {"minute": stamp})
         )
         minute += _ONE_MINUTE
+    if agents is not None and agents.macro.enabled:
+        interval = timedelta(minutes=agents.macro.run_every_minutes)
+        at = session.open_at + timedelta(minutes=agents.macro.first_run_after_open_minutes)
+        while at <= session.close_at - MACRO_LAST_BEFORE_CLOSE:
+            jobs.append(
+                JobSpec(
+                    "agent_macro",
+                    f"agent_macro:{isoformat_z(at)}",
+                    at + AGENT_DELAY,
+                    {"at": isoformat_z(at)},
+                )
+            )
+            at += interval
+    if agents is not None and agents.evaluator.enabled:
+        jobs.append(
+            JobSpec(
+                "agent_evaluator",
+                f"agent_evaluator:{day}",
+                session.close_at + EVALUATOR_DELAY,
+                {"session_date": day},
+            )
+        )
     jobs.append(
         JobSpec(
             "session_end",
@@ -60,7 +86,9 @@ def plan_session_jobs(session: SessionInfo) -> list[JobSpec]:
     return jobs
 
 
-def plan_jobs(now: datetime, calendar: MarketCalendar | None) -> list[JobSpec]:
+def plan_jobs(
+    now: datetime, calendar: MarketCalendar | None, *, agents: AgentsConfig | None = None
+) -> list[JobSpec]:
     """Jobs due at ``now``. Dedupe keys make repeated planning harmless."""
     now = ensure_utc(now)
     minute = now.replace(second=0, microsecond=0)
@@ -83,7 +111,7 @@ def plan_jobs(now: datetime, calendar: MarketCalendar | None) -> list[JobSpec]:
         return jobs
     jobs.extend(
         job
-        for job in plan_session_jobs(session)
+        for job in plan_session_jobs(session, agents=agents)
         if now - PLANNING_WINDOW <= job.scheduled_at <= now
     )
     return jobs

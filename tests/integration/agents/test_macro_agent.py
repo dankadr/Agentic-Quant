@@ -170,3 +170,97 @@ def test_the_newest_valid_run_wins(
     view = latest_macro_view(db, NOW + timedelta(minutes=21))
     assert view is not None
     assert view.risk_multiplier == D("0.3")
+
+
+def test_evaluator_writes_a_narrative_and_has_no_effect_on_trading(
+    seeded: None, db: Session, session_factory: sessionmaker[Session], calendar: MarketCalendar
+) -> None:
+    from trading.agents.evaluator import EvaluatorOutput, run_evaluator_agent
+    from trading.portfolio.ledger import open_paper_account
+
+    open_paper_account(db, name="paper-primary", starting_cash=D("1000"), now=T0)
+    db.commit()
+    llm = FakeLlm(
+        EvaluatorOutput(
+            summary="Quiet day, no trades.", findings=["no signals"], suggestions=["none"]
+        )
+    )  # type: ignore[arg-type]
+    status = run_evaluator_agent(
+        session_factory, llm, config=CFG, session_date=OPEN.date(), provider_name="replay", now=NOW
+    )  # type: ignore[arg-type]
+    assert status == "COMPLETED"
+    row = db.execute(
+        text("select agent_name, result_json from agent_runs where agent_name = 'evaluator'")
+    ).one()
+    assert row.result_json["summary"] == "Quiet day, no trades."
+    assert row.result_json["input_hash"]
+    assert json.loads(llm.last_user)["date"] == "2026-10-19"
+    assert latest_macro_view(db, NOW) is None  # the evaluator never produces a trading view
+    assert db.execute(text("select count(*) from strategy_config_proposals")).scalar_one() == 0
+
+
+def _enabled_cfg(**over):  # type: ignore[no-untyped-def]
+    from trading.core.config import AgentsConfig
+
+    agents = AgentsConfig.model_validate(
+        {"macro": {"enabled": True}, "evaluator": {"enabled": True}, **over}
+    )
+    return CFG.model_copy(update={"agents": agents})
+
+
+def test_job_wrappers_respect_enablement_missing_llm_and_staleness(
+    seeded: None, db: Session, session_factory: sessionmaker[Session], calendar: MarketCalendar
+) -> None:
+    from trading.agents.jobs import macro_job
+    from trading.core.clock import ManualClock
+
+    clock = ManualClock(NOW)
+    payload = {"at": (NOW - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+    def count() -> int:
+        return db.execute(text("select count(*) from agent_runs")).scalar_one()
+
+    # disabled in config -> nothing happens, even with a model available
+    macro_job(
+        session_factory,
+        FakeLlm(output()),
+        config=CFG,
+        calendar=calendar,
+        provider_name="replay",
+        clock=clock,
+        payload=payload,
+    )  # type: ignore[arg-type]
+    assert count() == 0
+    # enabled but no model configured -> nothing happens (and no crash)
+    macro_job(
+        session_factory,
+        None,
+        config=_enabled_cfg(),
+        calendar=calendar,
+        provider_name="replay",
+        clock=clock,
+        payload=payload,
+    )
+    assert count() == 0
+    # a job that fires far too late is skipped, like a stale tick
+    late = {"at": (NOW - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    macro_job(
+        session_factory,
+        FakeLlm(output()),
+        config=_enabled_cfg(),
+        calendar=calendar,
+        provider_name="replay",
+        clock=clock,
+        payload=late,
+    )  # type: ignore[arg-type]
+    assert count() == 0
+    macro_job(
+        session_factory,
+        FakeLlm(output()),
+        config=_enabled_cfg(),
+        calendar=calendar,
+        provider_name="replay",
+        clock=clock,
+        payload=payload,
+    )  # type: ignore[arg-type]
+    assert count() == 1

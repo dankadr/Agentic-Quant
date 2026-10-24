@@ -5,6 +5,8 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from trading.agents.jobs import evaluator_job, macro_job
+from trading.agents.macro import JsonLlm
 from trading.core.clock import Clock
 from trading.core.config import AppConfig, Settings
 from trading.core.time import ensure_utc, isoformat_z
@@ -28,6 +30,7 @@ class WorkerContext:
     clock: Clock
     lease: Lease
     runtime: TradingRuntime | None = None
+    llm: JsonLlm | None = None
 
 
 def reconcile_on_start(ctx: WorkerContext) -> None:
@@ -87,8 +90,31 @@ def build_handlers(ctx: WorkerContext) -> dict[str, Handler]:
         with ctx.session_factory.begin() as session:
             dispatch_pending(session, {}, now=ctx.clock.now())
 
+    def agent_macro(job: Job) -> None:
+        macro_job(
+            ctx.session_factory,
+            ctx.llm,
+            config=ctx.config,
+            calendar=runtime.calendar,
+            provider_name=processor.provider_name,
+            clock=ctx.clock,
+            payload=job.payload,
+        )
+
+    def agent_evaluator(job: Job) -> None:
+        evaluator_job(
+            ctx.session_factory,
+            ctx.llm,
+            config=ctx.config,
+            provider_name=processor.provider_name,
+            clock=ctx.clock,
+            payload=job.payload,
+        )
+
     handlers.update(
         {
+            "agent_macro": agent_macro,
+            "agent_evaluator": agent_evaluator,
             "session_start": session_start,
             "paper_tick": paper_tick,
             "session_end": session_end,
