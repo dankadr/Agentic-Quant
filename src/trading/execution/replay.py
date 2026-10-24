@@ -18,10 +18,11 @@ from trading.core.clock import ManualClock
 from trading.core.config import AppConfig
 from trading.core.errors import TradingError
 from trading.core.hashing import content_hash
-from trading.data.calendar import XnysCalendar
+from trading.data.calendar import SessionInfo, XnysCalendar
 from trading.data.replay_provider import CsvReplayProvider
 from trading.db.models.portfolio import Account, EquitySnapshot
 from trading.execution.intents import ScriptedIntentSource
+from trading.execution.tick import PaperTickProcessor
 from trading.jobs.lease import EXECUTOR_LEASE, acquire_lease, release_lease
 from trading.services.bootstrap import build_runtime
 
@@ -70,7 +71,6 @@ def replay_session(
     if lease is None:
         raise ReplayError("the executor lease is held by another process; replay on a scratch DB")
 
-    interrupted = False
     try:
         provider = CsvReplayProvider(fixtures_dir)
         runtime = build_runtime(
@@ -84,7 +84,6 @@ def replay_session(
             account_name=account_name,
             intents=ScriptedIntentSource.from_yaml(script) if script else None,  # None = strategies
         )
-        processor = runtime.processor
         first_minute = info.open_at + _ONE_MINUTE
         if resume:
             with session_factory() as session:
@@ -99,30 +98,15 @@ def replay_session(
             first_minute = last.replace(second=0, microsecond=0) + _ONE_MINUTE
             clock.set(last)
 
-        processor.start_session(session_date)
-        with session_factory.begin() as session:
-            version = get_system_state(session).version
-            set_trading_state(
-                session,
-                target=TradingState.PAPER_RUNNING,
-                expected_version=version,
-                actor="replay",
-                reason="replay",
-                request_id=None,
-                now=clock.now(),
-            )
-
-        minute = first_minute
-        while minute <= info.close_at:
-            if stop_after is not None and minute > stop_after:
-                interrupted = True
-                break
-            clock.set(minute + timedelta(seconds=5))
-            processor.run_tick(minute)
-            minute += _ONE_MINUTE
+        interrupted = drive_session(
+            runtime.processor,
+            session_factory,
+            clock,
+            info,
+            first_minute=first_minute,
+            stop_after=stop_after,
+        )
         if not interrupted:
-            clock.set(info.close_at + timedelta(minutes=5))
-            processor.end_session(session_date)
             with session_factory.begin() as session:
                 release_lease(session, lease)
     except BaseException:
@@ -130,6 +114,51 @@ def replay_session(
             release_lease(session, lease)  # a crashed replay must not lock out the real worker
         raise
     return _summarize(session_factory)
+
+
+def drive_session(
+    processor: PaperTickProcessor,
+    session_factory: sessionmaker[Session],
+    clock: ManualClock,
+    info: SessionInfo,
+    *,
+    first_minute: datetime | None = None,
+    stop_after: datetime | None = None,
+    max_minutes: int | None = None,
+) -> bool:
+    """Run one session through the production tick path. Returns True if it stopped early.
+
+    ``stop_after`` simulates a crash (no end-of-session). ``max_minutes`` only shortens a session
+    for fast research runs; the session is still closed normally.
+    """
+    session_date = info.session_date
+    processor.start_session(session_date)
+    with session_factory.begin() as session:
+        state = get_system_state(session)
+        if state.trading_state != TradingState.PAPER_RUNNING:
+            set_trading_state(
+                session,
+                target=TradingState.PAPER_RUNNING,
+                expected_version=state.version,
+                actor="replay",
+                reason="replay",
+                request_id=None,
+                now=clock.now(),
+            )
+    minute = first_minute or info.open_at + _ONE_MINUTE
+    ticks = 0
+    while minute <= info.close_at:
+        if stop_after is not None and minute > stop_after:
+            return True
+        if max_minutes is not None and ticks >= max_minutes:
+            break
+        clock.set(minute + timedelta(seconds=5))
+        processor.run_tick(minute)
+        minute += _ONE_MINUTE
+        ticks += 1
+    clock.set(info.close_at + timedelta(minutes=5))
+    processor.end_session(session_date)
+    return False
 
 
 def _summarize(session_factory: sessionmaker[Session]) -> ReplayResult:
