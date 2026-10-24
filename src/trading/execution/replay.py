@@ -113,7 +113,7 @@ def replay_session(
         with session_factory.begin() as session:
             release_lease(session, lease)  # a crashed replay must not lock out the real worker
         raise
-    return _summarize(session_factory)
+    return summarize_run(session_factory)
 
 
 def drive_session(
@@ -161,7 +161,7 @@ def drive_session(
     return False
 
 
-def _summarize(session_factory: sessionmaker[Session]) -> ReplayResult:
+def summarize_run(session_factory: sessionmaker[Session]) -> ReplayResult:
     """Hash only deterministic facts: never UUIDs, row ids or wall-clock times."""
     with session_factory() as session:
         orders = [
