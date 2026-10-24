@@ -67,6 +67,7 @@ def test_handlers_registered(
     ctx = make_ctx(db, session_factory, clock, calendar)
     assert set(build_handlers(ctx)) == {
         "heartbeat", "session_start", "paper_tick", "session_end", "reconcile", "outbox_dispatch",
+        "agent_macro", "agent_evaluator",
     }  # fmt: skip
     bare = WorkerContext(
         settings=ctx.settings,
