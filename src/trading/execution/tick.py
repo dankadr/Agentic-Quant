@@ -25,7 +25,7 @@ from trading.data.instruments import InstrumentInfo
 from trading.data.provider import MarketDataProvider
 from trading.data.snapshot import MarketSnapshot, build_snapshot
 from trading.db.models.market import Instrument, MarketBar
-from trading.db.models.portfolio import Position, TradingSession
+from trading.db.models.portfolio import Account, Position, TradingSession
 from trading.db.models.trading import Order, RiskDecisionRow
 from trading.execution.intents import IntentSource, ProposalRequest
 from trading.execution.manager import ExecutionManager
@@ -39,7 +39,7 @@ from trading.portfolio.valuation import (
     record_equity_snapshot,
     value_portfolio,
 )
-from trading.quant.proposals import apply_approved
+from trading.quant.proposals import SCRATCH_ACCOUNT_PREFIXES, apply_approved
 from trading.risk.halts import evaluate_halts, start_session
 from trading.risk.models import ProposedOrder, RiskEngine
 from trading.risk.service import build_account_view, evaluate_and_record
@@ -246,7 +246,11 @@ class PaperTickProcessor:
             if opened:
                 record_equity_snapshot(session, state, kind="SESSION_START")
                 # The only place approved parameter changes go live: a new session, never a restart.
-                apply_approved(session, now=now)
+                if not self._account_name(session).startswith(SCRATCH_ACCOUNT_PREFIXES):
+                    apply_approved(session, now=now)
+
+    def _account_name(self, session: Session) -> str:
+        return session.scalar(select(Account.name).where(Account.id == self._account_id)) or ""
 
     def _ensure_session(self, session_date: date) -> None:
         with self._sf() as session:

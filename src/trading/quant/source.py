@@ -23,6 +23,7 @@ from trading.data.instruments import InstrumentInfo
 from trading.data.snapshot import MarketSnapshot
 from trading.db.models.research import AllocationDecision, Signal, Strategy
 from trading.execution.intents import ProposalRequest
+from trading.monitoring.logging import get_logger
 from trading.portfolio.valuation import PortfolioState
 from trading.quant.allocator import (
     AllocationContext,
@@ -37,6 +38,8 @@ from trading.quant.models import SignalProposal, SignalStrategy, StrategyInput
 from trading.quant.orb import OrbStrategy
 from trading.quant.vwap import VwapStrategy
 from trading.risk.service import build_account_view
+
+_log = get_logger(__name__)
 
 StrategyFactory = Callable[..., SignalStrategy]
 DEFAULT_FACTORIES: Mapping[str, StrategyFactory] = {
@@ -123,7 +126,12 @@ class StrategyIntentSource:
                 entered_today=load_entered_today(session, self._account_id, info.open_at),
                 positions={p.symbol: p.qty for p in portfolio.positions},
             )
-            signals: list[SignalProposal] = [s for st in strategies for s in st.evaluate(data)]
+            signals: list[SignalProposal] = []
+            for strategy in strategies:
+                try:
+                    signals.extend(strategy.evaluate(data))
+                except Exception:
+                    _log.exception("strategy_failed", strategy=strategy.strategy_id)
             if not signals:
                 return ()
             exposure = build_account_view(

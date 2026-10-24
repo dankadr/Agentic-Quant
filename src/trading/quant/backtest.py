@@ -26,10 +26,10 @@ from trading.db.seed import seed_defaults
 from trading.execution.replay import drive_session, summarize_run
 from trading.jobs.lease import EXECUTOR_LEASE, acquire_lease, release_lease
 from trading.quant.performance import PerformanceReport, load_report
+from trading.quant.proposals import SCRATCH_ACCOUNT_PREFIXES
 from trading.quant.research import Evaluation, Evaluator
 from trading.services.bootstrap import build_runtime
 
-SCRATCH_ACCOUNT_PREFIXES = ("replay-", "backtest")
 _ONE_MINUTE = timedelta(minutes=1)
 
 

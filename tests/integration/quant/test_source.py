@@ -259,3 +259,39 @@ def test_entries_are_not_proposed_while_halted(world: World) -> None:
     world.db.execute(text("update system_state set risk_state = 'HALTED_DAILY_LOSS'"))
     assert world.propose() == ()
     assert "ENTRIES_BLOCKED" in world.count("select rationale_json::text from allocation_decisions")
+
+
+class _Boom:
+    def __init__(self, *, strategy_id: str, version: str, params: object) -> None:
+        self.strategy_id, self.version = strategy_id, version
+
+    def evaluate(self, data: object) -> list[object]:
+        raise RuntimeError("strategy blew up")
+
+
+def test_one_failing_strategy_does_not_stop_the_others_or_the_flatten(world: World) -> None:
+    """Review I6: a bad strategy must never abort the tick, least of all the end-of-day flatten."""
+    from trading.quant.source import DEFAULT_FACTORIES
+
+    world.source = StrategyIntentSource(
+        world.source._sf,
+        account_id=world.account_id,
+        calendar=world.calendar,
+        config=CFG,
+        instruments=world.instruments,
+        provider_name="replay",
+        factories={**DEFAULT_FACTORIES, "orb_v1": _Boom},  # type: ignore[dict-item]
+    )
+    world.orb_day()
+    buy = new_order(
+        world.db, world.account_id, "b1", qty="0.8", limit="101", strategy_ids=["orb_v1"]
+    )
+    apply_fill(world.db, account_id=world.account_id, fill=broker_fill(buy, "e1", qty="0.8", price="100.30"),
+               settles_on=NEXT_DAY, now=t(16))  # fmt: skip
+    info = world.calendar.session_on(OPEN.date())
+    assert info is not None
+    late = info.close_at - timedelta(minutes=8)
+    world.bar("SPY", 380, "100.40", "100.50", "100.30", "100.45", "800")
+    world.quote("SPY", late - timedelta(seconds=1), "100.44", "100.46")
+    (req,) = world.propose(late)
+    assert (req.side, req.symbol, req.quantity) == (Side.SELL, "SPY", D("0.8"))

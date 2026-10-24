@@ -27,6 +27,8 @@ PENDING, APPROVED, REJECTED, APPLIED, SUPERSEDED = (
     "SUPERSEDED",
 )
 # The end-of-day flatten is a risk control: its timing is not tunable through proposals.
+# Replay/backtest accounts share the global strategies table, so they never apply live proposals.
+SCRATCH_ACCOUNT_PREFIXES = ("replay-", "backtest")
 NOT_TUNABLE = frozenset({"eod_flatten"})
 
 
@@ -79,6 +81,8 @@ def _validate(strategy: Strategy, merged: Mapping[str, Any], universe: Collectio
         factory(strategy_id=strategy.id, version=strategy.version, params=merged)
     except ValidationError as exc:
         raise ProposalInvalid(f"invalid parameters: {exc.errors()[0]['msg']}") from exc
+    except ValueError as exc:  # cross-field checks inside a strategy constructor
+        raise ProposalInvalid(f"invalid parameters: {exc}") from exc
 
 
 def propose_config(

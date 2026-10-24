@@ -150,3 +150,8 @@ def test_every_step_is_audited(db: Session) -> None:
     assert {"strategy_config.propose", "strategy_config.approve", "strategy_config.apply"} <= set(
         actions
     )
+
+
+def test_cross_field_strategy_constraints_are_invalid_not_a_server_error(db: Session) -> None:
+    with pytest.raises(ProposalInvalid):
+        _propose(db, {"z_stop": "1.0"}, strategy_id="vwap_v1")  # z_stop must exceed z_entry
