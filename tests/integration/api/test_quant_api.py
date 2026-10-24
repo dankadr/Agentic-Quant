@@ -243,3 +243,25 @@ def test_a_viewer_cannot_review(client: TestClient, operator_key: str, viewer_ke
         json={},
     )
     assert r.status_code == 403
+
+
+def test_performance_ignores_scratch_accounts(
+    client: TestClient, db: Session, viewer_key: str
+) -> None:
+    """Review I7: a replay/backtest account sharing the DB must not be reported as the portfolio."""
+    scratch = make_account(db, name="replay-2026-10-19")
+    for kind, equity, ts in (
+        ("SESSION_START", 1000, T0),
+        ("SESSION_END", 2000, T0 + timedelta(hours=6)),
+    ):
+        db.execute(
+            text(
+                "insert into equity_snapshots (id, account_id, ts, kind, cash, settled_cash, equity, exposure,"
+                " realized_pnl, unrealized_pnl, positions_json) values (gen_random_uuid(), :a, :t, :k, :e, :e,"
+                " :e, 0, 0, 0, '{}'::jsonb)"
+            ),
+            {"a": scratch.id, "t": ts, "k": kind, "e": D(equity)},
+        )
+    db.commit()
+    r = client.get("/v1/performance", headers=bearer(viewer_key))
+    assert r.status_code == 503  # no primary account has any snapshot yet

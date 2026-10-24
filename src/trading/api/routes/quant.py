@@ -24,7 +24,7 @@ from trading.core.clock import Clock
 from trading.core.config import AppConfig
 from trading.core.time import UtcDatetime
 from trading.db.models.market import Instrument
-from trading.db.models.portfolio import EquitySnapshot
+from trading.db.models.portfolio import Account, EquitySnapshot
 from trading.db.models.research import Signal, Strategy, StrategyConfigProposal
 from trading.quant.performance import PerformanceReport, load_report
 from trading.quant.proposals import (
@@ -244,10 +244,14 @@ def get_performance(
         raise ApiProblem(422, "INVALID_RANGE", "end must not be before start")
     if strategy_id is not None and session.get(Strategy, strategy_id) is None:
         raise ApiProblem(404, "NOT_FOUND", "Unknown strategy", detail=strategy_id)
-    first = session.scalars(select(EquitySnapshot).order_by(EquitySnapshot.ts).limit(1)).first()
-    last = session.scalars(
-        select(EquitySnapshot).order_by(EquitySnapshot.ts.desc()).limit(1)
-    ).first()
+    primary = (
+        select(EquitySnapshot)
+        .join(Account, Account.id == EquitySnapshot.account_id)
+        .where(Account.name.not_like("replay-%"), Account.name.not_like("backtest%"))
+        .limit(1)
+    )
+    first = session.scalars(primary.order_by(EquitySnapshot.ts)).first()
+    last = session.scalars(primary.order_by(EquitySnapshot.ts.desc())).first()
     if first is None or last is None:
         raise ApiProblem(
             503, "STATE_UNAVAILABLE", "Performance unavailable", detail="no equity snapshot yet"
