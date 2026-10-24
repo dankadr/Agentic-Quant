@@ -108,6 +108,22 @@ IEX is a single venue, so bar volume is a small fraction of consolidated volume 
 symbols such as DIA can fail the ORB `min_avg_volume` filter, by design). Quotes are the last quote
 per symbol-minute, one request each. Corporate actions are not fetched.
 
+## Research agents (optional, off by default)
+
+`configs/agents.yaml` configures LLM agents that **only propose**: they have no tools and cannot
+place orders, change risk limits or switch mode. Their replies are parsed as JSON and validated
+against strict schemas; anything else is stored as `REJECTED_INVALID`. The endpoint is
+OpenAI-compatible (your Unsloth server); put its key in `secrets/llm_api_key` (empty = off).
+
+- **Macro** (`agents.macro.enabled`): from numeric index/breadth features it classifies the regime
+  and proposes a `risk_multiplier` in [0, 1] with a TTL. It can only shrink new-entry size of
+  `dependent_strategies`; with `required: true` a missing/expired view blocks their new entries
+  (exits are never blocked). Runs every 30 minutes after the opening range.
+- **Evaluator** (`agents.evaluator.enabled`): a daily narrative over `trading report`, stored in
+  `agent_runs`.
+
+Not built yet: technical, fundamental and consensus agents.
+
 ## Paper run
 
 ```bash
@@ -130,6 +146,7 @@ trading additionally needs a market data provider adapter.
 | `uv run trading admin create-api-key --name N --role viewer\|operator` | create an API key (printed once, stored hashed) |
 | `uv run trading admin clear-drawdown-halt --reason "..."` | explicit, audited clearing of a drawdown halt |
 | `uv run trading backtest --fixtures DIR --start D --end D` | multi-day backtest (scratch DB) |
+| `uv run trading report --date D` | end-of-day report: data coverage, strategies, costs, P&L |
 | `uv run trading ingest-csv --path DIR --start ISO --end ISO` | load CSV bars/quotes into the database |
 
 ## Known limitations

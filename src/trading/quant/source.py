@@ -15,6 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
+from trading.agents.macro import latest_macro_view
 from trading.control.state import RiskState, TradingState
 from trading.core.config import AppConfig
 from trading.core.hashing import canonical_json
@@ -161,6 +162,7 @@ class StrategyIntentSource:
                 sleeves={n: c.allocation_pct for n, c in self._config.strategies.items()},
                 max_symbol_pct=self._config.risk.max_symbol_exposure_pct,
                 paper_cfg=self._config.paper_broker,
+                entry_scale=self._macro_scale(session, now),
                 entries_allowed=(
                     exposure.trading_state is TradingState.PAPER_RUNNING
                     and exposure.risk_state is RiskState.NORMAL
@@ -171,6 +173,18 @@ class StrategyIntentSource:
             result = self._allocator.allocate(signals, ctx)
             self._persist(session, snapshot, signals, result.notes, result.targets, now)
         return result.requests
+
+    def _macro_scale(self, session: Session, now: datetime) -> dict[str, Decimal]:
+        """Macro risk multiplier for dependent strategies (0 = block new entries)."""
+        macro = self._config.agents.macro
+        if not macro.enabled:
+            return {}
+        view = latest_macro_view(session, now)
+        if view is not None:
+            return dict.fromkeys(macro.dependent_strategies, view.risk_multiplier)
+        if macro.required:
+            return dict.fromkeys(macro.dependent_strategies, Decimal(0))
+        return {}
 
     def _persist(
         self,

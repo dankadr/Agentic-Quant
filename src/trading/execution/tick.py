@@ -249,6 +249,10 @@ class PaperTickProcessor:
                 if not self._account_name(session).startswith(SCRATCH_ACCOUNT_PREFIXES):
                     apply_approved(session, now=now)
 
+    @property
+    def provider_name(self) -> str:
+        return self._provider_name
+
     def _account_name(self, session: Session) -> str:
         return session.scalar(select(Account.name).where(Account.id == self._account_id)) or ""
 

@@ -70,7 +70,8 @@ services:
       <<: *app-env
       TRADING_ALPACA_KEY_ID_FILE: /run/secrets/alpaca_key_id
       TRADING_ALPACA_SECRET_FILE: /run/secrets/alpaca_secret
-    secrets: [db_app_password, alpaca_key_id, alpaca_secret]
+      TRADING_LLM_API_KEY_FILE: /run/secrets/llm_api_key
+    secrets: [db_app_password, alpaca_key_id, alpaca_secret, llm_api_key]
     healthcheck:
       test: ["CMD", "trading", "healthcheck", "worker"]
       interval: 10s
@@ -113,3 +114,5 @@ secrets:
     file: ./secrets/alpaca_key_id
   alpaca_secret:
     file: ./secrets/alpaca_secret
+  llm_api_key:
+    file: ./secrets/llm_api_key

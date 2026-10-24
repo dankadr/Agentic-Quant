@@ -37,6 +37,7 @@ API_PORT = 8000
 METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102}
 
 if TYPE_CHECKING:
+    from trading.agents.llm import LlmClient
     from trading.data.alpaca_provider import AlpacaDataProvider
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -109,6 +110,18 @@ def _calendar() -> XnysCalendar:
     return XnysCalendar(today - timedelta(days=30), today + timedelta(days=400))
 
 
+def _llm_client(settings: Settings, config: AppConfig) -> "LlmClient | None":
+    """The research-agent model client, if any agent is enabled and a key file is present."""
+    from trading.agents.llm import LlmClient  # noqa: PLC0415
+
+    if not (config.agents.macro.enabled or config.agents.evaluator.enabled):
+        return None
+    key_file = settings.llm_api_key_file or Path("secrets/llm_api_key")
+    if not (key_file.exists() and key_file.read_text().strip()):
+        return None
+    return LlmClient.from_file(config.agents.llm, key_file)
+
+
 @app.command()
 def worker() -> None:
     """Run the trading worker (the only process allowed to reach a broker adapter)."""
@@ -122,6 +135,7 @@ def worker() -> None:
     clock = SystemClock()
     calendar = _calendar()
     provider = _alpaca_provider(settings)
+    llm = _llm_client(settings, config)
 
     def ctx_factory(lease: Lease) -> WorkerContext:
         # Without Alpaca data keys ticks are no-ops (fail closed); with them the worker trades
@@ -142,6 +156,7 @@ def worker() -> None:
             clock=clock,
             lease=lease,
             runtime=runtime,
+            llm=llm,
         )
 
     code = run_worker(
@@ -167,6 +182,7 @@ def scheduler() -> None:
         holder=new_holder_id(settings.worker_id),
         calendar=_calendar(),
         stop=_stop_on_signals(),
+        agents=_config.agents,
     )
     raise typer.Exit(code)
 
@@ -215,6 +231,29 @@ def _alpaca_provider(settings: Settings) -> "AlpacaDataProvider | None":
     if not (key.read_text().strip() and secret.read_text().strip()):
         return None  # empty placeholder files mean "not configured"
     return AlpacaDataProvider.from_files(key, secret)
+
+
+@app.command()
+def report(
+    session_date: str = typer.Option(..., "--date", help="Session date, YYYY-MM-DD."),
+    provider: str = typer.Option("alpaca-iex", help="Market-data provider name to report on."),
+) -> None:
+    """Print the end-of-day report: data coverage, strategy activity, costs and P&L."""
+    from trading.monitoring.report import daily_report  # noqa: PLC0415
+
+    settings = Settings()
+    engine = make_engine(settings.resolved_database_url())
+    try:
+        with make_session_factory(engine)() as session:
+            body = daily_report(
+                session,
+                date.fromisoformat(session_date),
+                config=load_config(settings.config_dir),
+                provider=provider,
+            )
+    finally:
+        engine.dispose()
+    typer.echo(json.dumps(body, indent=2))
 
 
 @app.command("alpaca-check")
@@ -306,6 +345,34 @@ def ingest_csv(
 ) -> None:
     """Load CSV bars, quotes and corporate actions for the configured universe."""
     _ingest(CsvReplayProvider(path), start, end)
+
+
+@app.command("alpaca-export")
+def alpaca_export(
+    start: str = typer.Option(..., help="Inclusive start, ISO-8601 with timezone."),
+    end: str = typer.Option(..., help="Exclusive end, ISO-8601 with timezone."),
+    out: Path = typer.Option(..., help="Directory to write bars.csv / quotes.csv."),
+) -> None:
+    """Download Alpaca (IEX) bars and quotes for the universe as replay/backtest CSV fixtures."""
+    from trading.data.alpaca_provider import ProviderError  # noqa: PLC0415
+    from trading.data.export import export_csv  # noqa: PLC0415
+
+    settings = Settings()
+    provider = _alpaca_provider(settings)
+    if provider is None:
+        typer.echo("no Alpaca key files (secrets/alpaca_key_id, secrets/alpaca_secret)", err=True)
+        raise typer.Exit(1)
+    symbols = [u.symbol for u in load_config(settings.config_dir).universe]
+    try:
+        counts = export_csv(
+            provider, symbols, _parse_utc(start, "--start"), _parse_utc(end, "--end"), out
+        )
+    except ProviderError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    finally:
+        provider.close()
+    typer.echo(json.dumps(counts))
 
 
 @app.command("ingest-alpaca")

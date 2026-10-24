@@ -295,3 +295,70 @@ def test_one_failing_strategy_does_not_stop_the_others_or_the_flatten(world: Wor
     world.quote("SPY", late - timedelta(seconds=1), "100.44", "100.46")
     (req,) = world.propose(late)
     assert (req.side, req.symbol, req.quantity) == (Side.SELL, "SPY", D("0.8"))
+
+
+def _macro_world(world: World, *, required: bool = True) -> None:
+    from trading.core.config import AgentsConfig
+
+    agents = AgentsConfig.model_validate({"macro": {"enabled": True, "required": required}})
+    cfg = CFG.model_copy(update={"agents": agents})
+    world.source = StrategyIntentSource(
+        world.source._sf,
+        account_id=world.account_id,
+        calendar=world.calendar,
+        config=cfg,
+        instruments=world.instruments,
+        provider_name="replay",
+    )
+
+
+def _macro_run(world: World, multiplier: str, *, valid_minutes: int = 60) -> None:
+    import json
+
+    result = {
+        "regime": "RANGING",
+        "risk_multiplier": multiplier,
+        "valid_until": (NOW + timedelta(minutes=valid_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    world.db.execute(
+        text(
+            "insert into agent_runs (id, agent_name, model, prompt_version, started_at, completed_at,"
+            " result_json, status) values (gen_random_uuid(), 'macro', 'm', 'macro-v1', :t, :t,"
+            " CAST(:r AS jsonb), 'COMPLETED')"
+        ),
+        {"t": NOW - timedelta(minutes=1), "r": json.dumps(result)},
+    )
+    world.db.commit()
+
+
+def test_required_macro_view_missing_blocks_new_entries(world: World) -> None:
+    """Spec: stale or missing macro view => no new entries for dependent strategies."""
+    _macro_world(world)
+    world.orb_day()
+    assert world.propose() == ()
+    assert "MACRO_BLOCK" in world.count("select rationale_json::text from allocation_decisions")
+
+
+def test_a_fresh_macro_view_scales_entries_down(world: World) -> None:
+    world.orb_day()
+    (full,) = world.propose()
+    world.db.execute(text("delete from allocation_decisions"))
+    world.db.execute(text("delete from signals"))
+    world.db.commit()
+    _macro_world(world)
+    _macro_run(world, "0.5")
+    (half,) = world.propose()
+    assert half.quantity < full.quantity
+    assert half.quantity * D("100.31") <= D("40")
+
+
+def test_an_expired_macro_view_blocks_when_required_and_is_ignored_when_not(world: World) -> None:
+    world.orb_day()
+    _macro_world(world, required=False)
+    assert len(world.propose()) == 1  # not required: a missing view means multiplier 1
+    world.db.execute(text("delete from allocation_decisions"))
+    world.db.execute(text("delete from signals"))
+    world.db.commit()
+    _macro_world(world, required=True)
+    _macro_run(world, "1.0", valid_minutes=-5)  # already expired
+    assert world.propose() == ()
