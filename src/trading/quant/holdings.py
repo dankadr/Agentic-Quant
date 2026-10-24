@@ -1,5 +1,6 @@
 """What each strategy holds and has done, from recorded fills and orders (never from memory)."""
 
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
@@ -13,29 +14,50 @@ from trading.quant.models import Holding
 _TERMINAL = tuple(s.value for s in TERMINAL)
 
 
+# Anything below the smallest tradable increment is rounding residue, not a position.
+DUST = Decimal("0.0001")
+
+
+@dataclass
+class _Lot:
+    opened_at: datetime
+    qty: Decimal = Decimal(0)
+    bought: Decimal = Decimal(0)
+    cost: Decimal = Decimal(0)
+
+
 def load_holdings(session: Session, account_id: UUID, as_of: datetime) -> tuple[Holding, ...]:
-    """Open positions per (strategy, symbol), from fill attribution up to ``as_of``."""
+    """Open lots per (strategy, symbol), replayed from fill attribution up to ``as_of``.
+
+    A lot starts at the first buy after the strategy was last flat, so yesterday's closed round
+    trips never age or re-price today's entry.
+    """
     rows = session.execute(
         text(
-            "SELECT a.strategy_id, i.symbol, sum(a.allocated_qty) AS qty,"
-            " sum(CASE WHEN a.allocated_qty > 0 THEN a.allocated_qty * f.price ELSE 0 END)"
-            "   / nullif(sum(CASE WHEN a.allocated_qty > 0 THEN a.allocated_qty END), 0)"
-            "   AS avg_cost,"
-            " min(CASE WHEN a.allocated_qty > 0 THEN f.ts END) AS opened_at"
+            "SELECT a.strategy_id, i.symbol, a.allocated_qty AS qty, f.price, f.ts"
             " FROM strategy_attribution a"
             " JOIN fills f ON f.id = a.fill_id"
             " JOIN orders o ON o.id = f.order_id"
             " JOIN instruments i ON i.id = o.instrument_id"
             " WHERE o.account_id = :acct AND f.ts <= :as_of"
-            " GROUP BY a.strategy_id, i.symbol HAVING sum(a.allocated_qty) > 0"
-            " ORDER BY a.strategy_id, i.symbol"
+            " ORDER BY a.strategy_id, i.symbol, f.ts, f.id"
         ),
         {"acct": account_id, "as_of": as_of},
     ).all()
+    lots: dict[tuple[str, str], _Lot] = {}
+    for r in rows:
+        qty = Decimal(r.qty)
+        lot = lots.setdefault((r.strategy_id, r.symbol), _Lot(r.ts))
+        if qty > 0:
+            if lot.qty < DUST:  # flat before this buy: a new lot
+                lot = lots[(r.strategy_id, r.symbol)] = _Lot(r.ts)
+            lot.bought += qty
+            lot.cost += qty * Decimal(r.price)
+        lot.qty += qty
     return tuple(
-        Holding(r.strategy_id, r.symbol, Decimal(r.qty), Decimal(r.avg_cost), r.opened_at)
-        for r in rows
-        if r.avg_cost is not None and r.opened_at is not None
+        Holding(strategy, symbol, lot.qty, lot.cost / lot.bought, lot.opened_at)
+        for (strategy, symbol), lot in sorted(lots.items())
+        if lot.qty >= DUST and lot.bought > 0
     )
 
 
