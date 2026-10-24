@@ -7,6 +7,7 @@ from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 import uvicorn
@@ -22,6 +23,7 @@ from trading.core.time import ensure_utc
 from trading.data.calendar import XnysCalendar
 from trading.data.ingest import ingest_bars, ingest_corporate_actions, ingest_quotes
 from trading.data.instruments import upsert_universe
+from trading.data.provider import MarketDataProvider
 from trading.data.replay_provider import CsvReplayProvider
 from trading.db.engine import make_engine, make_session_factory
 from trading.db.migrate import upgrade
@@ -33,6 +35,9 @@ from trading.services.health import check_health, new_holder_id
 
 API_PORT = 8000
 METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102}
+
+if TYPE_CHECKING:
+    from trading.data.alpaca_provider import AlpacaDataProvider
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 admin_app = typer.Typer(no_args_is_help=True, help="Administrative commands.")
@@ -116,16 +121,19 @@ def worker() -> None:
     settings, config, session_factory = _bootstrap("worker")
     clock = SystemClock()
     calendar = _calendar()
+    provider = _alpaca_provider(settings)
 
     def ctx_factory(lease: Lease) -> WorkerContext:
-        # No market-data provider is configured yet (open decision 1): ticks are no-ops until then.
+        # Without Alpaca data keys ticks are no-ops (fail closed); with them the worker trades
+        # PAPER ONLY on live IEX data.
         runtime = build_runtime(
             session_factory=session_factory,
             config=config,
             clock=clock,
             lease=lease,
             calendar=calendar,
-            provider=None,
+            provider=provider,
+            provider_name=provider.name if provider is not None else "replay",
         )
         return WorkerContext(
             settings=settings,
@@ -196,18 +204,60 @@ def _parse_utc(value: str, option: str) -> datetime:
     return ensure_utc(parsed)
 
 
-@app.command("ingest-csv")
-def ingest_csv(
-    path: Path = typer.Option(..., help="Directory with bars.csv / quotes.csv."),
+def _alpaca_provider(settings: Settings) -> "AlpacaDataProvider | None":
+    """The data-only Alpaca provider if its key files are configured (or in ./secrets)."""
+    from trading.data.alpaca_provider import AlpacaDataProvider  # noqa: PLC0415
+
+    key = settings.alpaca_key_id_file or Path("secrets/alpaca_key_id")
+    secret = settings.alpaca_secret_file or Path("secrets/alpaca_secret")
+    if not (key.exists() and secret.exists()):
+        return None
+    if not (key.read_text().strip() and secret.read_text().strip()):
+        return None  # empty placeholder files mean "not configured"
+    return AlpacaDataProvider.from_files(key, secret)
+
+
+@app.command("alpaca-check")
+def alpaca_check(
+    symbol: str = typer.Option("SPY"),
     start: str = typer.Option(..., help="Inclusive start, ISO-8601 with timezone."),
     end: str = typer.Option(..., help="Exclusive end, ISO-8601 with timezone."),
 ) -> None:
-    """Load CSV bars, quotes and corporate actions for the configured universe."""
+    """Fetch a short window of Alpaca bars and quotes and print a summary (no database)."""
+    from trading.data.alpaca_provider import ProviderError  # noqa: PLC0415
+
+    provider = _alpaca_provider(Settings())
+    if provider is None:
+        typer.echo(
+            "no Alpaca key files found (secrets/alpaca_key_id, secrets/alpaca_secret)", err=True
+        )
+        raise typer.Exit(1)
+    start_dt, end_dt = _parse_utc(start, "--start"), _parse_utc(end, "--end")
+    try:
+        bars = list(provider.fetch_bars([symbol], start_dt, end_dt))
+        quotes = list(provider.fetch_quotes([symbol], start_dt, end_dt))
+    except ProviderError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    finally:
+        provider.close()
+    typer.echo(
+        json.dumps(
+            {
+                "bars": len(bars),
+                "first_bar": bars[0].model_dump(mode="json") if bars else None,
+                "quotes": len(quotes),
+                "first_quote": quotes[0].model_dump(mode="json") if quotes else None,
+            }
+        )
+    )
+
+
+def _ingest(provider: MarketDataProvider, start: str, end: str, *, quotes: bool = True) -> None:
     start_dt, end_dt = _parse_utc(start, "--start"), _parse_utc(end, "--end")
     settings = Settings()
     config = load_config(settings.config_dir)
     calendar = XnysCalendar(start_dt.date() - timedelta(days=7), end_dt.date() + timedelta(days=7))
-    provider = CsvReplayProvider(path)
     symbols = [u.symbol for u in config.universe]
     clock = SystemClock()
     engine = make_engine(settings.resolved_database_url())
@@ -218,10 +268,19 @@ def ingest_csv(
                 session, provider, symbols=symbols, start=start_dt, end=end_dt,
                 calendar=calendar, clock=clock,
             )  # fmt: skip
-            quotes = ingest_quotes(
-                session, provider, symbols=symbols, start=start_dt, end=end_dt,
-                calendar=calendar, clock=clock,
-            )  # fmt: skip
+            quote_summary = (
+                ingest_quotes(
+                    session,
+                    provider,
+                    symbols=symbols,
+                    start=start_dt,
+                    end=end_dt,
+                    calendar=calendar,
+                    clock=clock,
+                )
+                if quotes
+                else None
+            )
             actions = ingest_corporate_actions(
                 session, provider, symbols=symbols, start=start_dt.date(), end=end_dt.date(),
                 clock=clock,
@@ -232,11 +291,43 @@ def ingest_csv(
         json.dumps(
             {
                 "bars": bars.to_dict(),
-                "quotes": quotes.to_dict(),
+                "quotes": quote_summary.to_dict() if quote_summary else None,
                 "corporate_actions": actions.to_dict(),
             }
         )
     )
+
+
+@app.command("ingest-csv")
+def ingest_csv(
+    path: Path = typer.Option(..., help="Directory with bars.csv / quotes.csv."),
+    start: str = typer.Option(..., help="Inclusive start, ISO-8601 with timezone."),
+    end: str = typer.Option(..., help="Exclusive end, ISO-8601 with timezone."),
+) -> None:
+    """Load CSV bars, quotes and corporate actions for the configured universe."""
+    _ingest(CsvReplayProvider(path), start, end)
+
+
+@app.command("ingest-alpaca")
+def ingest_alpaca(
+    start: str = typer.Option(..., help="Inclusive start, ISO-8601 with timezone."),
+    end: str = typer.Option(..., help="Exclusive end, ISO-8601 with timezone."),
+    quotes: bool = typer.Option(True, help="Quotes need one request per symbol-minute (slow)."),
+) -> None:
+    """Backfill Alpaca (IEX) bars and quotes for the configured universe into the database."""
+    from trading.data.alpaca_provider import ProviderError  # noqa: PLC0415
+
+    provider = _alpaca_provider(Settings())
+    if provider is None:
+        typer.echo("no Alpaca key files (secrets/alpaca_key_id, secrets/alpaca_secret)", err=True)
+        raise typer.Exit(1)
+    try:
+        _ingest(provider, start, end, quotes=quotes)
+    except ProviderError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    finally:
+        provider.close()
 
 
 @admin_app.command("clear-drawdown-halt")

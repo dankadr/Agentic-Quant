@@ -17,3 +17,15 @@ for name in db_superuser_password db_owner_password db_app_password; do
     echo "created $file"
   fi
 done
+# Alpaca MARKET DATA keys (data-only; never put trading keys here). Empty placeholders keep Compose
+# happy; an empty file means "not configured" and the worker then runs without a data provider.
+for name in alpaca_key_id alpaca_secret; do
+  file="secrets/$name"
+  if [ -e "$file" ]; then
+    echo "keeping existing $file"
+  else
+    : > "$file"
+    chmod 644 "$file"
+    echo "created empty $file (paste your Alpaca data key in it)"
+  fi
+done
