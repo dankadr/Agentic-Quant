@@ -48,23 +48,48 @@ class BacktestResult:
     result_hash: str
 
 
-def ensure_scratch(session_factory: sessionmaker[Session]) -> None:
-    with session_factory() as session:
-        foreign = [
-            n
-            for n in session.scalars(select(Account.name))
-            if not n.startswith(SCRATCH_ACCOUNT_PREFIXES)
-        ]
+SCRATCH_DB_MARKERS = ("scratch", "test", "replay", "backtest")
+
+
+def _database_name(session: Session) -> str:
+    return str(session.execute(text("SELECT current_database()")).scalar_one())
+
+
+def _assert_scratch(session: Session) -> None:
+    """Positive evidence of a scratch database: its name says so, and it holds no real accounts or
+    API principals. (An empty fresh production database has no accounts either.)"""
+    name = _database_name(session)
+    if not any(marker in name.lower() for marker in SCRATCH_DB_MARKERS):
+        raise BacktestError(
+            f"database {name!r} does not look like a scratch database "
+            f"(its name must contain one of {SCRATCH_DB_MARKERS})"
+        )
+    foreign = [
+        n
+        for n in session.scalars(select(Account.name))
+        if not n.startswith(SCRATCH_ACCOUNT_PREFIXES)
+    ]
     if foreign:
         raise BacktestError(
             f"this database holds non-backtest accounts {foreign}; use a scratch database"
         )
+    if session.execute(text("SELECT count(*) FROM principals")).scalar_one():
+        raise BacktestError("this database holds API principals; use a scratch database")
+
+
+def ensure_scratch(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        _assert_scratch(session)
 
 
 def reset_scratch(session_factory: sessionmaker[Session], *, now: datetime) -> None:
-    """Empty every application table and restore the fail-closed seed. Scratch databases only."""
-    ensure_scratch(session_factory)
+    """Empty every application table and restore the fail-closed seed. Scratch databases only.
+
+    The guard and the TRUNCATE share one transaction, so nothing can appear in between.
+    """
     with session_factory.begin() as session:
+        session.execute(text("LOCK TABLE accounts, principals IN SHARE ROW EXCLUSIVE MODE"))
+        _assert_scratch(session)
         tables = session.execute(
             text(
                 "SELECT quote_ident(schemaname) || '.' || quote_ident(tablename) "

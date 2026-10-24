@@ -12,6 +12,18 @@ from trading.core.config import load_config
 from trading.portfolio.ledger import open_paper_account
 from trading.quant.backtest import BacktestError, ensure_scratch, reset_scratch, run_backtest
 
+
+@pytest.fixture
+def make_principal(session_factory: sessionmaker[Session]):  # type: ignore[no-untyped-def]
+    from trading.api.auth import Role, create_principal
+
+    def _make() -> None:
+        with session_factory.begin() as s:
+            create_principal(s, name="op", role=Role.OPERATOR, now=T0)
+
+    return _make
+
+
 ROOT = Path(__file__).resolve().parents[3]
 CFG = load_config(Path("configs"))
 MON, TUE = date(2026, 10, 19), date(2026, 10, 20)
@@ -42,6 +54,26 @@ def test_scratch_guard_refuses_a_database_with_a_real_account(
     with pytest.raises(BacktestError, match="scratch"):
         reset_scratch(session_factory, now=T0)
     assert db.execute(text("select count(*) from accounts")).scalar_one() == 1  # nothing was wiped
+
+
+def test_scratch_guard_requires_a_scratch_looking_database_name(
+    session_factory: sessionmaker[Session], db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review I1: absence of accounts is not proof of a scratch DB (a fresh real one has none)."""
+    monkeypatch.setattr("trading.quant.backtest._database_name", lambda session: "trading")
+    with pytest.raises(BacktestError, match="scratch"):
+        ensure_scratch(session_factory)
+    with pytest.raises(BacktestError, match="scratch"):
+        reset_scratch(session_factory, now=T0)
+
+
+def test_scratch_guard_refuses_a_database_with_api_principals(
+    session_factory: sessionmaker[Session], db: Session, make_principal
+) -> None:  # type: ignore[no-untyped-def]
+    make_principal()
+    with pytest.raises(BacktestError, match="scratch"):
+        reset_scratch(session_factory, now=T0)
+    assert db.execute(text("select count(*) from principals")).scalar_one() == 1  # nothing wiped
 
 
 def test_reset_clears_backtest_data_and_restores_the_fail_closed_seed(
