@@ -1,12 +1,41 @@
-# Allocation percentages are planning sleeves: the maximum notional a strategy may hold.
-# Global risk limits always win (decision C1). Shadow sleeves never deploy capital.
+# Allocation percentages are planning sleeves: the MAXIMUM notional a strategy may hold
+# (pct x equity). Global risk limits always win (decision C1). Shadow sleeves never deploy capital.
+# The 35% technical sleeve is split ORB 20% / VWAP 15%. Parameters are research hypotheses, not
+# validated edge; change them only through a reviewed config proposal (applied next session).
 strategies:
   orb_v1:
     enabled: true
-    allocation_pct: '0.35'
+    allocation_pct: '0.20'
+    params:
+      symbols: [SPY, QQQ, IWM, DIA, AAPL, MSFT, NVDA]
+      opening_range_minutes: 15
+      volume_confirm_ratio: '1.2'      # breakout bar volume vs the opening-range average
+      breakout_buffer_bps: '1'
+      target_r: '1.5'                   # target = entry + 1.5 x (entry - stop)
+      max_hold_minutes: 120             # time stop
+      max_spread_bps: '10'
+      min_avg_volume: '1000'
+      trade_notional: '80'
+      signal_ttl_seconds: 60
   vwap_v1:
     enabled: true
-    allocation_pct: '0.00'   # assign within the technical sleeve after research
+    allocation_pct: '0.15'
+    params:
+      symbols: [SPY, QQQ, IWM, DIA]
+      lookback_bars: 30
+      min_bars: 35
+      z_entry: '2.0'
+      z_stop: '3.0'
+      max_slope_bps: '8'                # reject strongly trending tape
+      max_hold_minutes: 60
+      max_spread_bps: '10'
+      trade_notional: '60'
+      signal_ttl_seconds: 60
+  eod_flatten:
+    enabled: true
+    allocation_pct: '0.00'
+    params:
+      flatten_minutes_before_close: 10
   fundamental_watchlist:
     enabled: true
     shadow_only: true

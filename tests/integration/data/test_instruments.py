@@ -14,7 +14,19 @@ CFG = load_config(Path("configs"))
 def test_upsert_universe_idempotent(db: Session) -> None:
     first = upsert_universe(db, CFG.universe)
     second = upsert_universe(db, CFG.universe)
-    assert set(first) == {"SPY", "QQQ", "IWM", "DIA", "TQQQ", "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN"}
+    assert set(first) == {
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DIA",
+        "TQQQ",
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "GOOGL",
+        "META",
+        "AMZN",
+    }
     assert {s: i.id for s, i in first.items()} == {s: i.id for s, i in second.items()}
     assert db.execute(text("select count(*) from instruments")).scalar_one() == 11
 

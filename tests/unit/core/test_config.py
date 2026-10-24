@@ -33,8 +33,20 @@ def test_loads_repo_configs() -> None:
     assert cfg.risk.max_new_entries_per_day == 10
     assert cfg.risk.max_open_symbols == 3
     assert len(cfg.limits_version) == 16
-    assert {u.symbol for u in cfg.universe} == {"SPY", "QQQ", "IWM", "DIA", "TQQQ", "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN"}
-    assert cfg.strategies["orb_v1"].allocation_pct == Decimal("0.35")
+    assert {u.symbol for u in cfg.universe} == {
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DIA",
+        "TQQQ",
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "GOOGL",
+        "META",
+        "AMZN",
+    }
+    assert cfg.strategies["orb_v1"].allocation_pct == Decimal("0.20")
     assert cfg.strategies["consensus_shadow"].shadow_only is True
 
 
@@ -108,3 +120,20 @@ def test_settings_reads_secret_file(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_settings_database_url_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TRADING_DATABASE_URL", "postgresql+psycopg://u:p@h/d")
     assert Settings().resolved_database_url() == "postgresql+psycopg://u:p@h/d"
+
+
+def test_strategy_params_and_sleeves_in_repo_config() -> None:
+    cfg = load_config(Path("configs"))
+    orb, vwap = cfg.strategies["orb_v1"], cfg.strategies["vwap_v1"]
+    assert (orb.allocation_pct, vwap.allocation_pct) == (
+        Decimal("0.20"),
+        Decimal("0.15"),
+    )  # technical sleeve 35%
+    assert orb.params["opening_range_minutes"] == 15
+    assert vwap.params["lookback_bars"] == 30
+    assert cfg.strategies["eod_flatten"].params["flatten_minutes_before_close"] == 10
+    assert cfg.strategies["eod_flatten"].enabled and not cfg.strategies["eod_flatten"].shadow_only
+    assert sum(s.allocation_pct for s in cfg.strategies.values()) == Decimal(1)  # spec sleeves
+    assert cfg.strategies["consensus_shadow"].allocation_pct == Decimal("0.20")
+    assert cfg.strategies["cash_reserve"].allocation_pct == Decimal("0.10")
+    assert cfg.strategies["fundamental_watchlist"].params == {}
