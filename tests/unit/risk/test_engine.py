@@ -395,3 +395,11 @@ def test_every_strategy_behind_a_netted_order_must_be_enabled(calendar) -> None:
         enabled=frozenset({"orb_v1"}),
     )
     assert codes(one_off) == ["STRATEGY_DISABLED"]
+
+
+def test_a_disabled_strategy_can_still_be_exited(calendar) -> None:  # type: ignore[no-untyped-def]
+    """Review I2: disabling a strategy must not trap its shares overnight."""
+    held = portfolio(positions=[("SPY", "1", "100")])
+    sell = evaluate(calendar, side=Side.SELL, qty="1", pf=held, enabled=frozenset())
+    assert sell.allowed
+    assert codes(evaluate(calendar, side=Side.BUY, enabled=frozenset())) == ["STRATEGY_DISABLED"]
