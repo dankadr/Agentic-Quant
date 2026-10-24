@@ -5,10 +5,10 @@ from collections.abc import Mapping
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from trading.core.enums import AssetType
@@ -110,12 +110,60 @@ class _BrokerFile(_Frozen):
     paper_broker: PaperBrokerConfig
 
 
+class LlmConfig(_Frozen):
+    base_url: str = "https://chat.daria-e.com/v1"
+    model: str = "unsloth/Qwen3.8-27B-GGUF"
+    timeout_seconds: int = Field(default=120, gt=0, le=600)
+    max_tokens: int = Field(default=1200, gt=0, le=16384)
+
+    @model_validator(mode="after")
+    def _https_unless_local(self) -> "LlmConfig":
+        host = urlparse(self.base_url).hostname or ""
+        if not self.base_url.startswith("https://") and host not in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        }:
+            raise ValueError("llm base_url must use https unless it points at localhost")
+        return self
+
+
+class MacroAgentConfig(_Frozen):
+    enabled: bool = False
+    required: bool = True
+    ttl_minutes: int = Field(default=60, gt=0, le=480)
+    run_every_minutes: int = Field(default=30, gt=0, le=240)
+    first_run_after_open_minutes: int = Field(default=16, ge=1, le=120)
+    dependent_strategies: tuple[str, ...] = ("orb_v1", "vwap_v1")
+
+    @model_validator(mode="after")
+    def _ttl_outlives_interval(self) -> "MacroAgentConfig":
+        if self.ttl_minutes <= self.run_every_minutes:
+            raise ValueError("macro ttl_minutes must exceed run_every_minutes")
+        return self
+
+
+class EvaluatorAgentConfig(_Frozen):
+    enabled: bool = False
+
+
+class AgentsConfig(_Frozen):
+    llm: LlmConfig = LlmConfig()
+    macro: MacroAgentConfig = MacroAgentConfig()
+    evaluator: EvaluatorAgentConfig = EvaluatorAgentConfig()
+
+
+class _AgentsFile(_Frozen):
+    agents: AgentsConfig
+
+
 class AppConfig(_Frozen):
     system: SystemConfig
     universe: tuple[UniverseEntry, ...]
     risk: RiskPolicy
     paper_broker: PaperBrokerConfig
     strategies: Mapping[str, StrategyConfig]
+    agents: AgentsConfig = AgentsConfig()
 
     @property
     def limits_version(self) -> str:
@@ -139,12 +187,18 @@ def load_config(config_dir: Path) -> AppConfig:
     risk = _load(config_dir, "risk.yaml", _RiskFile)
     strategies = _load(config_dir, "strategies.yaml", _StrategiesFile)
     broker = _load(config_dir, "paper_broker.yaml", _BrokerFile)
+    agents = (
+        _load(config_dir, "agents.yaml", _AgentsFile).agents
+        if (config_dir / "agents.yaml").exists()
+        else AgentsConfig()
+    )
     return AppConfig(
         system=system.system,
         universe=system.universe,
         risk=risk.risk,
         paper_broker=broker.paper_broker,
         strategies=strategies.strategies,
+        agents=agents,
     )
 
 
