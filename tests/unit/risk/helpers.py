@@ -89,6 +89,7 @@ def evaluate(
     views: dict[str, SymbolView] | None = None,
     expires: datetime | None = None,
     strategy_id: str = "orb_v1",
+    strategy_ids: tuple[str, ...] = (),
     dedupe_key: str = "k1",
     new_entries: int = 0,
     consumed: frozenset[str] = frozenset(),
@@ -109,7 +110,7 @@ def evaluate(
     )  # fmt: skip
     proposal = ProposedOrder(
         account_id=ACCOUNT_ID, instrument=instr, side=side, quantity=D(qty), order_type=otype,
-        limit_price=D(limit) if limit else None, time_in_force=TimeInForce.DAY, strategy_id=strategy_id,
+        limit_price=D(limit) if limit else None, time_in_force=TimeInForce.DAY, strategy_id=strategy_id, strategy_ids=strategy_ids,
         signal_id=None, signal_expires_at=expires, dedupe_key=dedupe_key,
     )  # fmt: skip
     account = AccountView(

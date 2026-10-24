@@ -93,6 +93,7 @@ class Env:
         expires: datetime | None = None,
         allowed: bool = True,
         entry: bool | None = None,
+        strategy_ids: tuple[str, ...] = (),
         stored_terms: dict | None = None,  # type: ignore[type-arg]
         decision_age: timedelta = timedelta(0),
     ) -> UUID:
@@ -109,7 +110,8 @@ class Env:
                 account_id=self.account_id, instrument=info, side=side, quantity=D(qty),
                 order_type=OrderType.LIMIT if limit else OrderType.MARKET,
                 limit_price=D(limit) if limit else None, time_in_force=TimeInForce.DAY,
-                strategy_id=strategy, signal_id=None, signal_expires_at=expires, dedupe_key=f"dk-{self._n}",
+                strategy_id=strategy, strategy_ids=strategy_ids, signal_id=None, signal_expires_at=expires,
+                dedupe_key=f"dk-{self._n}",
             )  # fmt: skip
             terms = {
                 **__import__("json").loads(canonical_json(proposal_terms(terms_proposal))),
@@ -122,7 +124,8 @@ class Env:
                 account_id=self.account_id, instrument=info, side=side, quantity=D(qty),
                 order_type=OrderType.LIMIT if limit else OrderType.MARKET,
                 limit_price=D(limit) if limit else None, time_in_force=TimeInForce.DAY,
-                strategy_id=strategy, signal_id=None, signal_expires_at=expires, dedupe_key=f"dk-{self._n}",
+                strategy_id=strategy, strategy_ids=strategy_ids, signal_id=None, signal_expires_at=expires,
+                dedupe_key=f"dk-{self._n}",
             )  # fmt: skip
             decision = RecordedDecision(
                 row.id,

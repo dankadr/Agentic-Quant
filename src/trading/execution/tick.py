@@ -434,6 +434,8 @@ class PaperTickProcessor:
                 signal_id=request.signal_id,
                 signal_expires_at=request.signal_expires_at,
                 dedupe_key=request.dedupe_key,
+                strategy_ids=request.strategy_ids,
+                attribution=request.attribution,
             )
             recorded = evaluate_and_record(
                 session,

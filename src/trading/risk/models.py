@@ -28,6 +28,13 @@ class ProposedOrder:
     signal_id: UUID | None
     signal_expires_at: datetime | None
     dedupe_key: str
+    # Netted orders carry every contributing strategy (primary first) and its attribution weight.
+    strategy_ids: tuple[str, ...] = ()
+    attribution: Mapping[str, Decimal] = field(default_factory=dict)
+
+    @property
+    def strategies(self) -> tuple[str, ...]:
+        return self.strategy_ids or (self.strategy_id,)
 
 
 @dataclass(frozen=True)

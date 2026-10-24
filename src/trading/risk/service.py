@@ -46,6 +46,7 @@ def proposal_terms(proposal: ProposedOrder) -> dict[str, object]:
         "limit_price": proposal.limit_price,
         "time_in_force": proposal.time_in_force,
         "strategy_id": proposal.strategy_id,
+        "strategy_ids": list(proposal.strategies),
     }
 
 
@@ -130,6 +131,7 @@ def evaluate_and_record(
     signal_row = session.get(Signal, proposal.signal_id) if proposal.signal_id is not None else None
     summary = {
         **proposal_terms(proposal),
+        "attribution": dict(proposal.attribution),
         "signal_id": proposal.signal_id,
         "signal_expires_at": proposal.signal_expires_at,
         "notional": evaluation.notional,

@@ -128,8 +128,9 @@ class ExecutionManager:
     ) -> UUID:
         """Persist the immutable intent and a CREATED order, in the caller's transaction."""
         now = self._fence(session)
-        if not _STRATEGY_ID.fullmatch(proposal.strategy_id):
-            raise InvalidStrategyId(f"invalid strategy id {proposal.strategy_id!r}")
+        for strategy in proposal.strategies:
+            if not _STRATEGY_ID.fullmatch(strategy):
+                raise InvalidStrategyId(f"invalid strategy id {strategy!r}")
         row = session.get(RiskDecisionRow, decision.decision_id)
         if row is None or not row.allowed or not decision.evaluation.allowed:
             raise RiskNotApproved("risk decision is not an allowed, persisted decision")
@@ -181,7 +182,7 @@ class ExecutionManager:
             order_type=proposal.order_type.value,
             limit_price=proposal.limit_price,
             time_in_force=proposal.time_in_force.value,
-            strategy_ids=[proposal.strategy_id],
+            strategy_ids=list(proposal.strategies),
             market_snapshot_id=market_snapshot_id,
             risk_decision_id=row.id,
             client_order_id=client_order_id,

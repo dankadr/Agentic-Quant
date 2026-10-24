@@ -378,3 +378,20 @@ def test_engine_is_pure(calendar) -> None:  # type: ignore[no-untyped-def]
     first = evaluate(calendar, qty="1.0001", new_entries=10)
     second = evaluate(calendar, qty="1.0001", new_entries=10)
     assert first == second
+
+
+def test_every_strategy_behind_a_netted_order_must_be_enabled(calendar) -> None:  # type: ignore[no-untyped-def]
+    both = evaluate(
+        calendar,
+        strategy_id="orb_v1",
+        strategy_ids=("orb_v1", "vwap_v1"),
+        enabled=frozenset({"orb_v1", "vwap_v1"}),
+    )
+    assert both.allowed
+    one_off = evaluate(
+        calendar,
+        strategy_id="orb_v1",
+        strategy_ids=("orb_v1", "vwap_v1"),
+        enabled=frozenset({"orb_v1"}),
+    )
+    assert codes(one_off) == ["STRATEGY_DISABLED"]

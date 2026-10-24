@@ -61,3 +61,33 @@ class AgentRun(Base):
     result_json: Mapped[dict[str, Any] | None]
     status: Mapped[str]
     cost_usd: Mapped[Decimal | None] = mapped_column(CASH)
+
+
+class StrategyConfigProposal(Base):
+    __tablename__ = "strategy_config_proposals"
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    strategy_id: Mapped[str] = mapped_column(ForeignKey("strategies.id"))
+    base_version: Mapped[str]
+    parameters_json: Mapped[dict[str, Any]]
+    rationale: Mapped[str]
+    status: Mapped[str]
+    proposed_by: Mapped[str]
+    created_at: Mapped[datetime]
+    reviewed_by: Mapped[str | None]
+    reviewed_at: Mapped[datetime | None]
+    applied_at: Mapped[datetime | None]
+    applied_version: Mapped[str | None]
+
+
+class Experiment(Base):
+    __tablename__ = "experiments"
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    kind: Mapped[str]
+    strategy_id: Mapped[str | None] = mapped_column(ForeignKey("strategies.id"))
+    hypothesis: Mapped[str]
+    params_json: Mapped[dict[str, Any]]
+    data_range_json: Mapped[dict[str, Any]]
+    metrics_json: Mapped[dict[str, Any]]
+    status: Mapped[str]
+    notes: Mapped[str]
+    created_at: Mapped[datetime]

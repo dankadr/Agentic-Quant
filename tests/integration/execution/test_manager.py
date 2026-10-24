@@ -502,3 +502,23 @@ def test_lease_lost_just_before_the_broker_call_never_reaches_the_broker(
     assert env.spy.submit_calls == 0
     assert env.broker.get_order("paper-orb_v1-20261019-0001") is None
     assert env.status(order_id) == "SUBMITTING"  # the next leader's reconciliation resolves it
+
+
+def test_netted_order_records_every_contributing_strategy(env: Env) -> None:
+    oid = env.place(strategy_ids=("orb_v1", "vwap_v1"))
+    assert env.scalar("select strategy_ids from order_intents") == ["orb_v1", "vwap_v1"]
+    assert (
+        env.row(oid).client_order_id == "paper-orb_v1-20261019-0001"
+    )  # primary strategy names the order
+
+
+def test_strategy_ids_are_part_of_the_checked_terms(env: Env) -> None:
+    with pytest.raises(RiskNotApproved, match="terms"):
+        env.place(strategy_ids=("orb_v1", "vwap_v1"), stored_terms={"strategy_ids": ["orb_v1"]})
+
+
+def test_every_contributing_strategy_id_must_be_a_safe_identifier(env: Env) -> None:
+    from trading.execution.manager import InvalidStrategyId
+
+    with pytest.raises(InvalidStrategyId):
+        env.place(strategy_ids=("orb_v1", "bad-id"))
