@@ -92,6 +92,7 @@ def make_intent(
     quantity: str = "0.15",
     side: str = "BUY",
     limit_price: str | None = "500.00",
+    strategy_ids: list[str] | None = None,
     now: datetime = T0,
 ) -> OrderIntent:
     row = OrderIntent(
@@ -102,7 +103,7 @@ def make_intent(
         order_type="LIMIT" if limit_price else "MARKET",
         limit_price=Decimal(limit_price) if limit_price else None,
         time_in_force="DAY",
-        strategy_ids=["orb_v1"],
+        strategy_ids=strategy_ids or ["orb_v1"],
         market_snapshot_id=decision.market_snapshot_id,
         risk_decision_id=decision.id,
         client_order_id=client_order_id,

@@ -47,12 +47,17 @@ def new_order(
     limit: str | None = "100.05",
     status: str = "ACKNOWLEDGED",
     symbol: str = "SPY",
+    strategy_ids: list[str] | None = None,
+    attribution: dict[str, str] | None = None,
 ) -> Order:
     account = db.get(Account, account_id)
     assert account is not None
     inst = get_instrument(db, symbol)
     snapshot = make_snapshot(db, data_hash=f"snap-{coid}")
-    decision = make_risk_decision(db, account, inst, snapshot, dedupe_key=f"dk-{coid}")
+    decision = make_risk_decision(
+        db, account, inst, snapshot, dedupe_key=f"dk-{coid}",
+        proposal_json={"attribution": attribution} if attribution else None,
+    )  # fmt: skip
     intent = make_intent(
         db,
         account,
@@ -62,6 +67,7 @@ def new_order(
         quantity=qty,
         side=side,
         limit_price=limit,
+        strategy_ids=strategy_ids,
     )
     return make_order(db, intent, status=status)
 
