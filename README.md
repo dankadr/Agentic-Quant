@@ -122,7 +122,27 @@ OpenAI-compatible (your Unsloth server); put its key in `secrets/llm_api_key` (e
 - **Evaluator** (`agents.evaluator.enabled`): a daily narrative over `trading report`, stored in
   `agent_runs`.
 
-Not built yet: technical, fundamental and consensus agents.
+Built but **off** (enable one at a time in `configs/agents.yaml`):
+
+- **Fundamental**: ranked watchlist + dated catalysts from Alpaca news headlines. Headlines are
+  untrusted data: cleaned, length-capped, passed as a JSON field; every symbol must be in the
+  universe and every cited id must be one we supplied, else `REJECTED_INVALID`. No orders.
+- **Consensus** (shadow, no model): per session, which entries other sources (macro view, other
+  strategies) would have vetoed, and the counterfactual P&L. No execution authority.
+- **Technical**: reads recorded walk-forward/sensitivity experiments (`trading research`) and may
+  file a parameter proposal only if the verdict is SUPPORTED, the base config is robust and is the
+  config the research was done on, and the value was among those tested. A human still approves.
+
+Research workflow (long-running, on a scratch database):
+
+```bash
+uv run trading collect-data --days 30 --workers 6 --merge-to data/alpaca-merged   # resumable
+export TRADING_SCRATCH_DATABASE_URL=postgresql+psycopg://.../trading_scratch      # WIPED between runs
+uv run trading research --strategy orb_v1 --fixtures data/alpaca-merged
+uv run trading technical --strategy orb_v1      # review the evidence; may file a proposal
+```
+Each parameter set is backtested once over the whole range and windows are sliced from it; the
+final holdout is spent at most once per strategy (`--evaluate-holdout`).
 
 ## Paper run
 
@@ -146,6 +166,9 @@ trading additionally needs a market data provider adapter.
 | `uv run trading admin create-api-key --name N --role viewer\|operator` | create an API key (printed once, stored hashed) |
 | `uv run trading admin clear-drawdown-halt --reason "..."` | explicit, audited clearing of a drawdown halt |
 | `uv run trading backtest --fixtures DIR --start D --end D` | multi-day backtest (scratch DB) |
+| `uv run trading collect-data --days N` | download many sessions of Alpaca data (resumable) |
+| `uv run trading research --strategy S --fixtures DIR` | walk-forward + sensitivity, recorded as experiments |
+| `uv run trading technical --strategy S` | technical agent reviews the latest research |
 | `uv run trading report --date D` | end-of-day report: data coverage, strategies, costs, P&L |
 | `uv run trading ingest-csv --path DIR --start ISO --end ISO` | load CSV bars/quotes into the database |
 
