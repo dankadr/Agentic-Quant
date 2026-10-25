@@ -6,7 +6,7 @@ runs on a scratch database: anything holding an account that is not a replay/bac
 refused before a single row is touched.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -232,6 +232,45 @@ def _daily_pnl_returns(
     return tuple(out)
 
 
+def _tuned(config: AppConfig, strategy_id: str, params: Mapping[str, Any]) -> AppConfig:
+    base = config.strategies[strategy_id]
+    merged = {**base.params, **params}
+    return config.model_copy(
+        update={
+            "strategies": {
+                **config.strategies,
+                strategy_id: base.model_copy(update={"params": merged}),
+            }
+        }
+    )
+
+
+def backtest_full_run(
+    session_factory: sessionmaker[Session],
+    *,
+    fixtures_dir: Path,
+    config: AppConfig,
+    strategy_id: str,
+    dates: Sequence[date],
+    minutes_per_day: int | None = None,
+) -> Callable[[Mapping[str, Any]], dict[date, Decimal]]:
+    """``params -> {session_date: daily return}`` from ONE backtest over the whole range."""
+    ordered = sorted(dates)
+
+    def full_run(params: Mapping[str, Any]) -> dict[date, Decimal]:
+        result = run_backtest(
+            session_factory,
+            fixtures_dir=fixtures_dir,
+            start=ordered[0],
+            end=ordered[-1],
+            config=_tuned(config, strategy_id, params),
+            minutes_per_day=minutes_per_day,
+        )
+        return dict(zip(result.sessions, result.strategy_daily_returns[strategy_id], strict=True))
+
+    return full_run
+
+
 def backtest_evaluator(
     session_factory: sessionmaker[Session],
     *,
@@ -248,22 +287,12 @@ def backtest_evaluator(
 
     def evaluate(dates: Sequence[date], params: Mapping[str, Any]) -> Evaluation:
         ordered = sorted(dates)
-        base = config.strategies[strategy_id]
-        merged = {**base.params, **params}
-        tuned = config.model_copy(
-            update={
-                "strategies": {
-                    **config.strategies,
-                    strategy_id: base.model_copy(update={"params": merged}),
-                }
-            }
-        )
         result = run_backtest(
             session_factory,
             fixtures_dir=fixtures_dir,
             start=ordered[0],
             end=ordered[-1],
-            config=tuned,
+            config=_tuned(config, strategy_id, params),
             minutes_per_day=minutes_per_day,
         )
         report = result.strategies[strategy_id]

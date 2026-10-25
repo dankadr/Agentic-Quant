@@ -172,3 +172,26 @@ def test_backtest_evaluator_feeds_research_with_real_runs(
     stored = db.execute(text("select params_json from strategies where id = 'orb_v1'")).scalar_one()
     assert stored["target_r"] == "2.0"  # the last evaluation ran with the last neighbour
     assert stored["trade_notional"] == "80"  # unrelated parameters are kept
+
+
+def test_backtest_full_run_returns_one_return_per_session(
+    session_factory: sessionmaker[Session], db: Session, tmp_path: Path
+) -> None:
+    from trading.quant.backtest import backtest_full_run
+
+    fx = _fixtures(tmp_path, [MON, TUE], ["SPY", "QQQ", "IWM", "DIA", "AAPL", "MSFT", "NVDA"])
+    full_run = backtest_full_run(
+        session_factory,
+        fixtures_dir=fx,
+        config=CFG,
+        strategy_id="orb_v1",
+        dates=[MON, TUE],
+        minutes_per_day=30,
+    )
+    by_day = full_run({"target_r": "2.0"})
+    assert sorted(by_day) == [MON, TUE]
+    assert all(isinstance(v, Decimal) for v in by_day.values())
+    stored = db.execute(
+        text("select params_json->>'target_r' from strategies where id = 'orb_v1'")
+    ).scalar_one()
+    assert stored == "2.0"  # the override reached the strategy used by the run
