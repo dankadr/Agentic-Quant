@@ -34,3 +34,29 @@ def test_a_day_the_run_never_covered_counts_as_zero_and_drawdown_is_tracked() ->
     e = ev(DAYS[:3], {"x": 1})
     assert e.daily_returns == (D("0.01"), D("-0.02"), D(0))
     assert e.max_drawdown_pct > 0
+
+
+def test_disk_cache_survives_a_restart_and_is_keyed_by_everything_that_matters(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trading.quant.research_runner import disk_cached
+
+    calls: list[dict[str, object]] = []
+
+    def full_run(params):  # type: ignore[no-untyped-def]
+        calls.append(dict(params))
+        return {DAYS[0]: D("0.01"), DAYS[1]: D("-0.002")}
+
+    fp = {"strategy": "orb_v1", "fixtures": "abc", "dates": [d.isoformat() for d in DAYS[:2]]}
+    first = disk_cached(full_run, tmp_path, fp)
+    a = first({"target_r": "2.0"})
+    assert a == {DAYS[0]: D("0.01"), DAYS[1]: D("-0.002")}
+    # a brand-new wrapper (a restarted process) finds the stored result
+    second = disk_cached(full_run, tmp_path, fp)
+    assert second({"target_r": "2.0"}) == a
+    assert len(calls) == 1
+    # different parameters, or a different fingerprint (other data), recompute
+    second({"target_r": "1.0"})
+    disk_cached(full_run, tmp_path, {**fp, "fixtures": "changed"})({"target_r": "2.0"})
+    assert len(calls) == 3
+    assert all(
+        p.suffix == ".json" for p in tmp_path.iterdir()
+    )  # no half-written temp files left behind

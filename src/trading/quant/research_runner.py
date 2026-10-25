@@ -9,11 +9,15 @@ Backtests need a scratch database; experiments are written to the *registry* dat
 normally the live one. The final holdout is evaluated at most once per strategy and date range.
 """
 
+import hashlib
+import json
+import os
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -48,6 +52,31 @@ def _drawdown(returns: Sequence[Decimal]) -> Decimal:
         peak = max(peak, equity)
         worst = max(worst, (peak - equity) / peak)
     return worst
+
+
+def disk_cached(full_run: FullRun, directory: Path, fingerprint: Mapping[str, Any]) -> FullRun:
+    """Persist each parameter set's full run so a long research job can resume after a restart.
+
+    The key covers the parameters AND ``fingerprint`` (strategy, data files, dates, ...): changed
+    data or code-relevant inputs never reuse a stale result. Writes are atomic.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+
+    def run(params: Mapping[str, Any]) -> Mapping[date, Decimal]:
+        key = hashlib.sha256(
+            canonical_json({"fp": dict(fingerprint), "params": dict(params)}).encode()
+        ).hexdigest()[:24]
+        path = directory / f"{key}.json"
+        if path.exists():
+            stored = json.loads(path.read_text())
+            return {date.fromisoformat(d): Decimal(v) for d, v in stored.items()}
+        result = dict(full_run(params))
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({d.isoformat(): str(v) for d, v in result.items()}))
+        os.replace(tmp, path)
+        return result
+
+    return run
 
 
 def cached_evaluator(full_run: FullRun, *, base_equity: Decimal) -> Evaluator:

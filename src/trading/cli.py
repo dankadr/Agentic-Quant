@@ -294,13 +294,20 @@ def research(
     holdout: int = typer.Option(5, min=0),
     minutes_per_day: int | None = typer.Option(None, min=1, help="Shorten sessions (debug)."),
     evaluate_holdout: bool = typer.Option(False, help="Spend the single-use final holdout."),
+    cache_dir: Path = typer.Option(
+        Path("data/research-cache"), help="Resume store for finished runs."
+    ),
 ) -> None:
     """Walk-forward + sensitivity for one strategy. Backtests run on TRADING_SCRATCH_DATABASE_URL
     (wiped!); experiments are recorded in TRADING_DATABASE_URL."""
     from trading.data.collect import merged_dates  # noqa: PLC0415
     from trading.quant.backtest import backtest_full_run  # noqa: PLC0415
     from trading.quant.research_config import load_research_spaces  # noqa: PLC0415
-    from trading.quant.research_runner import HoldoutAlreadyUsed, run_research  # noqa: PLC0415
+    from trading.quant.research_runner import (  # noqa: PLC0415
+        HoldoutAlreadyUsed,
+        disk_cached,
+        run_research,
+    )
 
     settings = Settings()
     config = load_config(settings.config_dir)
@@ -328,13 +335,24 @@ def research(
             ).scalar()
         outcome = run_research(
             make_session_factory(live),
-            backtest_full_run(
-                make_session_factory(scratch),
-                fixtures_dir=fixtures,
-                config=config,
-                strategy_id=strategy,
-                dates=dates,
-                minutes_per_day=minutes_per_day,
+            disk_cached(
+                backtest_full_run(
+                    make_session_factory(scratch),
+                    fixtures_dir=fixtures,
+                    config=config,
+                    strategy_id=strategy,
+                    dates=dates,
+                    minutes_per_day=minutes_per_day,
+                ),
+                cache_dir,
+                {
+                    "strategy": strategy,
+                    "strategy_params": dict(config.strategies[strategy].params),
+                    "dates": [d.isoformat() for d in dates],
+                    "bars_size": (fixtures / "bars.csv").stat().st_size,
+                    "quotes_size": (fixtures / "quotes.csv").stat().st_size,
+                    "minutes_per_day": minutes_per_day,
+                },
             ),
             strategy_id=strategy,
             dates=dates,
