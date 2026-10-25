@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paper Trading Dashboard</title>
+  <link rel="stylesheet" href="/dashboard/style.css">
+</head>
+<body>
+  <header>
+    <h1>Paper Trading</h1>
+    <div id="badges"></div>
+    <div class="spacer"></div>
+    <span id="updated" class="muted"></span>
+    <button id="pause" type="button" title="Pause new entries (needs an operator key)">Pause trading</button>
+    <button id="logout" type="button">Sign out</button>
+  </header>
+
+  <section id="login" hidden>
+    <h2>API key</h2>
+    <p class="muted">Paste a viewer or operator key. It stays in this tab only (sessionStorage).</p>
+    <form id="login-form">
+      <input id="key" type="password" autocomplete="off" placeholder="trk_..." required>
+      <button type="submit">Connect</button>
+    </form>
+    <p id="login-error" class="bad"></p>
+  </section>
+
+  <main id="main" hidden>
+    <section class="kpis" id="kpis"></section>
+
+    <section class="card wide">
+      <h2>Equity (today)</h2>
+      <div id="equity-chart"></div>
+    </section>
+
+    <section class="card">
+      <h2>Data health</h2>
+      <div id="health"></div>
+      <div id="coverage"></div>
+    </section>
+
+    <section class="card">
+      <h2>Strategies</h2>
+      <div id="strategies"></div>
+    </section>
+
+    <section class="card">
+      <h2>Positions</h2>
+      <div id="positions"></div>
+    </section>
+
+    <section class="card wide">
+      <h2>Recent orders</h2>
+      <div id="orders"></div>
+    </section>
+
+    <section class="card wide">
+      <h2>Latest signals</h2>
+      <div id="signals"></div>
+    </section>
+
+    <section class="card wide">
+      <h2>Agents</h2>
+      <div id="agents"></div>
+    </section>
+
+    <section class="card">
+      <h2>Costs &amp; risk</h2>
+      <div id="costs"></div>
+    </section>
+  </main>
+  <script src="/dashboard/app.js"></script>
+</body>
+</html>

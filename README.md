@@ -144,6 +144,16 @@ uv run trading technical --strategy orb_v1      # review the evidence; may file 
 Each parameter set is backtested once over the whole range and windows are sliced from it; the
 final holdout is spent at most once per strategy (`--evaluate-holdout`).
 
+## Dashboard
+
+`http://127.0.0.1:8000/dashboard` (loopback only, after `make up`). Sign in with any API key (viewer
+is enough to look; an operator key enables the **Pause trading** button). It refreshes every 15 s
+and shows: mode/state/risk badges, equity and P&L, today's equity curve, data health (bars, missing
+and flagged per symbol), strategies, positions, recent orders and signals, agent runs, costs and risk
+denials. The key lives in this tab's sessionStorage only. The page is static, makes no external
+requests, runs under a strict CSP, and renders all dynamic text with `textContent` (agent output and
+headlines are untrusted); a test guards against `innerHTML` and friends.
+
 ## Paper run
 
 ```bash
