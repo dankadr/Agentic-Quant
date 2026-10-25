@@ -147,3 +147,33 @@ export function meter(value, level) {
   requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.transform = "scaleX(" + Math.max(0, Math.min(1, num(value) ?? 0)) + ")"; }));
   return m;
 }
+
+// Daily P&L bars (oldest left). The History table is the accessible alternative.
+export function barChart(items) {
+  const root = el("div", null, "chart");
+  if (!items || !items.length) { root.append(el("p", "no sessions yet", "empty")); return root; }
+  const rows = items.slice().reverse();
+  const values = rows.map((r) => Number(r.pnl));
+  const peak = Math.max(...values.map((v) => Math.abs(v)), 0.01);
+  const BW = 900, BH = 220, mid = BH / 2, gap = 6;
+  const bw = Math.min(56, Math.max(6, (BW - 40) / rows.length - gap));
+  const s = svg("svg", { viewBox: "0 0 " + BW + " " + BH, role: "img", "aria-label": "Daily profit and loss, oldest to newest" });
+  s.append(svg("line", { x1: 20, x2: BW - 20, y1: mid, y2: mid }, "baseline"));
+  rows.forEach((r, i) => {
+    const v = values[i];
+    const h = Math.max(2, (Math.abs(v) / peak) * (mid - 18));
+    const x = 20 + i * (bw + gap);
+    const rect = svg("rect", { x, y: v >= 0 ? mid - h : mid, width: bw, height: h, rx: 3 }, "bar " + (v >= 0 ? "up" : "down"));
+    const title = svg("title");
+    title.textContent = r.date + ": " + signedUsd(v);
+    rect.append(title);
+    s.append(rect);
+    if (rows.length <= 16 || i % Math.ceil(rows.length / 12) === 0) {
+      const label = svg("text", { x: x + bw / 2, y: BH - 4, "text-anchor": "middle" }, "axis");
+      label.textContent = r.date.slice(5);
+      s.append(label);
+    }
+  });
+  root.append(s);
+  return root;
+}

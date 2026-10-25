@@ -1,5 +1,5 @@
 import { api, optional } from "./api.js";
-import { heatmap, equityChart, meter } from "./charts.js";
+import { barChart, heatmap, equityChart, meter } from "./charts.js";
 import { append, badge, card, chip, clear, el, empty, fmtDateTime, fmtMoney, fmtPct, fmtTime, ago, glyph, num, signedUsd, stable, table, trend, usd } from "./util.js";
 
 // A panel remembers what it last rendered so a refresh with unchanged data touches nothing
@@ -303,6 +303,78 @@ function mountTrading(root) {
   return (data) => { cache = data; draw(); };
 }
 
+
+// ---------- transactions ----------
+
+function mountTransactions(root) {
+  const grid = el("div", null, "grid");
+  const summary = panel("Summary", { cls: "col-12" });
+  const trips = panel("Round trips", { cls: "col-12" });
+  const fills = panel("Fills (executions)", { cls: "col-12" });
+  const ledger = panel("Cash ledger", { cls: "col-12" });
+  append(grid, summary.node, trips.node, fills.node, ledger.node);
+  root.append(grid);
+  let filter = "all", cache = {};
+  function draw() {
+    const t = cache.trades || { items: [], summary: null };
+    summary.set(t.summary, (sm) => {
+      const row = el("div", null, "row");
+      if (!sm || !sm.trades) { return empty("no trades in this window yet"); }
+      const win = sm.trades ? Math.round((sm.wins / sm.trades) * 100) : 0;
+      append(row, chip(sm.trades + (sm.trades === 1 ? " trade" : " trades")), chip(win + "% winners", win >= 50 ? "good" : "warn"),
+        chip("net " + glyph(sm.net_pnl) + signedUsd(sm.net_pnl), Number(sm.net_pnl) >= 0 ? "good" : "bad"), chip("fees " + usd(sm.fees)));
+      return row;
+    });
+    const ids = ["all", ...new Set(t.items.map((x) => x.strategy_id))];
+    const shown = t.items.filter((x) => filter === "all" || x.strategy_id === filter);
+    trips.set({ shown, filter, ids }, () => {
+      const box = el("div", null, "stack");
+      box.append(filterBar(ids.map((i) => [i, i === "all" ? "All" : i]), filter, (v) => { filter = v; draw(); }, "Strategy filter"));
+      box.append(table("Round trips", [
+        { label: "Opened (ET)", get: (x) => fmtDateTime(x.opened_at) }, { label: "Strategy", get: (x) => x.strategy_id }, { label: "Symbol", get: (x) => x.symbol },
+        { label: "State", get: (x) => chip(x.status, x.status === "OPEN" ? "warn" : "") },
+        { label: "Held", num: true, get: (x) => (x.hold_minutes === null ? "-" : x.hold_minutes + "m") },
+        { label: "Qty", num: true, get: (x) => x.qty }, { label: "Entry", num: true, get: (x) => fmtMoney(x.avg_entry) },
+        { label: "Exit", num: true, get: (x) => (x.avg_exit ? fmtMoney(x.avg_exit) : "-") },
+        { label: "Fees", num: true, get: (x) => usd(x.fees) },
+        { label: "Net P&L", num: true, get: (x) => glyph(x.net_pnl) + signedUsd(x.net_pnl), cls: (x) => trend(x.net_pnl) },
+      ], shown, "no round trips match"));
+      return box;
+    });
+    fills.set(cache.fills && cache.fills.items, (items) => table("Fills", [
+      { label: "Time (ET)", get: (f) => fmtDateTime(f.ts) + ":" + fmtTime(f.ts).slice(6) }, { label: "Symbol", get: (f) => f.symbol },
+      { label: "Side", get: (f) => chip(f.side, f.side === "BUY" ? "good" : "bad") }, { label: "Qty", num: true, get: (f) => f.qty },
+      { label: "Price", num: true, get: (f) => fmtMoney(f.price) }, { label: "Notional", num: true, get: (f) => usd(f.notional) },
+      { label: "Fees", num: true, get: (f) => usd(f.fees) }, { label: "Slippage est.", num: true, get: (f) => usd(f.slippage_estimate) },
+      { label: "By", get: (f) => f.strategies.map((s) => s.strategy_id).join(", ") },
+    ], items || [], "no fills yet"));
+    ledger.set(cache.ledger && cache.ledger.items, (items) => table("Cash ledger", [
+      { label: "Time (ET)", get: (e) => fmtDateTime(e.ts) }, { label: "Type", get: (e) => e.source_type },
+      { label: "Amount", num: true, get: (e) => signedUsd(e.amount), cls: (e) => trend(e.amount) },
+      { label: "Settles", get: (e) => e.settles_on }, { label: "Reference", get: (e) => e.source_id || "-" },
+    ], items || [], "no cash movements yet"));
+  }
+  return (data) => { cache = data; draw(); };
+}
+
+// ---------- history ----------
+
+function mountHistory(root) {
+  const grid = el("div", null, "grid");
+  const chart = panel("Daily P&L", { cls: "col-12" });
+  const rows = panel("Sessions", { cls: "col-12" });
+  append(grid, chart.node, rows.node);
+  root.append(grid);
+  return (data) => {
+    const items = (data.sessions && data.sessions.items) || [];
+    chart.set(items, (x) => barChart(x));
+    rows.set(items, (x) => table("Sessions", [
+      { label: "Date", get: (r) => r.date }, { label: "Start equity", num: true, get: (r) => usd(r.start_equity) }, { label: "End equity", num: true, get: (r) => usd(r.end_equity) },
+      { label: "P&L", num: true, get: (r) => glyph(r.pnl) + signedUsd(r.pnl), cls: (r) => trend(r.pnl) }, { label: "Return", num: true, get: (r) => fmtPct(r.return_pct), cls: (r) => trend(r.return_pct) },
+    ], x, "no sessions recorded yet"));
+  };
+}
+
 // ---------- strategies ----------
 
 function mountStrategies(root) {
@@ -508,6 +580,15 @@ export const VIEWS = {
     label: "Trading", icon: "trading", mount: mountTrading,
     fetch: () => Promise.all([optional("/v1/positions?limit=100"), optional("/v1/orders?limit=80"), optional("/v1/signals?limit=80")]).then(([positions, orders, signals]) => ({ positions, orders, signals })),
   },
+  transactions: {
+    label: "Transactions", icon: "transactions", mount: mountTransactions,
+    fetch: (c) => {
+      const scoped = c.explicit ? "?date=" + c.day + "&" : "?";
+      return Promise.all([optional("/v1/trades" + (c.explicit ? "?date=" + c.day : "?days=30")), optional("/v1/fills" + scoped + "limit=150"), optional("/v1/ledger?limit=100")])
+        .then(([trades, fills, ledger]) => ({ trades, fills, ledger }));
+    },
+  },
+  history: { label: "History", icon: "history", mount: mountHistory, fetch: () => optional("/v1/sessions?limit=60").then((sessions) => ({ sessions })) },
   strategies: {
     label: "Strategies", icon: "strategies", mount: mountStrategies,
     fetch: (c) => Promise.all([optional("/v1/strategies"), optional("/v1/report/daily?date=" + c.day), optional("/v1/signals?limit=100"), optional("/v1/config-proposals?limit=50"), optional("/v1/positions?limit=100")])

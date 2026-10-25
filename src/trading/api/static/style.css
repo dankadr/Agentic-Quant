@@ -145,6 +145,8 @@ td.wrap { white-space: normal; min-width: 200px; }
 .chart .line.draw { stroke-dasharray: 1; stroke-dashoffset: 1; }
 .chart .line.draw.go { stroke-dashoffset: 0; transition: stroke-dashoffset 700ms var(--ease-out); }
 
+.chart .bar.up { fill: var(--good); } .chart .bar.down { fill: var(--bad); }
+
 /* heatmap */
 table.heat { border-collapse: separate; border-spacing: 3px; width: auto; }
 table.heat th, table.heat td { padding: 0; border: 0; position: static; background: none; }

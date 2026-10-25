@@ -4,7 +4,7 @@ import json
 import threading
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -14,13 +14,14 @@ import uvicorn
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
-from tests.factories import make_account
+from tests.integration.portfolio.helpers import NEXT_DAY, broker_fill, new_order
 from trading.api.app import create_app
 from trading.api.auth import Role, create_principal
 from trading.core.clock import ManualClock
 from trading.core.config import Settings, load_config
 from trading.data.calendar import MarketCalendar
 from trading.data.instruments import upsert_universe
+from trading.portfolio.ledger import apply_fill, open_paper_account
 from trading.quant.proposals import propose_config
 from trading.quant.registry import seed_strategies
 from trading.quant.research import record_experiment
@@ -45,7 +46,7 @@ def _seed(db: Session, sf: sessionmaker[Session]) -> dict[str, str]:
         text("update system_state set trading_state = 'PAPER_RUNNING', risk_state = 'NORMAL'")
     )
     seed_strategies(db, CFG, now=OPEN)
-    acct = make_account(db)
+    acct_id = open_paper_account(db, name="paper-primary", starting_cash=Decimal("1000"), now=OPEN)
     for i in range(0, 61):
         kind = "SESSION_START" if i == 0 else "INTRADAY"
         eq = Decimal("1000") + Decimal(str(round((i % 7 - 3) * 0.15 + i * 0.02, 2)))
@@ -54,8 +55,46 @@ def _seed(db: Session, sf: sessionmaker[Session]) -> dict[str, str]:
                 "insert into equity_snapshots (id, account_id, ts, kind, cash, settled_cash, equity, exposure, realized_pnl,"
                 " unrealized_pnl, positions_json) values (gen_random_uuid(), :a, :t, :k, :e, :e, :e, 0, 0, 0, '{}'::jsonb)"
             ),
-            {"a": acct.id, "t": OPEN + timedelta(minutes=i * 1.5), "k": kind, "e": eq},
+            {"a": acct_id, "t": OPEN + timedelta(minutes=i * 1.5), "k": kind, "e": eq},
         )
+    # two earlier sessions for the History view
+    for back, (start, end) in ((1, ("1000", "1003.5")), (2, ("1003.5", "1001.2"))):
+        for kind, hours, eq in (("SESSION_START", 0, start), ("SESSION_END", 6, end)):
+            db.execute(
+                text(
+                    "insert into equity_snapshots (id, account_id, ts, kind, cash, settled_cash, equity, exposure, realized_pnl,"
+                    " unrealized_pnl, positions_json) values (gen_random_uuid(), :a, :t, :k, :e, :e, :e, 0, 0, 0, '{}'::jsonb)"
+                ),
+                {
+                    "a": acct_id,
+                    "t": OPEN - timedelta(days=back * 2) + timedelta(hours=hours),
+                    "k": kind,
+                    "e": Decimal(eq),
+                },
+            )
+    # one closed round trip for the Transactions view
+    buy = new_order(db, acct_id, "e2e-b", qty="1", limit="999", strategy_ids=["orb_v1"])
+    apply_fill(
+        db,
+        account_id=acct_id,
+        fill=replace(
+            broker_fill(buy, "e2e-be", qty="1", price="100", fees="0.01"),
+            ts=OPEN + timedelta(minutes=20),
+        ),
+        settles_on=NEXT_DAY,
+        now=OPEN + timedelta(minutes=20),
+    )
+    sell = new_order(db, acct_id, "e2e-s", side="SELL", qty="1", limit="1", strategy_ids=["orb_v1"])
+    apply_fill(
+        db,
+        account_id=acct_id,
+        fill=replace(
+            broker_fill(sell, "e2e-se", qty="1", price="103", fees="0.01"),
+            ts=OPEN + timedelta(minutes=50),
+        ),
+        settles_on=NEXT_DAY,
+        now=OPEN + timedelta(minutes=50),
+    )
     spy = instruments["SPY"].id
     for m in range(0, 60):
         db.execute(
