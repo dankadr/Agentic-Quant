@@ -1,0 +1,23 @@
+:root { --bg:#0e1116; --card:#161b22; --line:#262d36; --text:#e6edf3; --muted:#8b949e;
+        --good:#3fb950; --bad:#f85149; --warn:#d29922; --accent:#58a6ff; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 -apple-system, system-ui, sans-serif; }
+header { display:flex; align-items:center; gap:12px; padding:12px 20px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+h1 { font-size:18px; margin:0; } h2 { font-size:13px; margin:0 0 8px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+.spacer { flex:1; } .muted { color:var(--muted); } .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+button { background:#21262d; color:var(--text); border:1px solid var(--line); padding:6px 12px; border-radius:6px; cursor:pointer; }
+button:hover { border-color:var(--accent); } #pause { border-color:#6e4a12; }
+input { background:#0d1117; color:var(--text); border:1px solid var(--line); padding:8px; border-radius:6px; width:340px; max-width:100%; }
+main { display:grid; grid-template-columns:repeat(auto-fit, minmax(340px, 1fr)); gap:14px; padding:16px 20px; }
+#login { padding:24px 20px; }
+.kpis { grid-column:1/-1; display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; }
+.kpi, .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+.kpi .label { color:var(--muted); font-size:12px; } .kpi .value { font-size:20px; font-weight:600; margin-top:2px; }
+.card.wide { grid-column:1/-1; }
+.badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; border:1px solid var(--line); margin-right:6px; }
+.badge.good { border-color:var(--good); } .badge.bad { border-color:var(--bad); } .badge.warn { border-color:var(--warn); }
+table { width:100%; border-collapse:collapse; font-size:13px; } th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); }
+th { color:var(--muted); font-weight:500; } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+.agent { border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:8px; }
+.agent .title { font-weight:600; } .agent p { margin:4px 0 0; white-space:pre-wrap; word-break:break-word; }
+svg { width:100%; height:180px; display:block; } .empty { color:var(--muted); font-style:italic; }

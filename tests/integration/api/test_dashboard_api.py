@@ -1,0 +1,151 @@
+import json
+import re
+from datetime import timedelta
+from decimal import Decimal
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from tests.factories import T0, make_account
+from tests.integration.api.conftest import bearer
+
+D = Decimal
+STATIC = Path("src/trading/api/static")
+
+
+def agent_run(
+    db: Session, name: str, status: str, minutes: int, result: dict[str, object] | None = None
+) -> None:
+    db.execute(
+        text(
+            "insert into agent_runs (id, agent_name, model, prompt_version, started_at, completed_at, result_json, status)"
+            " values (gen_random_uuid(), :n, 'm', 'v1', :t, :t, CAST(:r AS jsonb), :s)"
+        ),
+        {
+            "n": name,
+            "t": T0 + timedelta(minutes=minutes),
+            "r": json.dumps(result or {}),
+            "s": status,
+        },
+    )
+    db.commit()
+
+
+def snapshot(db: Session, acct, kind: str, minutes: int, equity: str) -> None:  # type: ignore[no-untyped-def]
+    db.execute(
+        text(
+            "insert into equity_snapshots (id, account_id, ts, kind, cash, settled_cash, equity, exposure, realized_pnl,"
+            " unrealized_pnl, positions_json) values (gen_random_uuid(), :a, :t, :k, :e, :e, :e, 0, 0, 0, '{}'::jsonb)"
+        ),
+        {"a": acct.id, "t": T0 + timedelta(minutes=minutes), "k": kind, "e": D(equity)},
+    )
+    db.commit()
+
+
+# ---- agent runs ----------------------------------------------------------------------------------
+
+
+def test_agent_runs_are_listed_newest_first_and_filterable(
+    client: TestClient, db: Session, viewer_key: str
+) -> None:
+    agent_run(db, "macro", "COMPLETED", 1, {"regime": "RANGING", "risk_multiplier": "0.7"})
+    agent_run(db, "evaluator", "COMPLETED", 2, {"summary": "quiet day"})
+    agent_run(db, "macro", "FAILED", 3, {"error": "insufficient_data"})
+    body = client.get("/v1/agents/runs", headers=bearer(viewer_key)).json()
+    assert [(r["agent_name"], r["status"]) for r in body["items"]] == [
+        ("macro", "FAILED"),
+        ("evaluator", "COMPLETED"),
+        ("macro", "COMPLETED"),
+    ]
+    assert body["items"][2]["result"]["regime"] == "RANGING"
+    only = client.get("/v1/agents/runs?agent_name=macro&limit=1", headers=bearer(viewer_key)).json()
+    assert [r["status"] for r in only["items"]] == ["FAILED"]
+    assert client.get("/v1/agents/runs").status_code == 401
+
+
+# ---- equity curve --------------------------------------------------------------------------------
+
+
+def test_equity_curve_returns_the_primary_accounts_intraday_points(
+    client: TestClient, db: Session, viewer_key: str
+) -> None:
+    acct = make_account(db)
+    scratch = make_account(db, name="replay-2026-10-19")
+    snapshot(db, acct, "SESSION_START", 0, "1000")
+    snapshot(db, acct, "INTRADAY", 1, "1001")
+    snapshot(db, acct, "INTRADAY", 2, "999.5")
+    snapshot(db, scratch, "INTRADAY", 3, "5000")
+    body = client.get("/v1/equity?date=2026-10-19", headers=bearer(viewer_key)).json()
+    assert [p["equity"] for p in body["points"]] == ["1000.0000", "1001.0000", "999.5000"]
+    assert body["points"][0]["ts"].endswith("Z")
+    assert client.get("/v1/equity?date=nope", headers=bearer(viewer_key)).status_code == 422
+
+
+def test_equity_curve_is_empty_but_ok_without_data(client: TestClient, viewer_key: str) -> None:
+    body = client.get("/v1/equity?date=2026-10-19", headers=bearer(viewer_key)).json()
+    assert body["points"] == []
+
+
+# ---- daily report --------------------------------------------------------------------------------
+
+
+def test_daily_report_endpoint_wraps_the_report(
+    client: TestClient, db: Session, viewer_key: str
+) -> None:
+    acct = make_account(db)
+    snapshot(db, acct, "SESSION_START", 0, "1000")
+    snapshot(db, acct, "SESSION_END", 390, "1003")
+    r = client.get("/v1/report/daily?date=2026-10-19", headers=bearer(viewer_key))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["date"] == "2026-10-19"
+    assert body["equity"]["pnl"] == "3.0000"
+    assert "data_coverage" in body and "strategies" in body
+    assert client.get("/v1/report/daily?date=bogus", headers=bearer(viewer_key)).status_code == 422
+
+
+def test_daily_report_without_an_account_is_unavailable(
+    client: TestClient, viewer_key: str
+) -> None:
+    assert (
+        client.get("/v1/report/daily?date=2026-10-19", headers=bearer(viewer_key)).status_code
+        == 503
+    )
+
+
+# ---- static dashboard ----------------------------------------------------------------------------
+
+
+def test_dashboard_page_is_served_with_a_strict_csp(client: TestClient) -> None:
+    r = client.get("/dashboard")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    csp = r.headers["content-security-policy"]
+    assert "default-src 'none'" in csp and "script-src 'self'" in csp
+    assert "unsafe-inline" not in csp and "unsafe-eval" not in csp
+    assert r.headers["cache-control"] == "no-store"
+    assert client.get("/dashboard/app.js").status_code == 200
+    assert client.get("/dashboard/style.css").status_code == 200
+    assert client.get("/dashboard/../../etc/passwd").status_code == 404
+
+
+def test_dashboard_code_never_renders_untrusted_text_as_html() -> None:
+    """Agent output and news headlines are untrusted: only textContent may ever be used."""
+    js = (STATIC / "app.js").read_text()
+    html = (STATIC / "index.html").read_text()
+    for banned in (
+        "innerHTML",
+        "outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "eval(",
+        "new Function",
+    ):
+        assert banned not in js, banned
+    assert not re.search(r"<script(?![^>]*\bsrc=)", html)  # no inline scripts
+    assert not re.search(r"\son\w+\s*=", html)  # no inline event handlers
+    # no external calls or CDNs; the SVG namespace is an identifier, not a request
+    urls = re.findall(r"https?://[^\s\"')]+", (js + html).replace("http://www.w3.org/2000/svg", ""))
+    assert urls == []
