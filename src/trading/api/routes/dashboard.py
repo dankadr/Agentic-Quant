@@ -4,11 +4,12 @@ The page itself carries no data and no secrets. It asks the user for an API key 
 sessionStorage) and calls the same authenticated /v1 endpoints as any other client.
 """
 
-from datetime import date
+import re
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select, text
@@ -21,49 +22,42 @@ from trading.api.schemas import Money
 from trading.core.config import AppConfig
 from trading.core.time import UtcDatetime
 from trading.db.models.portfolio import Account, EquitySnapshot
-from trading.db.models.research import AgentRun
+from trading.db.models.research import AgentRun, Experiment
 from trading.monitoring.report import daily_report
 
 router = APIRouter(tags=["dashboard"])
 STATIC = Path(__file__).resolve().parent.parent / "static"
-_FILES = {
-    "": ("index.html", "text/html; charset=utf-8"),
-    "app.js": ("app.js", "text/javascript; charset=utf-8"),
-    "style.css": ("style.css", "text/css; charset=utf-8"),
-}
+_MEDIA = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+          ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml"}  # fmt: skip
+_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
     "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 )
+_HEADERS = {
+    "Content-Security-Policy": _CSP,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
 
 
 def _static(name: str) -> Response:
-    filename, media_type = _FILES[name]
-    return FileResponse(
-        STATIC / filename,
-        media_type=media_type,
-        headers={
-            "Content-Security-Policy": _CSP,
-            "Cache-Control": "no-store",
-            "X-Content-Type-Options": "nosniff",
-            "Referrer-Policy": "no-referrer",
-        },
-    )
+    """Serve one file from the static directory by exact, whitelisted name (no path tricks)."""
+    path = STATIC / name
+    if not _NAME.match(name) or path.suffix not in _MEDIA or not path.is_file():
+        raise ApiProblem(404, "NOT_FOUND", "No such dashboard file")
+    return FileResponse(path, media_type=_MEDIA[path.suffix], headers=_HEADERS)
 
 
 @router.get("/dashboard", include_in_schema=False)
 def dashboard_page() -> Response:
-    return _static("")
+    return _static("index.html")
 
 
-@router.get("/dashboard/app.js", include_in_schema=False)
-def dashboard_js() -> Response:
-    return _static("app.js")
-
-
-@router.get("/dashboard/style.css", include_in_schema=False)
-def dashboard_css() -> Response:
-    return _static("style.css")
+@router.get("/dashboard/{name}", include_in_schema=False)
+def dashboard_file(name: str) -> Response:
+    return _static(name)
 
 
 class AgentRunOut(BaseModel):
@@ -122,8 +116,6 @@ def get_equity(
     _: AuthPrincipal = Depends(require_viewer),
     session: Session = Depends(get_session),
 ) -> EquityCurve:
-    from datetime import UTC, datetime, time, timedelta  # noqa: PLC0415
-
     start = datetime.combine(day, time.min, tzinfo=UTC)
     rows = session.scalars(
         select(EquitySnapshot)
@@ -154,3 +146,119 @@ def get_daily_report(
     if "error" in body:
         raise ApiProblem(503, "STATE_UNAVAILABLE", "Report unavailable", detail=str(body["error"]))
     return body
+
+
+class SymbolCoverage(BaseModel):
+    symbol: str
+    bars: list[int]
+    flagged: list[int]
+
+
+class CoverageOut(BaseModel):
+    bucket_minutes: int
+    buckets: int
+    expected_per_bucket: int
+    provider: str
+    symbols: list[SymbolCoverage]
+
+
+COVERAGE_BUCKET = timedelta(minutes=30)
+
+
+@router.get("/v1/data/coverage", response_model=CoverageOut)
+def get_data_coverage(
+    request: Request,
+    day: date = Query(alias="date"),
+    _: AuthPrincipal = Depends(require_viewer),
+    session: Session = Depends(get_session),
+    config: AppConfig = Depends(get_config),
+) -> CoverageOut:
+    """Bars received per symbol per half hour of the session (to spot gaps at a glance)."""
+    provider = (
+        session.execute(text("SELECT provider FROM market_bars ORDER BY ts DESC LIMIT 1")).scalar()
+        or "replay"
+    )
+    calendar = request.app.state.calendar
+    info = calendar.session_on(day) if calendar is not None else None
+    minutes = int(COVERAGE_BUCKET.total_seconds() // 60)
+    if info is None:
+        return CoverageOut(
+            bucket_minutes=minutes,
+            buckets=0,
+            expected_per_bucket=minutes,
+            provider=provider,
+            symbols=[],
+        )
+    span = int((info.close_at - info.open_at).total_seconds())
+    buckets = max(1, -(-span // int(COVERAGE_BUCKET.total_seconds())))  # ceil
+    grid = {u.symbol: ([0] * buckets, [0] * buckets) for u in config.universe}
+    rows = session.execute(
+        text(
+            "SELECT i.symbol, floor(extract(epoch FROM (b.ts - :open)) / :secs)::int AS bucket,"
+            " count(*) AS n, count(*) FILTER (WHERE cardinality(b.quality_flags) > 0) AS flagged"
+            " FROM market_bars b JOIN instruments i ON i.id = b.instrument_id"
+            " WHERE b.provider = :prov AND b.ts >= :open AND b.ts < :close GROUP BY 1, 2"
+        ),
+        {
+            "open": info.open_at,
+            "close": info.close_at,
+            "secs": int(COVERAGE_BUCKET.total_seconds()),
+            "prov": provider,
+        },
+    )
+    for r in rows:
+        if r.symbol in grid and 0 <= r.bucket < buckets:
+            grid[r.symbol][0][r.bucket] = r.n
+            grid[r.symbol][1][r.bucket] = r.flagged
+    return CoverageOut(
+        bucket_minutes=minutes,
+        buckets=buckets,
+        expected_per_bucket=minutes,
+        provider=provider,
+        symbols=[SymbolCoverage(symbol=k, bars=v[0], flagged=v[1]) for k, v in grid.items()],
+    )
+
+
+class ExperimentOut(BaseModel):
+    id: str
+    kind: str
+    strategy_id: str | None
+    hypothesis: str
+    status: str
+    params: dict[str, Any]
+    data_range: dict[str, Any]
+    metrics: dict[str, Any]
+    notes: str
+    created_at: UtcDatetime
+
+
+class ExperimentList(BaseModel):
+    items: list[ExperimentOut]
+
+
+@router.get("/v1/research/experiments", response_model=ExperimentList)
+def get_experiments(
+    limit: int = Query(default=30, ge=1, le=200),
+    _: AuthPrincipal = Depends(require_viewer),
+    session: Session = Depends(get_session),
+) -> ExperimentList:
+    rows = session.scalars(
+        select(Experiment).order_by(Experiment.created_at.desc(), Experiment.id.desc()).limit(limit)
+    )
+    return ExperimentList(
+        items=[
+            ExperimentOut(
+                id=str(r.id),
+                kind=r.kind,
+                strategy_id=r.strategy_id,
+                hypothesis=r.hypothesis,
+                status=r.status,
+                params=dict(r.params_json),
+                data_range=dict(r.data_range_json),
+                metrics=dict(r.metrics_json),
+                notes=r.notes,
+                created_at=r.created_at,
+            )
+            for r in rows
+        ]
+    )

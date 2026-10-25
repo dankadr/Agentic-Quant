@@ -5,7 +5,7 @@ agents:
     base_url: https://chat.daria-e.com/v1   # OpenAI-compatible (Unsloth Studio)
     model: unsloth/Qwen3.8-27B-GGUF
     timeout_seconds: 120
-    max_tokens: 1200
+    max_tokens: 4000
   macro:
     enabled: true
     # true  = spec behaviour: a missing/stale macro view blocks NEW entries of dependent strategies.
@@ -19,13 +19,13 @@ agents:
     dependent_strategies: [orb_v1, vwap_v1]
   evaluator:
     enabled: true
-  # Built but OFF: enable deliberately, one at a time.
+  # Tried on real data (Alpaca news, Friday's backtest) before enabling.
   fundamental:
-    enabled: false          # watchlist + catalysts from Alpaca news; needs the LLM key
+    enabled: true           # watchlist + catalysts from Alpaca news; needs the LLM key
     lookback_hours: 18
     max_headlines: 60
     ttl_hours: 20
   consensus:
-    enabled: false          # shadow only: agreement/veto counterfactual, no model, no authority
+    enabled: true           # shadow only: agreement/veto counterfactual, no model, no authority
   technical:
-    enabled: false          # proposes strategy parameter changes from recorded experiments
+    enabled: false          # manual (`trading technical`); proposes strategy parameter changes from recorded experiments

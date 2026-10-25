@@ -50,12 +50,13 @@ def _extract_json(text: str) -> Any:
         cleaned = fence.group(1).strip()
     decoder = json.JSONDecoder()
     for start, char in enumerate(cleaned):
-        if char in "{[":
+        if char == "{":  # every agent schema is a JSON object; stray lists in prose are skipped
             try:
                 value, _ = decoder.raw_decode(cleaned[start:])
             except ValueError:
                 continue
-            return value
+            if isinstance(value, dict):
+                return value
     raise LlmInvalidOutput("no JSON object in the model reply")
 
 
@@ -101,15 +102,23 @@ class LlmClient:
         }
         body = self._post(payload)
         try:
-            content = body["choices"][0]["message"]["content"]
+            choice = body["choices"][0]
+            content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise LlmError("model reply has no choices") from exc
+        if choice.get("finish_reason") == "length":
+            raise LlmInvalidOutput(
+                "model reply was truncated by max_tokens; raise agents.llm.max_tokens"
+            )
         data = _extract_json(str(content))
         try:
             value = schema.model_validate(data)
         except ValidationError as exc:
+            first = exc.errors()[0]
+            where = ".".join(str(p) for p in first["loc"]) or "<root>"
             raise LlmInvalidOutput(
-                f"reply does not match {schema.__name__}: {exc.error_count()} errors"
+                f"reply does not match {schema.__name__}: {exc.error_count()} errors, "
+                f"first at {where} ({first['type']})"
             ) from exc
         usage = body.get("usage") or {}
         return LlmResult(

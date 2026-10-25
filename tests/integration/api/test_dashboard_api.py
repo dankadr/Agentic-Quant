@@ -133,19 +133,109 @@ def test_dashboard_page_is_served_with_a_strict_csp(client: TestClient) -> None:
 
 def test_dashboard_code_never_renders_untrusted_text_as_html() -> None:
     """Agent output and news headlines are untrusted: only textContent may ever be used."""
-    js = (STATIC / "app.js").read_text()
-    html = (STATIC / "index.html").read_text()
-    for banned in (
-        "innerHTML",
-        "outerHTML",
-        "insertAdjacentHTML",
-        "document.write",
-        "eval(",
-        "new Function",
-    ):
-        assert banned not in js, banned
+    files = {
+        f.name: f.read_text() for f in STATIC.iterdir() if f.suffix in (".js", ".html", ".css")
+    }
+    assert {
+        "index.html",
+        "app.js",
+        "views.js",
+        "charts.js",
+        "util.js",
+        "api.js",
+        "style.css",
+    } <= set(files)
+    for name, body in files.items():
+        if name.endswith(".js"):
+            for banned in (
+                "innerHTML",
+                "outerHTML",
+                "insertAdjacentHTML",
+                "document.write",
+                "eval(",
+                "new Function",
+                'setAttribute("style"',
+            ):
+                assert banned not in body, (name, banned)
+    html = files["index.html"]
     assert not re.search(r"<script(?![^>]*\bsrc=)", html)  # no inline scripts
     assert not re.search(r"\son\w+\s*=", html)  # no inline event handlers
+    assert 'style="' not in html  # the CSP forbids inline style attributes
     # no external calls or CDNs; the SVG namespace is an identifier, not a request
-    urls = re.findall(r"https?://[^\s\"')]+", (js + html).replace("http://www.w3.org/2000/svg", ""))
-    assert urls == []
+    blob = "\n".join(files.values()).replace("http://www.w3.org/2000/svg", "")
+    assert re.findall(r"https?://[^\s\"')]+", blob) == []
+
+
+# ---- data coverage and research ------------------------------------------------------------------
+
+
+def bar(db: Session, symbol: str, minute: int) -> None:
+    from tests.factories import make_instrument
+
+    inst = (
+        db.execute(text("select id from instruments where symbol = :s"), {"s": symbol}).scalar()
+        or make_instrument(db, symbol).id
+    )
+    from datetime import UTC, datetime
+
+    ts = datetime(2026, 10, 19, 13, 30, tzinfo=UTC) + timedelta(minutes=minute)
+    db.execute(
+        text(
+            "insert into market_bars (instrument_id, interval, ts, provider, open, high, low, close, volume, ingested_at,"
+            " session_date, source_seq, quality_flags) values (:i, '1m', :t, 'alpaca-iex', 1, 1, 1, 1, 10, :t, '2026-10-19', null, :f)"
+        ),
+        {"i": inst, "t": ts, "f": ["GAP_BEFORE"] if minute == 31 else []},
+    )
+
+
+def test_data_coverage_buckets_bars_by_half_hour_per_symbol(
+    client: TestClient, db: Session, viewer_key: str
+) -> None:
+    for m in range(0, 30):  # a full first half hour for SPY
+        bar(db, "SPY", m)
+    for m in (30, 31, 32):  # three bars in the second half hour (one flagged)
+        bar(db, "SPY", m)
+    db.commit()
+    body = client.get("/v1/data/coverage?date=2026-10-19", headers=bearer(viewer_key)).json()
+    assert body["bucket_minutes"] == 30
+    assert body["buckets"] == 13
+    spy = next(s for s in body["symbols"] if s["symbol"] == "SPY")
+    assert spy["bars"][:2] == [30, 3]
+    assert spy["flagged"][:2] == [0, 1]
+    assert spy["bars"][2:] == [0] * 11
+    assert (
+        client.get("/v1/data/coverage?date=2026-10-17", headers=bearer(viewer_key)).json()[
+            "symbols"
+        ]
+        == []
+    )  # a Saturday
+    assert client.get("/v1/data/coverage?date=nope", headers=bearer(viewer_key)).status_code == 422
+
+
+def test_research_experiments_are_listed_newest_first(
+    client: TestClient, db: Session, viewer_key: str
+) -> None:
+    from decimal import Decimal as Dec
+
+    from trading.core.config import load_config
+    from trading.quant.registry import seed_strategies
+    from trading.quant.research import record_experiment
+
+    seed_strategies(db, load_config(Path("configs")), now=T0)
+
+    record_experiment(db, kind="WALK_FORWARD", strategy_id="orb_v1", hypothesis="older", params={"a": 1}, data_range={"days": 4},
+                      metrics={"verdict": "REJECTED", "p": Dec("0.5")}, status="REJECTED", now=T0)  # fmt: skip
+    record_experiment(db, kind="SENSITIVITY", strategy_id="orb_v1", hypothesis="newer", params={}, data_range={},
+                      metrics={"robust": False}, status="REJECTED", now=T0 + timedelta(minutes=1))  # fmt: skip
+    db.commit()
+    body = client.get("/v1/research/experiments?limit=10", headers=bearer(viewer_key)).json()
+    assert [e["hypothesis"] for e in body["items"]] == ["newer", "older"]
+    assert body["items"][1]["metrics"]["verdict"] == "REJECTED"
+    assert body["items"][1]["created_at"].endswith("Z")
+    assert client.get("/v1/research/experiments").status_code == 401
+
+
+def test_static_assets_are_whitelisted_by_name(client: TestClient) -> None:
+    assert client.get("/dashboard/app.js").status_code == 200
+    for bad in ("../app.js", "..%2F..%2Fetc%2Fpasswd", "nope.js", ".env", "app.js/../x"):
+        assert client.get(f"/dashboard/{bad}").status_code == 404

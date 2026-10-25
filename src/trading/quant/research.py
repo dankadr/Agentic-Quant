@@ -85,8 +85,9 @@ def make_folds(
     if train < 1 or test < 1 or step < 1 or holdout < 0:
         raise ValueError("train, test and step must be >= 1 and holdout >= 0")
     ordered = sorted(dates)
-    usable = ordered[: len(ordered) - holdout]
-    held = tuple(ordered[len(ordered) - holdout :]) if holdout else ()
+    cut = max(0, len(ordered) - holdout)  # a holdout longer than the data takes everything
+    usable = ordered[:cut]
+    held = tuple(ordered[cut:]) if holdout else ()
     folds: list[Fold] = []
     start = 0
     while start + train + test <= len(usable):

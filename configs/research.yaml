@@ -1,11 +1,11 @@
+# One parameter per strategy for now: every candidate is a full multi-day backtest (about an hour
+# on 20 sessions), and fewer hypotheses also means less multiple-testing penalty.
 # Parameter grids for walk-forward research (trading research). Values are tested exactly as
 # written; the Technical agent may only ever propose values listed here.
 research:
   orb_v1:
     space:
       target_r: ["1.0", "1.5", "2.0"]
-      max_hold_minutes: [60, 120]
   vwap_v1:
     space:
       z_entry: ["1.5", "2.0", "2.5"]
-      max_hold_minutes: [30, 60]

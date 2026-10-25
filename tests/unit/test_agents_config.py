@@ -10,6 +10,9 @@ def test_shipped_agents_config_is_valid() -> None:
     assert cfg.agents.macro.enabled is True
     assert cfg.agents.macro.required is False  # PoC choice, see configs/agents.yaml
     assert cfg.agents.evaluator.enabled is True
+    assert cfg.agents.fundamental.enabled is True
+    assert cfg.agents.consensus.enabled is True
+    assert cfg.agents.technical.enabled is False  # run by hand: it can file proposals
     assert cfg.agents.llm.base_url.startswith("https://")
     assert set(cfg.agents.macro.dependent_strategies) <= set(cfg.strategies)
 

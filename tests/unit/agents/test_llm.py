@@ -110,3 +110,43 @@ def test_auth_failure_is_not_retried() -> None:
 def test_empty_choices_is_an_error() -> None:
     with pytest.raises(LlmError):
         client(lambda r: httpx.Response(200, json={"choices": []})).complete_json("s", "u", Answer)
+
+
+def test_schema_errors_name_the_offending_field_but_never_echo_the_content() -> None:
+    secret_looking = "do-not-echo-this-value"
+    with pytest.raises(LlmInvalidOutput) as err:
+        client(
+            lambda r: reply(json.dumps({"regime": "RANGING", "score": secret_looking}))
+        ).complete_json("s", "u", Answer)
+    assert "score" in str(err.value)
+    assert secret_looking not in str(err.value)
+
+
+def test_a_list_in_the_models_preamble_does_not_hide_the_json_object() -> None:
+    content = 'Considering [AAPL, NVDA] first.\n{"regime": "RANGING", "score": 1}'
+    assert (
+        client(lambda r: reply(content)).complete_json("s", "u", Answer).value.regime == "RANGING"
+    )
+
+
+def test_a_reply_cut_off_by_the_token_limit_is_reported_as_truncated() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = {
+            "choices": [{"message": {"content": '{"regime": "RANG'}, "finish_reason": "length"}],
+            "usage": {},
+        }
+        return httpx.Response(200, content=json.dumps(body).encode())
+
+    with pytest.raises(LlmInvalidOutput, match="truncated"):
+        client(handler).complete_json("s", "u", Answer)
+
+
+def test_a_truncated_reply_is_never_parsed_from_a_nested_fragment() -> None:
+    cut = '{"outer": [{"regime": "RANGING", "score": 1}, {"regime": "TREN'
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = {"choices": [{"message": {"content": cut}, "finish_reason": "length"}], "usage": {}}
+        return httpx.Response(200, content=json.dumps(body).encode())
+
+    with pytest.raises(LlmInvalidOutput, match="truncated"):
+        client(handler).complete_json("s", "u", Answer)

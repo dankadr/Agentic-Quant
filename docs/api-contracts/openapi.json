@@ -267,6 +267,42 @@
         "title": "CostsOut",
         "type": "object"
       },
+      "CoverageOut": {
+        "properties": {
+          "bucket_minutes": {
+            "title": "Bucket Minutes",
+            "type": "integer"
+          },
+          "buckets": {
+            "title": "Buckets",
+            "type": "integer"
+          },
+          "expected_per_bucket": {
+            "title": "Expected Per Bucket",
+            "type": "integer"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "symbols": {
+            "items": {
+              "$ref": "#/components/schemas/SymbolCoverage"
+            },
+            "title": "Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "bucket_minutes",
+          "buckets",
+          "expected_per_bucket",
+          "provider",
+          "symbols"
+        ],
+        "title": "CoverageOut",
+        "type": "object"
+      },
       "EquityCurve": {
         "properties": {
           "points": {
@@ -305,6 +341,91 @@
           "equity"
         ],
         "title": "EquityPoint",
+        "type": "object"
+      },
+      "ExperimentList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExperimentOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ExperimentList",
+        "type": "object"
+      },
+      "ExperimentOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "data_range": {
+            "additionalProperties": true,
+            "title": "Data Range",
+            "type": "object"
+          },
+          "hypothesis": {
+            "title": "Hypothesis",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "title": "Metrics",
+            "type": "object"
+          },
+          "notes": {
+            "title": "Notes",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Id"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "strategy_id",
+          "hypothesis",
+          "status",
+          "params",
+          "data_range",
+          "metrics",
+          "notes",
+          "created_at"
+        ],
+        "title": "ExperimentOut",
         "type": "object"
       },
       "FillOut": {
@@ -1120,6 +1241,35 @@
         "title": "StrategyOut",
         "type": "object"
       },
+      "SymbolCoverage": {
+        "properties": {
+          "bars": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Bars",
+            "type": "array"
+          },
+          "flagged": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Flagged",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "bars",
+          "flagged"
+        ],
+        "title": "SymbolCoverage",
+        "type": "object"
+      },
       "SystemStatus": {
         "properties": {
           "last_data_at": {
@@ -1912,6 +2062,66 @@
         ]
       }
     },
+    "/v1/data/coverage": {
+      "get": {
+        "description": "Bars received per symbol per half hour of the session (to spot gaps at a glance).",
+        "operationId": "get_data_coverage_v1_data_coverage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "date",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Date",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Data Coverage",
+        "tags": [
+          "dashboard"
+        ]
+      }
+    },
     "/v1/equity": {
       "get": {
         "operationId": "get_equity_v1_equity_get",
@@ -2418,6 +2628,67 @@
           }
         },
         "summary": "Get Daily Report",
+        "tags": [
+          "dashboard"
+        ]
+      }
+    },
+    "/v1/research/experiments": {
+      "get": {
+        "operationId": "get_experiments_v1_research_experiments_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Experiments",
         "tags": [
           "dashboard"
         ]
