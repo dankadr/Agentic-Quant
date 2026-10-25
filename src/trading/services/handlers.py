@@ -5,11 +5,12 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from trading.agents.jobs import evaluator_job, macro_job
+from trading.agents.jobs import consensus_job, evaluator_job, fundamental_job, macro_job
 from trading.agents.macro import JsonLlm
 from trading.core.clock import Clock
 from trading.core.config import AppConfig, Settings
 from trading.core.time import ensure_utc, isoformat_z
+from trading.data.news import NewsSource
 from trading.jobs.lease import EXECUTOR_LEASE, Lease, assert_fence
 from trading.jobs.outbox import dispatch_pending
 from trading.jobs.queue import Job
@@ -31,6 +32,7 @@ class WorkerContext:
     lease: Lease
     runtime: TradingRuntime | None = None
     llm: JsonLlm | None = None
+    news: NewsSource | None = None
 
 
 def reconcile_on_start(ctx: WorkerContext) -> None:
@@ -111,8 +113,16 @@ def build_handlers(ctx: WorkerContext) -> dict[str, Handler]:
             payload=job.payload,
         )
 
+    def agent_fundamental(job: Job) -> None:
+        fundamental_job(ctx.session_factory, ctx.llm, ctx.news, config=ctx.config, clock=ctx.clock)
+
+    def agent_consensus(job: Job) -> None:
+        consensus_job(ctx.session_factory, config=ctx.config, clock=ctx.clock, payload=job.payload)
+
     handlers.update(
         {
+            "agent_fundamental": agent_fundamental,
+            "agent_consensus": agent_consensus,
             "agent_macro": agent_macro,
             "agent_evaluator": agent_evaluator,
             "session_start": session_start,

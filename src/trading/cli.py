@@ -38,6 +38,7 @@ METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102}
 
 if TYPE_CHECKING:
     from trading.agents.llm import LlmClient
+    from trading.data.alpaca_news import AlpacaNewsSource
     from trading.data.alpaca_provider import AlpacaDataProvider
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -122,6 +123,21 @@ def _llm_client(settings: Settings, config: AppConfig) -> "LlmClient | None":
     return LlmClient.from_file(config.agents.llm, key_file)
 
 
+def _news_source(settings: Settings, config: AppConfig) -> "AlpacaNewsSource | None":
+    """Alpaca news (same data-only keys) when the fundamental agent is enabled."""
+    from trading.data.alpaca_news import AlpacaNewsSource  # noqa: PLC0415
+
+    if not config.agents.fundamental.enabled:
+        return None
+    key = settings.alpaca_key_id_file or Path("secrets/alpaca_key_id")
+    secret = settings.alpaca_secret_file or Path("secrets/alpaca_secret")
+    if not (
+        key.exists() and secret.exists() and key.read_text().strip() and secret.read_text().strip()
+    ):
+        return None
+    return AlpacaNewsSource.from_files(key, secret)
+
+
 @app.command()
 def worker() -> None:
     """Run the trading worker (the only process allowed to reach a broker adapter)."""
@@ -136,6 +152,7 @@ def worker() -> None:
     calendar = _calendar()
     provider = _alpaca_provider(settings)
     llm = _llm_client(settings, config)
+    news = _news_source(settings, config)
 
     def ctx_factory(lease: Lease) -> WorkerContext:
         # Without Alpaca data keys ticks are no-ops (fail closed); with them the worker trades
@@ -157,6 +174,7 @@ def worker() -> None:
             lease=lease,
             runtime=runtime,
             llm=llm,
+            news=news,
         )
 
     code = run_worker(
@@ -220,17 +238,23 @@ def _parse_utc(value: str, option: str) -> datetime:
     return ensure_utc(parsed)
 
 
-def _alpaca_provider(settings: Settings) -> "AlpacaDataProvider | None":
-    """The data-only Alpaca provider if its key files are configured (or in ./secrets)."""
-    from trading.data.alpaca_provider import AlpacaDataProvider  # noqa: PLC0415
-
+def _alpaca_key_files(settings: Settings) -> tuple[Path, Path] | None:
+    """The Alpaca data key files if both exist and are non-empty (empty = not configured)."""
     key = settings.alpaca_key_id_file or Path("secrets/alpaca_key_id")
     secret = settings.alpaca_secret_file or Path("secrets/alpaca_secret")
     if not (key.exists() and secret.exists()):
         return None
     if not (key.read_text().strip() and secret.read_text().strip()):
-        return None  # empty placeholder files mean "not configured"
-    return AlpacaDataProvider.from_files(key, secret)
+        return None
+    return key, secret
+
+
+def _alpaca_provider(settings: Settings) -> "AlpacaDataProvider | None":
+    """The data-only Alpaca provider if its key files are configured (or in ./secrets)."""
+    from trading.data.alpaca_provider import AlpacaDataProvider  # noqa: PLC0415
+
+    files = _alpaca_key_files(settings)
+    return AlpacaDataProvider.from_files(*files) if files else None
 
 
 @app.command()

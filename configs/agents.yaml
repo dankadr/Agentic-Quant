@@ -19,3 +19,13 @@ agents:
     dependent_strategies: [orb_v1, vwap_v1]
   evaluator:
     enabled: true
+  # Built but OFF: enable deliberately, one at a time.
+  fundamental:
+    enabled: false          # watchlist + catalysts from Alpaca news; needs the LLM key
+    lookback_hours: 18
+    max_headlines: 60
+    ttl_hours: 20
+  consensus:
+    enabled: false          # shadow only: agreement/veto counterfactual, no model, no authority
+  technical:
+    enabled: false          # proposes strategy parameter changes from recorded experiments

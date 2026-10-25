@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from urllib.parse import urlparse
 
 import httpx
@@ -77,9 +77,7 @@ class AlpacaDataProvider:
         )
 
     @classmethod
-    def from_files(
-        cls, key_id_file: Path, secret_file: Path, **kwargs: Any
-    ) -> "AlpacaDataProvider":
+    def from_files(cls, key_id_file: Path, secret_file: Path, **kwargs: Any) -> Self:
         return cls(key_id_file.read_text().strip(), secret_file.read_text().strip(), **kwargs)
 
     def __repr__(self) -> str:
