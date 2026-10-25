@@ -6,7 +6,16 @@ from sqlalchemy.orm import Session, sessionmaker
 import trading
 from trading.api.middleware import MetricsMiddleware, RequestIdMiddleware
 from trading.api.problems import register_handlers
-from trading.api.routes import audit, control, dashboard, health, portfolio, quant, system
+from trading.api.routes import (
+    audit,
+    control,
+    dashboard,
+    health,
+    portfolio,
+    quant,
+    system,
+    transactions,
+)
 from trading.core.clock import Clock
 from trading.core.config import AppConfig, Settings
 from trading.data.calendar import MarketCalendar
@@ -36,4 +45,5 @@ def create_app(
     app.include_router(portfolio.router)
     app.include_router(quant.router)
     app.include_router(dashboard.router)
+    app.include_router(transactions.router)
     return app

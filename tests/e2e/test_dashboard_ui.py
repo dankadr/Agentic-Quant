@@ -3,7 +3,17 @@ import pytest
 from tests.e2e.conftest import Demo
 
 pytestmark = pytest.mark.e2e
-ROUTES = ["overview", "trading", "strategies", "agents", "research", "data", "activity"]
+ROUTES = [
+    "overview",
+    "trading",
+    "transactions",
+    "history",
+    "strategies",
+    "agents",
+    "research",
+    "data",
+    "activity",
+]
 
 
 def login(page, demo: Demo, key: str | None = None, route: str = "overview") -> None:  # type: ignore[no-untyped-def]
@@ -196,3 +206,36 @@ def test_picking_a_weekend_date_shows_empty_states_without_errors(new_page, demo
     assert [p for p in page.problems if "503" not in p] == []
     page.click("#live")
     page.wait_for_selector("table.heat", timeout=10000)
+
+
+def test_transactions_show_round_trips_fills_and_the_cash_ledger(new_page, demo: Demo) -> None:  # type: ignore[no-untyped-def]
+    page = new_page()
+    login(page, demo, route="transactions")
+    page.wait_for_selector("text=Round trips")
+    page.wait_for_selector("#view table")
+    text = page.inner_text("#view")
+    assert "orb_v1" in text and "SPY" in text
+    assert "+$2.98" in text  # 3.00 gross less two 1-cent fees
+    assert "1 trade" in text and "100% winners" in text
+    assert "103" in text and "100" in text  # entry and exit prices
+    page.wait_for_selector("table caption:has-text('Fills')", state="attached")
+    assert (
+        page.query_selector(
+            "table caption:has-text('Cash ledger')",
+        )
+        is not None
+    )
+    assert "DEPOSIT" in text or "FILL" in text  # cash movements are listed
+
+
+def test_history_shows_daily_pnl_bars_and_a_sessions_table(new_page, demo: Demo) -> None:  # type: ignore[no-untyped-def]
+    page = new_page()
+    login(page, demo, route="history")
+    page.wait_for_selector(".chart svg rect.bar")
+    assert page.locator(".chart svg rect.bar").count() >= 3
+    text = page.inner_text("#view")
+    assert "+$3.50" in text and "-$2.30" in text
+    assert (
+        page.query_selector("rect.bar.up") is not None
+        and page.query_selector("rect.bar.down") is not None
+    )

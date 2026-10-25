@@ -428,38 +428,50 @@
         "title": "ExperimentOut",
         "type": "object"
       },
-      "FillOut": {
+      "FillList": {
         "properties": {
-          "execution_id": {
-            "title": "Execution Id",
-            "type": "string"
-          },
-          "fees": {
-            "title": "Fees",
-            "type": "string"
-          },
-          "price": {
-            "title": "Price",
-            "type": "string"
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/trading__api__routes__transactions__FillOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "FillList",
+        "type": "object"
+      },
+      "FillStrategy": {
+        "properties": {
+          "pnl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl"
           },
           "qty": {
             "title": "Qty",
             "type": "string"
           },
-          "ts": {
-            "format": "date-time",
-            "title": "Ts",
+          "strategy_id": {
+            "title": "Strategy Id",
             "type": "string"
           }
         },
         "required": [
-          "execution_id",
-          "ts",
+          "strategy_id",
           "qty",
-          "price",
-          "fees"
+          "pnl"
         ],
-        "title": "FillOut",
+        "title": "FillStrategy",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -473,6 +485,64 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LedgerEntry": {
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "settles_on": {
+            "format": "date",
+            "title": "Settles On",
+            "type": "string"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "source_type": {
+            "title": "Source Type",
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "title": "Ts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ts",
+          "amount",
+          "source_type",
+          "source_id",
+          "settles_on"
+        ],
+        "title": "LedgerEntry",
+        "type": "object"
+      },
+      "LedgerList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LedgerEntry"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "LedgerList",
         "type": "object"
       },
       "OrderOut": {
@@ -514,7 +584,7 @@
           },
           "fills": {
             "items": {
-              "$ref": "#/components/schemas/FillOut"
+              "$ref": "#/components/schemas/trading__api__routes__portfolio__FillOut"
             },
             "title": "Fills",
             "type": "array"
@@ -1071,6 +1141,63 @@
         "title": "ReviewRequest",
         "type": "object"
       },
+      "SessionList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SessionRow"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SessionList",
+        "type": "object"
+      },
+      "SessionRow": {
+        "properties": {
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "end_equity": {
+            "title": "End Equity",
+            "type": "string"
+          },
+          "pnl": {
+            "title": "Pnl",
+            "type": "string"
+          },
+          "return_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Return Pct"
+          },
+          "start_equity": {
+            "title": "Start Equity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "start_equity",
+          "end_equity",
+          "pnl",
+          "return_pct"
+        ],
+        "title": "SessionRow",
+        "type": "object"
+      },
       "SignalOut": {
         "properties": {
           "expires_at": {
@@ -1354,6 +1481,117 @@
         "title": "SystemStatus",
         "type": "object"
       },
+      "TradeList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TradeOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/TradeSummary"
+          }
+        },
+        "required": [
+          "items",
+          "summary"
+        ],
+        "title": "TradeList",
+        "type": "object"
+      },
+      "TradeOut": {
+        "properties": {
+          "avg_entry": {
+            "title": "Avg Entry",
+            "type": "string"
+          },
+          "avg_exit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Exit"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          },
+          "fees": {
+            "title": "Fees",
+            "type": "string"
+          },
+          "gross_pnl": {
+            "title": "Gross Pnl",
+            "type": "string"
+          },
+          "hold_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Minutes"
+          },
+          "net_pnl": {
+            "title": "Net Pnl",
+            "type": "string"
+          },
+          "opened_at": {
+            "format": "date-time",
+            "title": "Opened At",
+            "type": "string"
+          },
+          "qty": {
+            "title": "Qty",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_id": {
+            "title": "Strategy Id",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id",
+          "symbol",
+          "status",
+          "opened_at",
+          "closed_at",
+          "qty",
+          "avg_entry",
+          "avg_exit",
+          "gross_pnl",
+          "fees",
+          "net_pnl",
+          "hold_minutes"
+        ],
+        "title": "TradeOut",
+        "type": "object"
+      },
       "TradeStatsOut": {
         "properties": {
           "avg_loss": {
@@ -1432,6 +1670,34 @@
         "title": "TradeStatsOut",
         "type": "object"
       },
+      "TradeSummary": {
+        "properties": {
+          "fees": {
+            "title": "Fees",
+            "type": "string"
+          },
+          "net_pnl": {
+            "title": "Net Pnl",
+            "type": "string"
+          },
+          "trades": {
+            "title": "Trades",
+            "type": "integer"
+          },
+          "wins": {
+            "title": "Wins",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "trades",
+          "wins",
+          "net_pnl",
+          "fees"
+        ],
+        "title": "TradeSummary",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -1470,6 +1736,107 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "trading__api__routes__portfolio__FillOut": {
+        "properties": {
+          "execution_id": {
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "fees": {
+            "title": "Fees",
+            "type": "string"
+          },
+          "price": {
+            "title": "Price",
+            "type": "string"
+          },
+          "qty": {
+            "title": "Qty",
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "title": "Ts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "execution_id",
+          "ts",
+          "qty",
+          "price",
+          "fees"
+        ],
+        "title": "FillOut",
+        "type": "object"
+      },
+      "trading__api__routes__transactions__FillOut": {
+        "properties": {
+          "execution_id": {
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "fees": {
+            "title": "Fees",
+            "type": "string"
+          },
+          "notional": {
+            "title": "Notional",
+            "type": "string"
+          },
+          "order_status": {
+            "title": "Order Status",
+            "type": "string"
+          },
+          "price": {
+            "title": "Price",
+            "type": "string"
+          },
+          "qty": {
+            "title": "Qty",
+            "type": "string"
+          },
+          "side": {
+            "title": "Side",
+            "type": "string"
+          },
+          "slippage_estimate": {
+            "title": "Slippage Estimate",
+            "type": "string"
+          },
+          "strategies": {
+            "items": {
+              "$ref": "#/components/schemas/FillStrategy"
+            },
+            "title": "Strategies",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "title": "Ts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ts",
+          "symbol",
+          "side",
+          "qty",
+          "price",
+          "notional",
+          "fees",
+          "slippage_estimate",
+          "execution_id",
+          "order_status",
+          "strategies"
+        ],
+        "title": "FillOut",
         "type": "object"
       }
     }
@@ -2181,6 +2548,84 @@
         ]
       }
     },
+    "/v1/fills": {
+      "get": {
+        "operationId": "get_fills_v1_fills_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FillList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Fills",
+        "tags": [
+          "transactions"
+        ]
+      }
+    },
     "/v1/health/live": {
       "get": {
         "operationId": "live_v1_health_live_get",
@@ -2222,6 +2667,67 @@
         "summary": "Ready",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/v1/ledger": {
+      "get": {
+        "operationId": "get_ledger_v1_ledger_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Ledger",
+        "tags": [
+          "transactions"
         ]
       }
     },
@@ -2694,6 +3200,68 @@
         ]
       }
     },
+    "/v1/sessions": {
+      "get": {
+        "description": "Daily start/end equity (the end of a still-running day is its latest snapshot).",
+        "operationId": "get_sessions_v1_sessions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 60,
+              "maximum": 400,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Sessions",
+        "tags": [
+          "transactions"
+        ]
+      }
+    },
     "/v1/signals": {
       "get": {
         "operationId": "get_signals_v1_signals_get",
@@ -2981,6 +3549,85 @@
         "summary": "System Status",
         "tags": [
           "system"
+        ]
+      }
+    },
+    "/v1/trades": {
+      "get": {
+        "description": "Round trips per (strategy, symbol, UTC day), built from the fill attribution.",
+        "operationId": "get_trades_v1_trades_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 365,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradeList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Trades",
+        "tags": [
+          "transactions"
         ]
       }
     }

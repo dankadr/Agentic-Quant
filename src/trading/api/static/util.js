@@ -25,6 +25,8 @@ export function append(parent, ...children) { for (const c of children) if (c) p
 const ICONS = {
   overview: "M3 12h4l3-8 4 16 3-8h4",
   trading: "M3 17l6-6 4 4 8-8M15 7h6v6",
+  transactions: "M7 7h13M7 7l3-3M7 7l3 3M17 17H4M17 17l-3-3M17 17l-3 3",
+  history: "M3 3v18h18M7 14l4-4 3 3 5-6",
   strategies: "M12 2l9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 17l9 5 9-5",
   agents: "M12 8V4M8 4h8M5 8h14v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V8zM9 13h.01M15 13h.01M9 17h6",
   research: "M10 2v6L4 19a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-6-11V2M8 2h8",
