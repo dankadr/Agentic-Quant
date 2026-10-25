@@ -29,6 +29,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD_FILE: /run/secrets/db_superuser_password
     secrets: [db_superuser_password, db_owner_password, db_app_password]
+    ports:
+      - "127.0.0.1:5433:5432"  # loopback only: host-side research/CLI tools (never published wider)
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./deploy/postgres/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
