@@ -491,6 +491,9 @@ def collect_data(
     quotes: bool = typer.Option(True, help="Quotes are one request per symbol-minute (slow)."),
     workers: int = typer.Option(6, min=1, max=16, help="Parallel quote requests."),
     merge_to: Path | None = typer.Option(None, help="Also write a merged bars/quotes.csv here."),
+    strategy_symbols_only: bool = typer.Option(
+        False, help="Quotes only for symbols a strategy trades (bars still cover the universe)."
+    ),
 ) -> None:
     """Download many sessions of Alpaca (IEX) data. Resumable: re-run to continue after a stop."""
     from trading.data.alpaca_provider import ProviderError  # noqa: PLC0415
@@ -514,7 +517,16 @@ def collect_data(
 
     log(f"collecting {len(sessions)} sessions {sessions[0]}..{sessions[-1]} -> {out}")
     try:
-        counts = collect(provider, symbols, calendar, sessions, out, quotes=quotes, log=log)
+        quote_symbols = None
+        if strategy_symbols_only:
+            traded = {
+                s for cfg in config.strategies.values() for s in cfg.params.get("symbols", ())
+            }
+            quote_symbols = [s for s in symbols if s in traded]
+        counts = collect(
+            provider, symbols, calendar, sessions, out, quotes=quotes,
+            quote_symbols=quote_symbols, log=log,
+        )  # fmt: skip
     except ProviderError as exc:
         typer.echo(f"stopped: {exc} (re-run to resume)", err=True)
         raise typer.Exit(1) from None
