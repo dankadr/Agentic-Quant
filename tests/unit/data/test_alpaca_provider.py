@@ -202,3 +202,16 @@ def test_credentials_load_from_files(tmp_path: Path) -> None:
     )
     assert list(p.fetch_bars(["SPY"], START, END)) == []
     assert p.name == "alpaca-iex"
+
+
+def test_parallel_quote_fetching_returns_the_same_quotes_in_the_same_order() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        sym = req.url.params["symbols"]
+        t = req.url.params["start"][:16] + ":59Z"
+        return respond({"quotes": {sym: [{"t": t, "bp": 100.0, "ap": 100.02, "bs": 1, "as": 1}]}})
+
+    symbols = ["SPY", "QQQ", "IWM"]
+    sequential = list(provider(handler).fetch_quotes(symbols, START, END))
+    parallel = list(provider(handler, workers=4).fetch_quotes(symbols, START, END))
+    assert [(q.symbol, q.ts) for q in parallel] == [(q.symbol, q.ts) for q in sequential]
+    assert len(parallel) == 9

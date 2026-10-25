@@ -15,6 +15,7 @@ import json
 import re
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -63,11 +64,13 @@ class AlpacaDataProvider:
         feed: str = "iex",
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        workers: int = 1,
     ) -> None:
         parsed = urlparse(base_url)
         if parsed.scheme != "https" or parsed.hostname != DATA_HOST:
             raise ValueError(f"only https://{DATA_HOST} (market data) is allowed, got {base_url!r}")
         self._feed = feed
+        self._workers = max(1, workers)
         self._sleep = sleep
         self._client = httpx.Client(
             base_url=base_url,
@@ -171,24 +174,34 @@ class AlpacaDataProvider:
         Raw IEX quotes are ~10,000 ticks a minute for SPY alone, so one small request per
         symbol-minute (``limit=1``, newest first) is used instead of downloading ticks.
         """
+        tasks: list[tuple[str, datetime, datetime]] = []
         minute = start.replace(second=0, microsecond=0)
         while minute < end:
             window_end = min(minute + timedelta(minutes=1), end)
-            for symbol in symbols:
-                body = self._get(
-                    "/v2/stocks/quotes",
-                    {
-                        "symbols": symbol,
-                        "start": isoformat_z(max(minute, start)),
-                        "end": isoformat_z(window_end),
-                        "feed": self._feed,
-                        "limit": 1,
-                        "sort": "desc",
-                    },
-                )
-                for r in (body.get("quotes") or {}).get(symbol, []):
-                    yield self._quote(symbol, r)
+            tasks.extend((symbol, max(minute, start), window_end) for symbol in symbols)
             minute += timedelta(minutes=1)
+        if self._workers == 1:
+            for task in tasks:
+                yield from self._last_quote(*task)
+            return
+        with ThreadPoolExecutor(max_workers=self._workers) as pool:
+            for quotes in pool.map(lambda t: list(self._last_quote(*t)), tasks):
+                yield from quotes
+
+    def _last_quote(self, symbol: str, start: datetime, end: datetime) -> Iterator[Quote]:
+        body = self._get(
+            "/v2/stocks/quotes",
+            {
+                "symbols": symbol,
+                "start": isoformat_z(start),
+                "end": isoformat_z(end),
+                "feed": self._feed,
+                "limit": 1,
+                "sort": "desc",
+            },
+        )
+        for r in (body.get("quotes") or {}).get(symbol, []):
+            yield self._quote(symbol, r)
 
     def _quote(self, symbol: str, r: Mapping[str, Any]) -> Quote:
         try:
