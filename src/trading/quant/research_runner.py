@@ -105,6 +105,7 @@ def run_research(
     base_equity: Decimal,
     now: datetime,
     evaluate_holdout: bool = False,
+    strategy_version: str | None = None,
 ) -> ResearchOutcome:
     ordered = sorted(dates)
     held = [d.isoformat() for d in ordered[len(ordered) - holdout :]] if holdout else []
@@ -145,6 +146,7 @@ def run_research(
                 "space": {k: list(v) for k, v in space.items()},
                 "train": train,
                 "test": test,
+                "strategy_version": strategy_version,
             },
             data_range=data_range,
             metrics={
@@ -168,6 +170,7 @@ def run_research(
             params={
                 "base": dict(base_params),
                 "neighbors": {k: list(v) for k, v in neighbors.items()},
+                "strategy_version": strategy_version,
             },
             data_range=data_range,
             metrics={

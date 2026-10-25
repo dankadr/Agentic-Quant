@@ -88,3 +88,15 @@ def merge_days(root: Path, days: Sequence[date], target: Path) -> dict[str, int]
                     totals[key] += sum(1 for _ in source.open()) - 1
     totals["days"] = sum(1 for d in days if (root / d.isoformat() / "bars.csv").exists())
     return totals
+
+
+def merged_dates(directory: Path) -> list[date]:
+    """The distinct session dates present in a merged bars.csv."""
+    found: set[date] = set()
+    with (directory / "bars.csv").open() as handle:
+        handle.readline()
+        for line in handle:
+            parts = line.split(",", 2)
+            if len(parts) > 1 and parts[1][:10].count("-") == 2:
+                found.add(date.fromisoformat(parts[1][:10]))
+    return sorted(found)

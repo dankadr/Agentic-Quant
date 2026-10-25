@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import typer
 import uvicorn
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -111,11 +112,15 @@ def _calendar() -> XnysCalendar:
     return XnysCalendar(today - timedelta(days=30), today + timedelta(days=400))
 
 
-def _llm_client(settings: Settings, config: AppConfig) -> "LlmClient | None":
+def _llm_client(
+    settings: Settings, config: AppConfig, *, force: bool = False
+) -> "LlmClient | None":
     """The research-agent model client, if any agent is enabled and a key file is present."""
     from trading.agents.llm import LlmClient  # noqa: PLC0415
 
-    if not (config.agents.macro.enabled or config.agents.evaluator.enabled):
+    any_agent = config.agents.macro.enabled or config.agents.evaluator.enabled
+    any_agent = any_agent or config.agents.fundamental.enabled
+    if not (any_agent or force):
         return None
     key_file = settings.llm_api_key_file or Path("secrets/llm_api_key")
     if not (key_file.exists() and key_file.read_text().strip()):
@@ -278,6 +283,114 @@ def report(
     finally:
         engine.dispose()
     typer.echo(json.dumps(body, indent=2))
+
+
+@app.command()
+def research(
+    strategy: str = typer.Option(..., help="orb_v1 or vwap_v1."),
+    fixtures: Path = typer.Option(..., help="Merged bars.csv/quotes.csv (trading collect-data)."),
+    train: int = typer.Option(10, min=2),
+    test: int = typer.Option(5, min=1),
+    holdout: int = typer.Option(5, min=0),
+    minutes_per_day: int | None = typer.Option(None, min=1, help="Shorten sessions (debug)."),
+    evaluate_holdout: bool = typer.Option(False, help="Spend the single-use final holdout."),
+) -> None:
+    """Walk-forward + sensitivity for one strategy. Backtests run on TRADING_SCRATCH_DATABASE_URL
+    (wiped!); experiments are recorded in TRADING_DATABASE_URL."""
+    from trading.data.collect import merged_dates  # noqa: PLC0415
+    from trading.quant.backtest import backtest_full_run  # noqa: PLC0415
+    from trading.quant.research_config import load_research_spaces  # noqa: PLC0415
+    from trading.quant.research_runner import HoldoutAlreadyUsed, run_research  # noqa: PLC0415
+
+    settings = Settings()
+    config = load_config(settings.config_dir)
+    spaces = load_research_spaces(settings.config_dir)
+    if strategy not in spaces or strategy not in config.strategies:
+        raise typer.BadParameter(f"no research grid for {strategy!r} in configs/research.yaml")
+    if not settings.scratch_database_url or settings.scratch_database_url == (
+        settings.database_url or settings.resolved_database_url()
+    ):
+        typer.echo("set TRADING_SCRATCH_DATABASE_URL to a SEPARATE scratch database", err=True)
+        raise typer.Exit(1)
+    space = spaces[strategy]
+    params = config.strategies[strategy].params
+    base = {k: params[k] for k in space}
+    neighbors = {k: [v for v in vals if str(v) != str(base[k])] for k, vals in space.items()}
+    dates = merged_dates(fixtures)
+    scratch, live = (
+        make_engine(settings.scratch_database_url),
+        make_engine(settings.resolved_database_url()),
+    )
+    try:
+        with make_session_factory(live)() as session:
+            version = session.execute(
+                text("SELECT version FROM strategies WHERE id = :s"), {"s": strategy}
+            ).scalar()
+        outcome = run_research(
+            make_session_factory(live),
+            backtest_full_run(
+                make_session_factory(scratch),
+                fixtures_dir=fixtures,
+                config=config,
+                strategy_id=strategy,
+                dates=dates,
+                minutes_per_day=minutes_per_day,
+            ),
+            strategy_id=strategy,
+            dates=dates,
+            base_params=base,
+            space=space,
+            neighbors=neighbors,
+            train=train,
+            test=test,
+            holdout=holdout,
+            base_equity=config.system.starting_cash_usd,
+            now=SystemClock().now(),
+            evaluate_holdout=evaluate_holdout,
+            strategy_version=version,
+        )
+    except HoldoutAlreadyUsed as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    finally:
+        scratch.dispose()
+        live.dispose()
+    typer.echo(
+        json.dumps(
+            {
+                "walk_forward": outcome.walk_forward.verdict,
+                "oos_net_pnl": str(outcome.walk_forward.out_of_sample_net_pnl),
+                "sensitivity_robust": outcome.sensitivity.robust,
+                "holdout_net_pnl": str(outcome.holdout.net_pnl) if outcome.holdout else None,
+            }
+        )
+    )
+
+
+@app.command()
+def technical(
+    strategy: str = typer.Option(..., help="orb_v1 or vwap_v1."),
+) -> None:
+    """Ask the technical agent to review the latest research for a strategy (may file a proposal
+    that a human must still approve)."""
+    from trading.agents.technical import run_technical_agent  # noqa: PLC0415
+
+    settings = Settings()
+    config = load_config(settings.config_dir)
+    llm = _llm_client(settings, config, force=True)
+    if llm is None:
+        typer.echo("no LLM key (secrets/llm_api_key)", err=True)
+        raise typer.Exit(1)
+    engine = make_engine(settings.resolved_database_url())
+    try:
+        status = run_technical_agent(
+            make_session_factory(engine), llm, config=config, strategy_id=strategy,
+            now=SystemClock().now(),
+        )  # fmt: skip
+    finally:
+        engine.dispose()
+        llm.close()
+    typer.echo(status)
 
 
 @app.command("alpaca-check")

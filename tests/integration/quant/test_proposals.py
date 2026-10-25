@@ -155,3 +155,18 @@ def test_every_step_is_audited(db: Session) -> None:
 def test_cross_field_strategy_constraints_are_invalid_not_a_server_error(db: Session) -> None:
     with pytest.raises(ProposalInvalid):
         _propose(db, {"z_stop": "1.0"}, strategy_id="vwap_v1")  # z_stop must exceed z_entry
+
+
+def test_a_new_proposal_only_supersedes_the_same_proposers_pending_one(db: Session) -> None:
+    """Security review: one proposer (e.g. an agent) must not silently discard another's work."""
+    human = _propose(db, {"target_r": "2.0"}, proposed_by="alice")
+    agent = _propose(db, {"target_r": "1.8"}, proposed_by="agent:technical")
+    db.refresh(human)
+    assert (human.status, agent.status) == ("PENDING_REVIEW", "PENDING_REVIEW")
+    newer_agent = _propose(db, {"target_r": "1.9"}, proposed_by="agent:technical")
+    db.refresh(agent)
+    assert (agent.status, newer_agent.status, human.status) == (
+        "SUPERSEDED",
+        "PENDING_REVIEW",
+        "PENDING_REVIEW",
+    )

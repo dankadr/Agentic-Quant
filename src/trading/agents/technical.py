@@ -23,7 +23,7 @@ from trading.agents.macro import JsonLlm
 from trading.core.config import AppConfig
 from trading.core.hashing import canonical_json, content_hash
 from trading.core.time import isoformat_z
-from trading.db.models.research import AgentRun, Experiment, Strategy
+from trading.db.models.research import AgentRun, Experiment, Strategy, StrategyConfigProposal
 from trading.monitoring.logging import get_logger
 from trading.quant.proposals import ProposalError, propose_config
 
@@ -76,24 +76,41 @@ def _latest(session: Session, strategy_id: str, kind: str) -> Experiment | None:
     ).first()
 
 
+def _same(a: Any, b: Any) -> bool:
+    """Typed equality: "2.0" is not 2.0 and "60" is not 60."""
+    return canonical_json(a) == canonical_json(b)
+
+
 def _gate(
-    out: TechnicalOutput, wf: Experiment, sens: Experiment, current: dict[str, Any]
+    out: TechnicalOutput,
+    wf: Experiment,
+    sens: Experiment,
+    current: dict[str, Any],
+    version: str,
 ) -> str | None:
     """None if the proposal may be filed, else the reason it may not."""
     if out.proposal is None:
         return "no_proposal"
-    if wf.metrics_json.get("verdict") != "SUPPORTED":
+    if wf.status != "COMPLETED" or wf.metrics_json.get("verdict") != "SUPPORTED":
         return "walk_forward_not_supported"
-    if not sens.metrics_json.get("robust"):
+    if sens.status != "COMPLETED" or not sens.metrics_json.get("robust"):
         return "not_robust"
+    # The evidence must be about the configuration that is live now.
+    for experiment in (wf, sens):
+        seen_version = experiment.params_json.get("strategy_version")
+        if seen_version is not None and seen_version != version:
+            return "evidence_for_different_config"
+        base: dict[str, Any] = experiment.params_json.get("base", {})
+        if any(not _same(value, current.get(key)) for key, value in base.items()):
+            return "evidence_for_different_config"
     space: dict[str, list[Any]] = wf.params_json.get("space", {})
     changed = False
     for key, value in out.proposal.parameters.items():
         if key not in space:
             return "parameter_not_researched"
-        if str(value) not in {str(v) for v in space[key]}:
+        if not any(_same(value, tested) for tested in space[key]):
             return "value_outside_tested_grid"
-        changed = changed or str(value) != str(current.get(key))
+        changed = changed or not _same(value, current.get(key))
     return None if changed else "no_change"
 
 
@@ -157,8 +174,19 @@ def run_technical_agent(
         _log.warning("technical_llm_failed", error=str(exc))
         return finish("FAILED", {"error": str(exc), "input_hash": digest})
     out = result.value
-    reason = _gate(out, wf_copy, sens_copy, current_params)
+    reason = _gate(out, wf_copy, sens_copy, current_params, base_version)
     proposal_id: str | None = None
+    if reason is None:
+        with session_factory() as session:
+            others = session.scalars(
+                select(StrategyConfigProposal.id).where(
+                    StrategyConfigProposal.strategy_id == strategy_id,
+                    StrategyConfigProposal.status == "PENDING_REVIEW",
+                    StrategyConfigProposal.proposed_by != PROPOSER,
+                )
+            ).first()
+        if others is not None:
+            reason = "human_proposal_pending"
     if reason is None and out.proposal is not None:
         try:
             with session_factory.begin() as session:

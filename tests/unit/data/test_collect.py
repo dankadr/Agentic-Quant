@@ -94,3 +94,12 @@ def test_merged_days_load_through_the_replay_provider(tmp_path: Path) -> None:
     assert len(list(provider.fetch_bars(["SPY"], start, end))) == 2
     assert len(list(provider.fetch_quotes(["SPY"], start, end))) == 2
     assert (merged / "bars.csv").read_text().count("symbol,ts") == 1  # one header
+
+
+def test_merged_dates_lists_the_sessions_in_a_fixture_file(tmp_path: Path) -> None:
+    from trading.data.collect import merged_dates
+
+    days = [date(2026, 10, 22), date(2026, 10, 23)]
+    collect(FakeProvider(), ["SPY"], CAL, days, tmp_path / "raw", quotes=False)  # type: ignore[arg-type]
+    merge_days(tmp_path / "raw", days, tmp_path / "merged")
+    assert merged_dates(tmp_path / "merged") == days

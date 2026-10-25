@@ -159,3 +159,44 @@ def test_model_failures_are_recorded_and_file_nothing(
     assert run(session_factory, FakeLlm(LlmError("down"))) == "FAILED"
     assert run(session_factory, FakeLlm(LlmInvalidOutput("junk"))) == "REJECTED_INVALID"
     assert proposals(db) == []
+
+
+def test_evidence_about_a_different_configuration_is_not_used(
+    db: Session, session_factory: sessionmaker[Session]
+) -> None:
+    """Security review: research done on other base parameters says nothing about today's config."""
+    experiments(db)
+    db.execute(
+        text(
+            "update strategies set params_json = jsonb_set(params_json, '{target_r}', '\"1.2\"') where id = 'orb_v1'"
+        )
+    )
+    db.commit()
+    assert run(session_factory, FakeLlm(output({"target_r": "2.0"}))) == "COMPLETED"
+    assert proposals(db) == []
+    assert result(db)["reason"] == "evidence_for_different_config"
+
+
+def test_a_value_of_the_wrong_type_is_not_in_the_tested_grid(
+    db: Session, session_factory: sessionmaker[Session]
+) -> None:
+    experiments(db)
+    assert (
+        run(session_factory, FakeLlm(output({"target_r": 2}))) == "COMPLETED"
+    )  # int 2 is not the string "2.0"
+    assert proposals(db) == []
+    assert result(db)["reason"] == "value_outside_tested_grid"
+
+
+def test_the_agent_never_supersedes_or_competes_with_a_humans_pending_proposal(
+    db: Session, session_factory: sessionmaker[Session]
+) -> None:
+    from trading.quant.proposals import propose_config
+
+    experiments(db)
+    propose_config(db, strategy_id="orb_v1", base_version="1.0.0", parameters={"opening_range_minutes": 20},
+                   rationale="human idea", proposed_by="alice", universe={u.symbol for u in CFG.universe}, now=T0)  # fmt: skip
+    db.commit()
+    assert run(session_factory, FakeLlm(output({"target_r": "2.0"}))) == "COMPLETED"
+    assert proposals(db) == [("PENDING_REVIEW", "alice", {"opening_range_minutes": 20})]
+    assert result(db)["reason"] == "human_proposal_pending"
