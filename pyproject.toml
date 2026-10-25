@@ -27,6 +27,7 @@ dev = [
   "pytest>=8.3",
   "pytest-cov>=6.0",
   "hypothesis>=6.120",
+  "playwright>=1.45",
   "testcontainers[postgres]>=4.9",
   "ruff>=0.8",
   "mypy>=1.13",
@@ -74,5 +75,6 @@ testpaths = ["tests"]
 markers = [
   "integration: needs a PostgreSQL database",
   "smoke: drives docker compose (excluded by default)",
+  "e2e: drives the dashboard in a real browser (skipped if Chromium is missing)",
 ]
 addopts = "-m 'not smoke' -q"

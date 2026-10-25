@@ -1,75 +1,61 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Paper Trading Dashboard</title>
+  <meta name="color-scheme" content="dark light">
+  <title>Paper Trading</title>
   <link rel="stylesheet" href="/dashboard/style.css">
 </head>
 <body>
-  <header>
-    <h1>Paper Trading</h1>
-    <div id="badges"></div>
+  <a class="skip" href="#view">Skip to content</a>
+
+  <header class="topbar" id="topbar" hidden>
+    <div class="brand"><span class="logo" aria-hidden="true"></span><strong>Paper Trading</strong></div>
+    <div id="badges" class="badges" aria-label="System status"></div>
     <div class="spacer"></div>
-    <span id="updated" class="muted"></span>
-    <button id="pause" type="button" title="Pause new entries (needs an operator key)">Pause trading</button>
-    <button id="logout" type="button">Sign out</button>
+    <div class="controls">
+    <label class="datepick">
+      <span class="sr-only">Session date</span>
+      <input id="date" type="date">
+    </label>
+    <button id="live" type="button" class="btn ghost" title="Back to the live session">Live</button>
+    <span id="updated" class="muted small" role="status" aria-live="polite"></span>
+    <button id="theme" type="button" class="btn icon" aria-label="Toggle light and dark theme"></button>
+    <button id="pause" type="button" class="btn warn" title="Pause new entries (operator key required)">Pause</button>
+    <button id="logout" type="button" class="btn ghost">Sign out</button>
+    </div>
   </header>
 
-  <section id="login" hidden>
-    <h2>API key</h2>
-    <p class="muted">Paste a viewer or operator key. It stays in this tab only (sessionStorage).</p>
-    <form id="login-form">
-      <input id="key" type="password" autocomplete="off" placeholder="trk_..." required>
-      <button type="submit">Connect</button>
-    </form>
-    <p id="login-error" class="bad"></p>
+  <nav class="nav" id="nav" aria-label="Sections" hidden></nav>
+
+  <main id="view" tabindex="-1" hidden></main>
+
+  <section id="login" class="login" hidden>
+    <div class="login-card">
+      <h1>Paper Trading</h1>
+      <p class="muted">Local dashboard. Paste an API key: a viewer key can look, an operator key can also pause trading and review proposals. It stays in this tab only.</p>
+      <form id="login-form">
+        <label for="key">API key</label>
+        <input id="key" type="password" autocomplete="off" placeholder="trk_..." required>
+        <button type="submit" class="btn primary">Connect</button>
+      </form>
+      <p id="login-error" class="bad" role="alert"></p>
+    </div>
   </section>
 
-  <main id="main" hidden>
-    <section class="kpis" id="kpis"></section>
+  <dialog id="dialog" aria-labelledby="dialog-title">
+    <form method="dialog" id="dialog-form">
+      <h2 id="dialog-title"></h2>
+      <div id="dialog-body"></div>
+      <div class="dialog-actions">
+        <button type="button" class="btn ghost" id="dialog-cancel">Cancel</button>
+        <button type="submit" class="btn primary" id="dialog-ok">Confirm</button>
+      </div>
+    </form>
+  </dialog>
 
-    <section class="card wide">
-      <h2>Equity (today)</h2>
-      <div id="equity-chart"></div>
-    </section>
-
-    <section class="card">
-      <h2>Data health</h2>
-      <div id="health"></div>
-      <div id="coverage"></div>
-    </section>
-
-    <section class="card">
-      <h2>Strategies</h2>
-      <div id="strategies"></div>
-    </section>
-
-    <section class="card">
-      <h2>Positions</h2>
-      <div id="positions"></div>
-    </section>
-
-    <section class="card wide">
-      <h2>Recent orders</h2>
-      <div id="orders"></div>
-    </section>
-
-    <section class="card wide">
-      <h2>Latest signals</h2>
-      <div id="signals"></div>
-    </section>
-
-    <section class="card wide">
-      <h2>Agents</h2>
-      <div id="agents"></div>
-    </section>
-
-    <section class="card">
-      <h2>Costs &amp; risk</h2>
-      <div id="costs"></div>
-    </section>
-  </main>
-  <script src="/dashboard/app.js"></script>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <script type="module" src="/dashboard/app.js"></script>
 </body>
 </html>

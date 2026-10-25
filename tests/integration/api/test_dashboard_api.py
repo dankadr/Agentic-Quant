@@ -133,22 +133,37 @@ def test_dashboard_page_is_served_with_a_strict_csp(client: TestClient) -> None:
 
 def test_dashboard_code_never_renders_untrusted_text_as_html() -> None:
     """Agent output and news headlines are untrusted: only textContent may ever be used."""
-    js = (STATIC / "app.js").read_text()
-    html = (STATIC / "index.html").read_text()
-    for banned in (
-        "innerHTML",
-        "outerHTML",
-        "insertAdjacentHTML",
-        "document.write",
-        "eval(",
-        "new Function",
-    ):
-        assert banned not in js, banned
+    files = {
+        f.name: f.read_text() for f in STATIC.iterdir() if f.suffix in (".js", ".html", ".css")
+    }
+    assert {
+        "index.html",
+        "app.js",
+        "views.js",
+        "charts.js",
+        "util.js",
+        "api.js",
+        "style.css",
+    } <= set(files)
+    for name, body in files.items():
+        if name.endswith(".js"):
+            for banned in (
+                "innerHTML",
+                "outerHTML",
+                "insertAdjacentHTML",
+                "document.write",
+                "eval(",
+                "new Function",
+                'setAttribute("style"',
+            ):
+                assert banned not in body, (name, banned)
+    html = files["index.html"]
     assert not re.search(r"<script(?![^>]*\bsrc=)", html)  # no inline scripts
     assert not re.search(r"\son\w+\s*=", html)  # no inline event handlers
+    assert 'style="' not in html  # the CSP forbids inline style attributes
     # no external calls or CDNs; the SVG namespace is an identifier, not a request
-    urls = re.findall(r"https?://[^\s\"')]+", (js + html).replace("http://www.w3.org/2000/svg", ""))
-    assert urls == []
+    blob = "\n".join(files.values()).replace("http://www.w3.org/2000/svg", "")
+    assert re.findall(r"https?://[^\s\"')]+", blob) == []
 
 
 # ---- data coverage and research ------------------------------------------------------------------

@@ -108,7 +108,7 @@ def run_research(
     strategy_version: str | None = None,
 ) -> ResearchOutcome:
     ordered = sorted(dates)
-    held = [d.isoformat() for d in ordered[len(ordered) - holdout :]] if holdout else []
+    held = [d.isoformat() for d in ordered[max(0, len(ordered) - holdout) :]] if holdout else []
     if evaluate_holdout:
         if not held:
             raise ValueError("no holdout configured")
@@ -121,7 +121,7 @@ def run_research(
     wf = walk_forward(
         evaluator, ordered, base_params, space, train=train, test=test, holdout=holdout
     )
-    searched = ordered[: len(ordered) - holdout]
+    searched = ordered[: max(0, len(ordered) - holdout)]
     sens = sensitivity(evaluator, searched, base_params, neighbors)
     data_range = {
         "first": ordered[0].isoformat(),
