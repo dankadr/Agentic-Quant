@@ -11,6 +11,7 @@ from tests.factories import T0, make_snapshot
 from tests.integration.portfolio.helpers import (
     NEXT_DAY,
     broker_fill,
+    get_instrument,
     new_order,
     open_account,
 )
