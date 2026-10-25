@@ -5,7 +5,7 @@ agents:
     base_url: https://chat.daria-e.com/v1   # OpenAI-compatible (Unsloth Studio)
     model: unsloth/Qwen3.8-27B-GGUF
     timeout_seconds: 120
-    max_tokens: 1200
+    max_tokens: 4000
   macro:
     enabled: true
     # true  = spec behaviour: a missing/stale macro view blocks NEW entries of dependent strategies.
