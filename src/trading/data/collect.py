@@ -38,6 +38,7 @@ def collect(
     root: Path,
     *,
     quotes: bool = True,
+    quote_symbols: Sequence[str] | None = None,
     log: Callable[[str], None] = lambda _msg: None,
 ) -> dict[str, int]:
     counts = {"bars_days": 0, "quote_days": 0, "skipped": 0}
@@ -62,7 +63,9 @@ def collect(
             if path.exists():
                 counts["skipped"] += 1
                 continue
-            n = write_quotes(path, provider.fetch_quotes(symbols, info.open_at, info.close_at))
+            n = write_quotes(
+                path, provider.fetch_quotes(quote_symbols or symbols, info.open_at, info.close_at)
+            )
             counts["quote_days"] += 1
             log(f"{info.session_date} quotes: {n}")
     return counts

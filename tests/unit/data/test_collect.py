@@ -103,3 +103,23 @@ def test_merged_dates_lists_the_sessions_in_a_fixture_file(tmp_path: Path) -> No
     collect(FakeProvider(), ["SPY"], CAL, days, tmp_path / "raw", quotes=False)  # type: ignore[arg-type]
     merge_days(tmp_path / "raw", days, tmp_path / "merged")
     assert merged_dates(tmp_path / "merged") == days
+
+
+def test_quotes_can_be_limited_to_a_subset_of_symbols(tmp_path: Path) -> None:
+    seen: list[list[str]] = []
+
+    class Spy(FakeProvider):
+        def fetch_quotes(self, symbols, start, end):  # type: ignore[no-untyped-def]
+            seen.append(list(symbols))
+            return super().fetch_quotes(symbols, start, end)
+
+    collect(
+        Spy(),
+        ["SPY", "QQQ", "TQQQ"],
+        CAL,
+        [date(2026, 10, 23)],
+        tmp_path,
+        quote_symbols=["SPY", "QQQ"],
+    )  # type: ignore[arg-type]
+    assert seen == [["SPY", "QQQ"]]
+    assert "TQQQ" in (tmp_path / "2026-10-23" / "bars.csv").read_text()  # bars keep every symbol
