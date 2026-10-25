@@ -24,6 +24,13 @@ function fmtMoney(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(value);
 }
+// "$1.00" / "-$0.29" (never "$-0.29")
+function usd(value) {
+  if (value === null || value === undefined) return "-";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  return (n < 0 ? "-$" : "$") + fmtMoney(Math.abs(n));
+}
 function fmtPct(value) {
   if (value === null || value === undefined) return "-";
   const n = Number(value) * 100;
@@ -104,17 +111,17 @@ function renderKpis(portfolio, report) {
     box.append(k);
   };
   if (portfolio) {
-    add("Equity", "$" + fmtMoney(portfolio.equity));
-    add("Cash", "$" + fmtMoney(portfolio.cash));
-    add("Buying power", "$" + fmtMoney(portfolio.buying_power));
-    add("Exposure", "$" + fmtMoney(portfolio.exposure));
-    add("Realized P&L", "$" + fmtMoney(portfolio.realized_pnl), signClass(portfolio.realized_pnl));
-    add("Unrealized P&L", "$" + fmtMoney(portfolio.unrealized_pnl), signClass(portfolio.unrealized_pnl));
+    add("Equity", usd(portfolio.equity));
+    add("Cash", usd(portfolio.cash));
+    add("Buying power", usd(portfolio.buying_power));
+    add("Exposure", usd(portfolio.exposure));
+    add("Realized P&L", usd(portfolio.realized_pnl), signClass(portfolio.realized_pnl));
+    add("Unrealized P&L", usd(portfolio.unrealized_pnl), signClass(portfolio.unrealized_pnl));
   } else {
     add("Portfolio", "no snapshot yet");
   }
   if (report && report.equity && report.equity.pnl !== null) {
-    add("Day P&L", "$" + fmtMoney(report.equity.pnl), signClass(report.equity.pnl));
+    add("Day P&L", usd(report.equity.pnl), signClass(report.equity.pnl));
     if (report.benchmark && report.benchmark.return_pct !== null) add("SPY today", fmtPct(report.benchmark.return_pct), signClass(report.benchmark.return_pct));
   }
 }
@@ -170,7 +177,7 @@ function renderStrategies(strategies, report) {
     { label: "Strategy", get: (r) => r.id },
     { label: "Ver", get: (r) => r.version },
     { label: "On", get: (r) => (r.enabled ? "yes" : "no") },
-    { label: "Budget", num: true, get: (r) => "$" + fmtMoney(r.capital_budget) },
+    { label: "Budget", num: true, get: (r) => usd(r.capital_budget) },
     { label: "Signals", num: true, get: (r) => (r.today ? Object.values(r.today.signals).reduce((a, b) => a + b, 0) : 0) },
     { label: "P&L", num: true, get: (r) => (r.today ? fmtMoney(r.today.net_pnl) : "-"), cls: (r) => (r.today ? signClass(r.today.net_pnl) : "") },
   ], rows));
@@ -206,7 +213,7 @@ function renderSignals(items) {
     { label: "Strategy", get: (r) => r.strategy_id },
     { label: "Symbol", get: (r) => r.symbol },
     { label: "Side", get: (r) => r.side, cls: (r) => (r.side === "BUY" ? "good" : "bad") },
-    { label: "Notional", num: true, get: (r) => "$" + fmtMoney(r.target_notional) },
+    { label: "Notional", num: true, get: (r) => usd(r.target_notional) },
     { label: "Why", get: (r) => (r.reason_codes || []).join(", ") },
     { label: "Status", get: (r) => r.status },
   ], items || [], "no signals yet"));
