@@ -5,10 +5,11 @@ import pytest
 from trading.core.config import AgentsConfig, load_config
 
 
-def test_agents_are_configured_but_disabled_by_default() -> None:
+def test_shipped_agents_config_is_valid() -> None:
     cfg = load_config(Path("configs"))
-    assert cfg.agents.macro.enabled is False
-    assert cfg.agents.evaluator.enabled is False
+    assert cfg.agents.macro.enabled is True
+    assert cfg.agents.macro.required is False  # PoC choice, see configs/agents.yaml
+    assert cfg.agents.evaluator.enabled is True
     assert cfg.agents.llm.base_url.startswith("https://")
     assert set(cfg.agents.macro.dependent_strategies) <= set(cfg.strategies)
 

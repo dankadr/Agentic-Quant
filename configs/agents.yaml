@@ -1,5 +1,5 @@
 # Research agents (LLM). They only PROPOSE: nothing here can place orders, change risk limits or
-# switch mode. Disabled until an LLM key is provisioned (secrets/llm_api_key).
+# switch mode. They run only while secrets/llm_api_key is present.
 agents:
   llm:
     base_url: https://chat.daria-e.com/v1   # OpenAI-compatible (Unsloth Studio)
@@ -7,13 +7,15 @@ agents:
     timeout_seconds: 120
     max_tokens: 1200
   macro:
-    enabled: false
+    enabled: true
     # true  = spec behaviour: a missing/stale macro view blocks NEW entries of dependent strategies.
     # false = a missing/stale view is ignored (multiplier 1), but is recorded.
-    required: true
+    # PoC: false, so an unloaded/unreachable model does not silently stop all trading. Flip to true
+    # (spec behaviour) once the endpoint has proven reliable.
+    required: false
     ttl_minutes: 60
     run_every_minutes: 30
     first_run_after_open_minutes: 16     # after the 15-minute opening range
     dependent_strategies: [orb_v1, vwap_v1]
   evaluator:
-    enabled: false
+    enabled: true

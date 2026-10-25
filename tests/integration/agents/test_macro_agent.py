@@ -213,6 +213,7 @@ def test_job_wrappers_respect_enablement_missing_llm_and_staleness(
 ) -> None:
     from trading.agents.jobs import macro_job
     from trading.core.clock import ManualClock
+    from trading.core.config import AgentsConfig
 
     clock = ManualClock(NOW)
     payload = {"at": (NOW - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ")}
@@ -224,7 +225,7 @@ def test_job_wrappers_respect_enablement_missing_llm_and_staleness(
     macro_job(
         session_factory,
         FakeLlm(output()),
-        config=CFG,
+        config=CFG.model_copy(update={"agents": AgentsConfig()}),
         calendar=calendar,
         provider_name="replay",
         clock=clock,
