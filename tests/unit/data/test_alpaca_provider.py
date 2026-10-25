@@ -215,3 +215,19 @@ def test_parallel_quote_fetching_returns_the_same_quotes_in_the_same_order() -> 
     parallel = list(provider(handler, workers=4).fetch_quotes(symbols, START, END))
     assert [(q.symbol, q.ts) for q in parallel] == [(q.symbol, q.ts) for q in sequential]
     assert len(parallel) == 9
+
+
+def test_rate_limits_are_waited_out_longer_than_server_errors() -> None:
+    sleeps: list[float] = []
+    calls = {"n": 0}
+
+    def limited(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] <= 6:
+            return httpx.Response(429, headers={"Retry-After": "3"}, content=b"{}")
+        return respond({"bars": {"SPY": [bar("2026-10-19T13:30:00Z")]}})
+
+    p = AlpacaDataProvider(KEY, SECRET, transport=httpx.MockTransport(limited), sleep=sleeps.append)
+    assert len(list(p.fetch_bars(["SPY"], START, END))) == 1
+    assert calls["n"] == 7
+    assert all(s >= 3 for s in sleeps)  # honours Retry-After

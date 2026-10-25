@@ -36,6 +36,7 @@ DATA_HOST = "data.alpaca.markets"
 PROVIDER_NAME = "alpaca-iex"
 PAGE_LIMIT = 10000
 MAX_RETRIES = 3
+MAX_RATE_LIMIT_RETRIES = 12
 _FRACTION = re.compile(r"(\.\d{6})\d+")
 
 
@@ -95,30 +96,38 @@ class AlpacaDataProvider:
 
     def _get(self, path: str, params: Mapping[str, Any]) -> dict[str, Any]:
         last: str = ""
-        for attempt in range(MAX_RETRIES + 1):
+        failures = rate_limits = 0
+        while True:
+            wait = 0.0
             try:
                 response = self._client.get(path, params=params)
             except httpx.TransportError as exc:
                 last = f"network error: {type(exc).__name__}"
+                failures += 1
+                wait = 0.5 * 2 ** (failures - 1)
             else:
-                if response.status_code in (401, 403):
-                    raise ProviderAuthError(
-                        f"alpaca rejected the credentials (HTTP {response.status_code})"
-                    )
-                if response.status_code == 429 or response.status_code >= 500:
-                    last = f"HTTP {response.status_code}"
-                elif response.status_code != 200:
-                    raise ProviderError(
-                        f"alpaca request failed (HTTP {response.status_code}) for {path}"
-                    )
+                code = response.status_code
+                if code in (401, 403):
+                    raise ProviderAuthError(f"alpaca rejected the credentials (HTTP {code})")
+                if code == 429:
+                    last = "HTTP 429"
+                    rate_limits += 1
+                    retry_after = response.headers.get("Retry-After", "")
+                    hinted = float(retry_after) if retry_after.replace(".", "", 1).isdigit() else 0.0
+                    wait = max(hinted, min(2.0 * 2 ** (rate_limits - 1), 30.0))
+                elif code >= 500:
+                    last = f"HTTP {code}"
+                    failures += 1
+                    wait = 0.5 * 2 ** (failures - 1)
+                elif code != 200:
+                    raise ProviderError(f"alpaca request failed (HTTP {code}) for {path}")
                 else:
                     decoded: dict[str, Any] = json.loads(response.content, parse_float=Decimal)
                     return decoded
-            if attempt < MAX_RETRIES:
-                self._sleep(0.5 * 2**attempt)
-        raise ProviderError(
-            f"alpaca unavailable after {MAX_RETRIES + 1} attempts ({last}) for {path}"
-        )
+            if failures > MAX_RETRIES or rate_limits > MAX_RATE_LIMIT_RETRIES:
+                attempts = failures + rate_limits
+                raise ProviderError(f"alpaca unavailable after {attempts} attempts ({last}) for {path}")
+            self._sleep(wait)
 
     def _pages(
         self, path: str, key: str, symbols: Sequence[str], start: datetime, end: datetime

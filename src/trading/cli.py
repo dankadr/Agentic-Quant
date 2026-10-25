@@ -367,7 +367,9 @@ def collect_data(
     config = load_config(settings.config_dir)
     symbols = [u.symbol for u in config.universe]
     now = SystemClock().now()
-    calendar = XnysCalendar(now.date() - timedelta(days=days * 2 + 30), now.date())
+    calendar = XnysCalendar(
+        now.date() - timedelta(days=days * 2 + 30), now.date() + timedelta(days=14)
+    )
     sessions = recent_sessions(calendar, as_of=now, count=days)
 
     def log(message: str) -> None:
