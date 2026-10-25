@@ -1,7 +1,9 @@
 """CSV-backed provider for deterministic replay. Timestamps must carry a UTC offset."""
 
 import csv
+from bisect import bisect_left
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -17,10 +19,67 @@ _QUOTE_COLUMNS = ("symbol", "ts", "bid", "ask")
 _ACTION_COLUMNS = ("symbol", "action_type", "ex_date", "announced_at")
 
 
+@dataclass
+class _Table:
+    """A CSV file parsed once. ``ts`` is None (with ``error`` set) for a bad timestamp; such a row
+    only raises if its symbol is actually requested, exactly as an uncached read would."""
+
+    rows: list[tuple[str, datetime | None, str | None, dict[str, str], str]]
+    times: list[datetime] | None  # set only when every ts parsed and the file is in time order
+
+
 class CsvReplayProvider:
     def __init__(self, root: Path, name: str = "replay") -> None:
         self._root = root
         self.name = name
+        self._cache: dict[str, tuple[tuple[int, int], _Table]] = {}
+
+    def _table(self, filename: str, required: Sequence[str]) -> _Table:
+        path = self._root / filename
+        if not path.exists():
+            return _Table([], [])
+        stat = path.stat()
+        stamp = (stat.st_size, stat.st_mtime_ns)
+        cached = self._cache.get(filename)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        rows: list[tuple[str, datetime | None, str | None, dict[str, str], str]] = []
+        ordered = True
+        previous: datetime | None = None
+        for where, row in self._rows(filename, required):
+            try:
+                ts: datetime | None = self._ts(row["ts"], where)
+                error = None
+            except DataFormatError as exc:
+                ts, error = None, str(exc)
+            if ts is None or (previous is not None and ts < previous):
+                ordered = False
+            previous = ts if ts is not None else previous
+            rows.append((row["symbol"], ts, error, row, where))
+        table = _Table(rows, [r[1] for r in rows] if ordered else None)  # type: ignore[misc]
+        self._cache[filename] = (stamp, table)
+        return table
+
+    def _window(
+        self,
+        filename: str,
+        required: Sequence[str],
+        wanted: set[str],
+        start: datetime,
+        end: datetime,
+    ) -> Iterator[tuple[datetime, dict[str, str], str]]:
+        table = self._table(filename, required)
+        lo, hi = 0, len(table.rows)
+        if table.times is not None:  # time-ordered file: jump straight to the window
+            lo, hi = bisect_left(table.times, start), bisect_left(table.times, end)
+        for symbol, ts, error, row, where in table.rows[lo:hi]:
+            if symbol not in wanted:
+                continue
+            if error is not None:
+                raise DataFormatError(error)
+            if ts is None or not start <= ts < end:
+                continue
+            yield ts, row, where
 
     def _rows(self, filename: str, required: Sequence[str]) -> Iterator[tuple[str, dict[str, str]]]:
         path = self._root / filename
@@ -64,13 +123,7 @@ class CsvReplayProvider:
         return self._dec(value, where, column) if value else None
 
     def fetch_bars(self, symbols: Sequence[str], start: datetime, end: datetime) -> Iterator[Bar]:
-        wanted = set(symbols)
-        for where, row in self._rows("bars.csv", _BAR_COLUMNS):
-            if row["symbol"] not in wanted:
-                continue
-            ts = self._ts(row["ts"], where)
-            if not start <= ts < end:
-                continue
+        for ts, row, where in self._window("bars.csv", _BAR_COLUMNS, set(symbols), start, end):
             yield Bar(
                 symbol=row["symbol"],
                 interval="1m",
@@ -87,13 +140,7 @@ class CsvReplayProvider:
     def fetch_quotes(
         self, symbols: Sequence[str], start: datetime, end: datetime
     ) -> Iterator[Quote]:
-        wanted = set(symbols)
-        for where, row in self._rows("quotes.csv", _QUOTE_COLUMNS):
-            if row["symbol"] not in wanted:
-                continue
-            ts = self._ts(row["ts"], where)
-            if not start <= ts < end:
-                continue
+        for ts, row, where in self._window("quotes.csv", _QUOTE_COLUMNS, set(symbols), start, end):
             yield Quote(
                 symbol=row["symbol"],
                 ts=ts,

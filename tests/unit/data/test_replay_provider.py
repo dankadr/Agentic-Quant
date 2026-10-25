@@ -110,3 +110,57 @@ def test_bar_and_quote_derived_values() -> None:
                   bid_size=None, ask_size=None, provider="p")  # fmt: skip
     assert quote.mid == Decimal("100.00")
     assert quote.spread_bps == Decimal("2")
+
+
+def test_repeated_fetches_use_a_parsed_cache_but_notice_file_changes(tmp_path: Path) -> None:
+    p = _write(tmp_path, "bars.csv", HEADER + "SPY,2026-10-19T13:30:00Z,1,1,1,1,1,a\n")
+    assert len(list(p.fetch_bars(["SPY"], DAY_START, DAY_END))) == 1
+    assert len(list(p.fetch_bars(["SPY"], DAY_START, DAY_END))) == 1
+    (tmp_path / "bars.csv").write_text(
+        HEADER + "SPY,2026-10-19T13:30:00Z,1,1,1,1,1,a\nSPY,2026-10-19T13:31:00Z,1,1,1,1,1,b\n"
+    )
+    assert len(list(p.fetch_bars(["SPY"], DAY_START, DAY_END))) == 2  # the edit is picked up
+
+
+def test_sorted_and_unsorted_files_give_identical_windows(tmp_path: Path) -> None:
+    lines = [f"SPY,2026-10-19T13:{30 + i}:00Z,1,1,1,1,1,s{i}" for i in range(10)]
+    ordered = (
+        _write(tmp_path / "a", "bars.csv", HEADER + "\n".join(lines) + "\n")
+        if (tmp_path / "a").mkdir() is None
+        else None
+    )
+    shuffled = (
+        _write(tmp_path / "b", "bars.csv", HEADER + "\n".join(reversed(lines)) + "\n")
+        if (tmp_path / "b").mkdir() is None
+        else None
+    )
+    start, end = (
+        datetime(2026, 10, 19, 13, 33, tzinfo=UTC),
+        datetime(2026, 10, 19, 13, 37, tzinfo=UTC),
+    )
+    assert ordered is not None and shuffled is not None
+    assert sorted(b.source_seq for b in ordered.fetch_bars(["SPY"], start, end)) == [
+        "s3",
+        "s4",
+        "s5",
+        "s6",
+    ]
+    assert sorted(b.source_seq for b in shuffled.fetch_bars(["SPY"], start, end)) == [
+        "s3",
+        "s4",
+        "s5",
+        "s6",
+    ]
+
+
+def test_a_bad_row_for_an_unwanted_symbol_is_ignored_but_raises_for_a_wanted_one(
+    tmp_path: Path,
+) -> None:
+    p = _write(
+        tmp_path,
+        "bars.csv",
+        HEADER + "QQQ,not-a-time,1,1,1,1,1,x\nSPY,2026-10-19T13:30:00Z,1,1,1,1,1,a\n",
+    )
+    assert len(list(p.fetch_bars(["SPY"], DAY_START, DAY_END))) == 1
+    with pytest.raises(DataFormatError, match="invalid timestamp"):
+        list(p.fetch_bars(["QQQ"], DAY_START, DAY_END))
