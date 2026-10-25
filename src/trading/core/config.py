@@ -147,10 +147,28 @@ class EvaluatorAgentConfig(_Frozen):
     enabled: bool = False
 
 
+class FundamentalAgentConfig(_Frozen):
+    enabled: bool = False
+    lookback_hours: int = Field(default=18, gt=0, le=72)
+    max_headlines: int = Field(default=60, gt=0, le=200)
+    ttl_hours: int = Field(default=20, gt=0, le=72)
+
+
+class ConsensusAgentConfig(_Frozen):
+    enabled: bool = False
+
+
+class TechnicalAgentConfig(_Frozen):
+    enabled: bool = False
+
+
 class AgentsConfig(_Frozen):
     llm: LlmConfig = LlmConfig()
     macro: MacroAgentConfig = MacroAgentConfig()
     evaluator: EvaluatorAgentConfig = EvaluatorAgentConfig()
+    fundamental: FundamentalAgentConfig = FundamentalAgentConfig()
+    consensus: ConsensusAgentConfig = ConsensusAgentConfig()
+    technical: TechnicalAgentConfig = TechnicalAgentConfig()
 
 
 class _AgentsFile(_Frozen):
