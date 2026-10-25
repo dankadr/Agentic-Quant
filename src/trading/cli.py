@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import typer
 import uvicorn
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -38,6 +39,7 @@ METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102}
 
 if TYPE_CHECKING:
     from trading.agents.llm import LlmClient
+    from trading.data.alpaca_news import AlpacaNewsSource
     from trading.data.alpaca_provider import AlpacaDataProvider
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -110,16 +112,35 @@ def _calendar() -> XnysCalendar:
     return XnysCalendar(today - timedelta(days=30), today + timedelta(days=400))
 
 
-def _llm_client(settings: Settings, config: AppConfig) -> "LlmClient | None":
+def _llm_client(
+    settings: Settings, config: AppConfig, *, force: bool = False
+) -> "LlmClient | None":
     """The research-agent model client, if any agent is enabled and a key file is present."""
     from trading.agents.llm import LlmClient  # noqa: PLC0415
 
-    if not (config.agents.macro.enabled or config.agents.evaluator.enabled):
+    any_agent = config.agents.macro.enabled or config.agents.evaluator.enabled
+    any_agent = any_agent or config.agents.fundamental.enabled
+    if not (any_agent or force):
         return None
     key_file = settings.llm_api_key_file or Path("secrets/llm_api_key")
     if not (key_file.exists() and key_file.read_text().strip()):
         return None
     return LlmClient.from_file(config.agents.llm, key_file)
+
+
+def _news_source(settings: Settings, config: AppConfig) -> "AlpacaNewsSource | None":
+    """Alpaca news (same data-only keys) when the fundamental agent is enabled."""
+    from trading.data.alpaca_news import AlpacaNewsSource  # noqa: PLC0415
+
+    if not config.agents.fundamental.enabled:
+        return None
+    key = settings.alpaca_key_id_file or Path("secrets/alpaca_key_id")
+    secret = settings.alpaca_secret_file or Path("secrets/alpaca_secret")
+    if not (
+        key.exists() and secret.exists() and key.read_text().strip() and secret.read_text().strip()
+    ):
+        return None
+    return AlpacaNewsSource.from_files(key, secret)
 
 
 @app.command()
@@ -136,6 +157,7 @@ def worker() -> None:
     calendar = _calendar()
     provider = _alpaca_provider(settings)
     llm = _llm_client(settings, config)
+    news = _news_source(settings, config)
 
     def ctx_factory(lease: Lease) -> WorkerContext:
         # Without Alpaca data keys ticks are no-ops (fail closed); with them the worker trades
@@ -157,6 +179,7 @@ def worker() -> None:
             lease=lease,
             runtime=runtime,
             llm=llm,
+            news=news,
         )
 
     code = run_worker(
@@ -220,17 +243,23 @@ def _parse_utc(value: str, option: str) -> datetime:
     return ensure_utc(parsed)
 
 
-def _alpaca_provider(settings: Settings) -> "AlpacaDataProvider | None":
-    """The data-only Alpaca provider if its key files are configured (or in ./secrets)."""
-    from trading.data.alpaca_provider import AlpacaDataProvider  # noqa: PLC0415
-
+def _alpaca_key_files(settings: Settings) -> tuple[Path, Path] | None:
+    """The Alpaca data key files if both exist and are non-empty (empty = not configured)."""
     key = settings.alpaca_key_id_file or Path("secrets/alpaca_key_id")
     secret = settings.alpaca_secret_file or Path("secrets/alpaca_secret")
     if not (key.exists() and secret.exists()):
         return None
     if not (key.read_text().strip() and secret.read_text().strip()):
-        return None  # empty placeholder files mean "not configured"
-    return AlpacaDataProvider.from_files(key, secret)
+        return None
+    return key, secret
+
+
+def _alpaca_provider(settings: Settings, *, workers: int = 1) -> "AlpacaDataProvider | None":
+    """The data-only Alpaca provider if its key files are configured (or in ./secrets)."""
+    from trading.data.alpaca_provider import AlpacaDataProvider  # noqa: PLC0415
+
+    files = _alpaca_key_files(settings)
+    return AlpacaDataProvider.from_files(*files, workers=workers) if files else None
 
 
 @app.command()
@@ -254,6 +283,114 @@ def report(
     finally:
         engine.dispose()
     typer.echo(json.dumps(body, indent=2))
+
+
+@app.command()
+def research(
+    strategy: str = typer.Option(..., help="orb_v1 or vwap_v1."),
+    fixtures: Path = typer.Option(..., help="Merged bars.csv/quotes.csv (trading collect-data)."),
+    train: int = typer.Option(10, min=2),
+    test: int = typer.Option(5, min=1),
+    holdout: int = typer.Option(5, min=0),
+    minutes_per_day: int | None = typer.Option(None, min=1, help="Shorten sessions (debug)."),
+    evaluate_holdout: bool = typer.Option(False, help="Spend the single-use final holdout."),
+) -> None:
+    """Walk-forward + sensitivity for one strategy. Backtests run on TRADING_SCRATCH_DATABASE_URL
+    (wiped!); experiments are recorded in TRADING_DATABASE_URL."""
+    from trading.data.collect import merged_dates  # noqa: PLC0415
+    from trading.quant.backtest import backtest_full_run  # noqa: PLC0415
+    from trading.quant.research_config import load_research_spaces  # noqa: PLC0415
+    from trading.quant.research_runner import HoldoutAlreadyUsed, run_research  # noqa: PLC0415
+
+    settings = Settings()
+    config = load_config(settings.config_dir)
+    spaces = load_research_spaces(settings.config_dir)
+    if strategy not in spaces or strategy not in config.strategies:
+        raise typer.BadParameter(f"no research grid for {strategy!r} in configs/research.yaml")
+    if not settings.scratch_database_url or settings.scratch_database_url == (
+        settings.database_url or settings.resolved_database_url()
+    ):
+        typer.echo("set TRADING_SCRATCH_DATABASE_URL to a SEPARATE scratch database", err=True)
+        raise typer.Exit(1)
+    space = spaces[strategy]
+    params = config.strategies[strategy].params
+    base = {k: params[k] for k in space}
+    neighbors = {k: [v for v in vals if str(v) != str(base[k])] for k, vals in space.items()}
+    dates = merged_dates(fixtures)
+    scratch, live = (
+        make_engine(settings.scratch_database_url),
+        make_engine(settings.resolved_database_url()),
+    )
+    try:
+        with make_session_factory(live)() as session:
+            version = session.execute(
+                text("SELECT version FROM strategies WHERE id = :s"), {"s": strategy}
+            ).scalar()
+        outcome = run_research(
+            make_session_factory(live),
+            backtest_full_run(
+                make_session_factory(scratch),
+                fixtures_dir=fixtures,
+                config=config,
+                strategy_id=strategy,
+                dates=dates,
+                minutes_per_day=minutes_per_day,
+            ),
+            strategy_id=strategy,
+            dates=dates,
+            base_params=base,
+            space=space,
+            neighbors=neighbors,
+            train=train,
+            test=test,
+            holdout=holdout,
+            base_equity=config.system.starting_cash_usd,
+            now=SystemClock().now(),
+            evaluate_holdout=evaluate_holdout,
+            strategy_version=version,
+        )
+    except HoldoutAlreadyUsed as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    finally:
+        scratch.dispose()
+        live.dispose()
+    typer.echo(
+        json.dumps(
+            {
+                "walk_forward": outcome.walk_forward.verdict,
+                "oos_net_pnl": str(outcome.walk_forward.out_of_sample_net_pnl),
+                "sensitivity_robust": outcome.sensitivity.robust,
+                "holdout_net_pnl": str(outcome.holdout.net_pnl) if outcome.holdout else None,
+            }
+        )
+    )
+
+
+@app.command()
+def technical(
+    strategy: str = typer.Option(..., help="orb_v1 or vwap_v1."),
+) -> None:
+    """Ask the technical agent to review the latest research for a strategy (may file a proposal
+    that a human must still approve)."""
+    from trading.agents.technical import run_technical_agent  # noqa: PLC0415
+
+    settings = Settings()
+    config = load_config(settings.config_dir)
+    llm = _llm_client(settings, config, force=True)
+    if llm is None:
+        typer.echo("no LLM key (secrets/llm_api_key)", err=True)
+        raise typer.Exit(1)
+    engine = make_engine(settings.resolved_database_url())
+    try:
+        status = run_technical_agent(
+            make_session_factory(engine), llm, config=config, strategy_id=strategy,
+            now=SystemClock().now(),
+        )  # fmt: skip
+    finally:
+        engine.dispose()
+        llm.close()
+    typer.echo(status)
 
 
 @app.command("alpaca-check")
@@ -345,6 +482,47 @@ def ingest_csv(
 ) -> None:
     """Load CSV bars, quotes and corporate actions for the configured universe."""
     _ingest(CsvReplayProvider(path), start, end)
+
+
+@app.command("collect-data")
+def collect_data(
+    days: int = typer.Option(30, min=1, help="How many completed sessions, counting back."),
+    out: Path = typer.Option(Path("data/alpaca"), help="Per-session directories go here."),
+    quotes: bool = typer.Option(True, help="Quotes are one request per symbol-minute (slow)."),
+    workers: int = typer.Option(6, min=1, max=16, help="Parallel quote requests."),
+    merge_to: Path | None = typer.Option(None, help="Also write a merged bars/quotes.csv here."),
+) -> None:
+    """Download many sessions of Alpaca (IEX) data. Resumable: re-run to continue after a stop."""
+    from trading.data.alpaca_provider import ProviderError  # noqa: PLC0415
+    from trading.data.collect import collect, merge_days, recent_sessions  # noqa: PLC0415
+
+    settings = Settings()
+    provider = _alpaca_provider(settings, workers=workers)
+    if provider is None:
+        typer.echo("no Alpaca key files (secrets/alpaca_key_id, secrets/alpaca_secret)", err=True)
+        raise typer.Exit(1)
+    config = load_config(settings.config_dir)
+    symbols = [u.symbol for u in config.universe]
+    now = SystemClock().now()
+    calendar = XnysCalendar(
+        now.date() - timedelta(days=days * 2 + 30), now.date() + timedelta(days=14)
+    )
+    sessions = recent_sessions(calendar, as_of=now, count=days)
+
+    def log(message: str) -> None:
+        typer.echo(f"{SystemClock().now():%Y-%m-%d %H:%M:%S}Z {message}", err=False)
+
+    log(f"collecting {len(sessions)} sessions {sessions[0]}..{sessions[-1]} -> {out}")
+    try:
+        counts = collect(provider, symbols, calendar, sessions, out, quotes=quotes, log=log)
+    except ProviderError as exc:
+        typer.echo(f"stopped: {exc} (re-run to resume)", err=True)
+        raise typer.Exit(1) from None
+    finally:
+        provider.close()
+    log(json.dumps(counts))
+    if merge_to is not None:
+        log("merged " + json.dumps(merge_days(out, sessions, merge_to)))
 
 
 @app.command("alpaca-export")

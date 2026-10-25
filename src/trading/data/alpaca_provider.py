@@ -15,10 +15,11 @@ import json
 import re
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from urllib.parse import urlparse
 
 import httpx
@@ -35,6 +36,7 @@ DATA_HOST = "data.alpaca.markets"
 PROVIDER_NAME = "alpaca-iex"
 PAGE_LIMIT = 10000
 MAX_RETRIES = 3
+MAX_RATE_LIMIT_RETRIES = 12
 _FRACTION = re.compile(r"(\.\d{6})\d+")
 
 
@@ -63,11 +65,13 @@ class AlpacaDataProvider:
         feed: str = "iex",
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        workers: int = 1,
     ) -> None:
         parsed = urlparse(base_url)
         if parsed.scheme != "https" or parsed.hostname != DATA_HOST:
             raise ValueError(f"only https://{DATA_HOST} (market data) is allowed, got {base_url!r}")
         self._feed = feed
+        self._workers = max(1, workers)
         self._sleep = sleep
         self._client = httpx.Client(
             base_url=base_url,
@@ -77,9 +81,7 @@ class AlpacaDataProvider:
         )
 
     @classmethod
-    def from_files(
-        cls, key_id_file: Path, secret_file: Path, **kwargs: Any
-    ) -> "AlpacaDataProvider":
+    def from_files(cls, key_id_file: Path, secret_file: Path, **kwargs: Any) -> Self:
         return cls(key_id_file.read_text().strip(), secret_file.read_text().strip(), **kwargs)
 
     def __repr__(self) -> str:
@@ -92,30 +94,42 @@ class AlpacaDataProvider:
 
     def _get(self, path: str, params: Mapping[str, Any]) -> dict[str, Any]:
         last: str = ""
-        for attempt in range(MAX_RETRIES + 1):
+        failures = rate_limits = 0
+        while True:
+            wait = 0.0
             try:
                 response = self._client.get(path, params=params)
             except httpx.TransportError as exc:
                 last = f"network error: {type(exc).__name__}"
+                failures += 1
+                wait = 0.5 * 2 ** (failures - 1)
             else:
-                if response.status_code in (401, 403):
-                    raise ProviderAuthError(
-                        f"alpaca rejected the credentials (HTTP {response.status_code})"
+                code = response.status_code
+                if code in (401, 403):
+                    raise ProviderAuthError(f"alpaca rejected the credentials (HTTP {code})")
+                if code == 429:
+                    last = "HTTP 429"
+                    rate_limits += 1
+                    retry_after = response.headers.get("Retry-After", "")
+                    hinted = (
+                        float(retry_after) if retry_after.replace(".", "", 1).isdigit() else 0.0
                     )
-                if response.status_code == 429 or response.status_code >= 500:
-                    last = f"HTTP {response.status_code}"
-                elif response.status_code != 200:
-                    raise ProviderError(
-                        f"alpaca request failed (HTTP {response.status_code}) for {path}"
-                    )
+                    wait = max(hinted, min(2.0 * 2 ** (rate_limits - 1), 30.0))
+                elif code >= 500:
+                    last = f"HTTP {code}"
+                    failures += 1
+                    wait = 0.5 * 2 ** (failures - 1)
+                elif code != 200:
+                    raise ProviderError(f"alpaca request failed (HTTP {code}) for {path}")
                 else:
                     decoded: dict[str, Any] = json.loads(response.content, parse_float=Decimal)
                     return decoded
-            if attempt < MAX_RETRIES:
-                self._sleep(0.5 * 2**attempt)
-        raise ProviderError(
-            f"alpaca unavailable after {MAX_RETRIES + 1} attempts ({last}) for {path}"
-        )
+            if failures > MAX_RETRIES or rate_limits > MAX_RATE_LIMIT_RETRIES:
+                attempts = failures + rate_limits
+                raise ProviderError(
+                    f"alpaca unavailable after {attempts} attempts ({last}) for {path}"
+                )
+            self._sleep(wait)
 
     def _pages(
         self, path: str, key: str, symbols: Sequence[str], start: datetime, end: datetime
@@ -171,24 +185,34 @@ class AlpacaDataProvider:
         Raw IEX quotes are ~10,000 ticks a minute for SPY alone, so one small request per
         symbol-minute (``limit=1``, newest first) is used instead of downloading ticks.
         """
+        tasks: list[tuple[str, datetime, datetime]] = []
         minute = start.replace(second=0, microsecond=0)
         while minute < end:
             window_end = min(minute + timedelta(minutes=1), end)
-            for symbol in symbols:
-                body = self._get(
-                    "/v2/stocks/quotes",
-                    {
-                        "symbols": symbol,
-                        "start": isoformat_z(max(minute, start)),
-                        "end": isoformat_z(window_end),
-                        "feed": self._feed,
-                        "limit": 1,
-                        "sort": "desc",
-                    },
-                )
-                for r in (body.get("quotes") or {}).get(symbol, []):
-                    yield self._quote(symbol, r)
+            tasks.extend((symbol, max(minute, start), window_end) for symbol in symbols)
             minute += timedelta(minutes=1)
+        if self._workers == 1:
+            for task in tasks:
+                yield from self._last_quote(*task)
+            return
+        with ThreadPoolExecutor(max_workers=self._workers) as pool:
+            for quotes in pool.map(lambda t: list(self._last_quote(*t)), tasks):
+                yield from quotes
+
+    def _last_quote(self, symbol: str, start: datetime, end: datetime) -> Iterator[Quote]:
+        body = self._get(
+            "/v2/stocks/quotes",
+            {
+                "symbols": symbol,
+                "start": isoformat_z(start),
+                "end": isoformat_z(end),
+                "feed": self._feed,
+                "limit": 1,
+                "sort": "desc",
+            },
+        )
+        for r in (body.get("quotes") or {}).get(symbol, []):
+            yield self._quote(symbol, r)
 
     def _quote(self, symbol: str, r: Mapping[str, Any]) -> Quote:
         try:

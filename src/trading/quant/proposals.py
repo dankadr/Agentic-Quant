@@ -115,6 +115,7 @@ def propose_config(
         select(StrategyConfigProposal).where(
             StrategyConfigProposal.strategy_id == strategy_id,
             StrategyConfigProposal.status == PENDING,
+            StrategyConfigProposal.proposed_by == proposed_by,  # never discard someone else's
         )
     ):
         older.status = SUPERSEDED

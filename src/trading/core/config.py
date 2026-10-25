@@ -147,10 +147,28 @@ class EvaluatorAgentConfig(_Frozen):
     enabled: bool = False
 
 
+class FundamentalAgentConfig(_Frozen):
+    enabled: bool = False
+    lookback_hours: int = Field(default=18, gt=0, le=72)
+    max_headlines: int = Field(default=60, gt=0, le=200)
+    ttl_hours: int = Field(default=20, gt=0, le=72)
+
+
+class ConsensusAgentConfig(_Frozen):
+    enabled: bool = False
+
+
+class TechnicalAgentConfig(_Frozen):
+    enabled: bool = False
+
+
 class AgentsConfig(_Frozen):
     llm: LlmConfig = LlmConfig()
     macro: MacroAgentConfig = MacroAgentConfig()
     evaluator: EvaluatorAgentConfig = EvaluatorAgentConfig()
+    fundamental: FundamentalAgentConfig = FundamentalAgentConfig()
+    consensus: ConsensusAgentConfig = ConsensusAgentConfig()
+    technical: TechnicalAgentConfig = TechnicalAgentConfig()
 
 
 class _AgentsFile(_Frozen):
@@ -222,6 +240,7 @@ class Settings(BaseSettings):
     metrics_port: int | None = None
     alpaca_key_id_file: Path | None = None  # market-data keys only; never trading keys
     alpaca_secret_file: Path | None = None
+    scratch_database_url: str | None = None  # backtests/research only; WIPED between runs
     llm_api_key_file: Path | None = None  # research agents; absent = agents do not run
 
     def resolved_database_url(self) -> str:

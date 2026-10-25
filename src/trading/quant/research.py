@@ -7,6 +7,7 @@ on TRAIN windows only and scored once on the following TEST window; the holdout 
 from __future__ import annotations
 
 import itertools
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -16,6 +17,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from trading.core.hashing import canonical_json
 from trading.db.models.research import Experiment
 from trading.quant.stats import holm_bonferroni, mean_return_p_value
 
@@ -214,9 +216,9 @@ def record_experiment(
         kind=kind,
         strategy_id=strategy_id,
         hypothesis=hypothesis,
-        params_json=dict(params),
-        data_range_json=dict(data_range),
-        metrics_json=dict(metrics),
+        params_json=json.loads(canonical_json(dict(params))),
+        data_range_json=json.loads(canonical_json(dict(data_range))),
+        metrics_json=json.loads(canonical_json(dict(metrics))),
         status=status,
         notes=notes,
         created_at=now,

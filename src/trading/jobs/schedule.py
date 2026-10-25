@@ -24,6 +24,8 @@ PLANNING_WINDOW = timedelta(minutes=2)
 AGENT_DELAY = timedelta(seconds=20)  # after the tick of the same minute has ingested its bars
 MACRO_LAST_BEFORE_CLOSE = timedelta(minutes=30)
 EVALUATOR_DELAY = timedelta(minutes=10)
+CONSENSUS_DELAY = timedelta(minutes=12)
+FUNDAMENTAL_LEAD = timedelta(minutes=15)
 _ONE_MINUTE = timedelta(minutes=1)
 
 
@@ -66,6 +68,24 @@ def plan_session_jobs(session: SessionInfo, *, agents: AgentsConfig | None = Non
                 )
             )
             at += interval
+    if agents is not None and agents.fundamental.enabled:
+        jobs.append(
+            JobSpec(
+                "agent_fundamental",
+                f"agent_fundamental:{day}",
+                session.open_at - FUNDAMENTAL_LEAD,
+                {"session_date": day},
+            )
+        )
+    if agents is not None and agents.consensus.enabled:
+        jobs.append(
+            JobSpec(
+                "agent_consensus",
+                f"agent_consensus:{day}",
+                session.close_at + CONSENSUS_DELAY,
+                {"session_date": day},
+            )
+        )
     if agents is not None and agents.evaluator.enabled:
         jobs.append(
             JobSpec(

@@ -51,3 +51,25 @@ def test_plan_jobs_only_returns_agent_jobs_that_are_due(calendar: MarketCalendar
         for j in plan_jobs(_utc("2026-10-19T13:50:00"), calendar, agents=agents)
         if j.kind == "agent_macro"
     ]
+
+
+def test_fundamental_runs_before_the_open_and_consensus_after_the_close(
+    calendar: MarketCalendar,
+) -> None:
+    agents = AgentsConfig.model_validate(
+        {"fundamental": {"enabled": True}, "consensus": {"enabled": True}}
+    )
+    jobs = {
+        j.kind: j
+        for j in _jobs(calendar, agents)
+        if j.kind in ("agent_fundamental", "agent_consensus")
+    }
+    assert jobs["agent_fundamental"].scheduled_at == _utc("2026-10-19T13:15:00")
+    assert jobs["agent_fundamental"].dedupe_key == "agent_fundamental:2026-10-19"
+    assert jobs["agent_consensus"].scheduled_at == _utc("2026-10-19T20:12:00")
+    assert jobs["agent_consensus"].payload == {"session_date": "2026-10-19"}
+
+
+def test_disabled_agents_plan_nothing_extra(calendar: MarketCalendar) -> None:
+    kinds = {j.kind for j in _jobs(calendar, AgentsConfig())}
+    assert not {"agent_fundamental", "agent_consensus", "agent_macro", "agent_evaluator"} & kinds
