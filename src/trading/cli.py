@@ -249,12 +249,12 @@ def _alpaca_key_files(settings: Settings) -> tuple[Path, Path] | None:
     return key, secret
 
 
-def _alpaca_provider(settings: Settings) -> "AlpacaDataProvider | None":
+def _alpaca_provider(settings: Settings, *, workers: int = 1) -> "AlpacaDataProvider | None":
     """The data-only Alpaca provider if its key files are configured (or in ./secrets)."""
     from trading.data.alpaca_provider import AlpacaDataProvider  # noqa: PLC0415
 
     files = _alpaca_key_files(settings)
-    return AlpacaDataProvider.from_files(*files) if files else None
+    return AlpacaDataProvider.from_files(*files, workers=workers) if files else None
 
 
 @app.command()
@@ -369,6 +369,47 @@ def ingest_csv(
 ) -> None:
     """Load CSV bars, quotes and corporate actions for the configured universe."""
     _ingest(CsvReplayProvider(path), start, end)
+
+
+@app.command("collect-data")
+def collect_data(
+    days: int = typer.Option(30, min=1, help="How many completed sessions, counting back."),
+    out: Path = typer.Option(Path("data/alpaca"), help="Per-session directories go here."),
+    quotes: bool = typer.Option(True, help="Quotes are one request per symbol-minute (slow)."),
+    workers: int = typer.Option(6, min=1, max=16, help="Parallel quote requests."),
+    merge_to: Path | None = typer.Option(None, help="Also write a merged bars/quotes.csv here."),
+) -> None:
+    """Download many sessions of Alpaca (IEX) data. Resumable: re-run to continue after a stop."""
+    from trading.data.alpaca_provider import ProviderError  # noqa: PLC0415
+    from trading.data.collect import collect, merge_days, recent_sessions  # noqa: PLC0415
+
+    settings = Settings()
+    provider = _alpaca_provider(settings, workers=workers)
+    if provider is None:
+        typer.echo("no Alpaca key files (secrets/alpaca_key_id, secrets/alpaca_secret)", err=True)
+        raise typer.Exit(1)
+    config = load_config(settings.config_dir)
+    symbols = [u.symbol for u in config.universe]
+    now = SystemClock().now()
+    calendar = XnysCalendar(
+        now.date() - timedelta(days=days * 2 + 30), now.date() + timedelta(days=14)
+    )
+    sessions = recent_sessions(calendar, as_of=now, count=days)
+
+    def log(message: str) -> None:
+        typer.echo(f"{SystemClock().now():%Y-%m-%d %H:%M:%S}Z {message}", err=False)
+
+    log(f"collecting {len(sessions)} sessions {sessions[0]}..{sessions[-1]} -> {out}")
+    try:
+        counts = collect(provider, symbols, calendar, sessions, out, quotes=quotes, log=log)
+    except ProviderError as exc:
+        typer.echo(f"stopped: {exc} (re-run to resume)", err=True)
+        raise typer.Exit(1) from None
+    finally:
+        provider.close()
+    log(json.dumps(counts))
+    if merge_to is not None:
+        log("merged " + json.dumps(merge_days(out, sessions, merge_to)))
 
 
 @app.command("alpaca-export")
