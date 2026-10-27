@@ -15,3 +15,4 @@ risk:
   entry_cutoff_minutes_before_close: 15
   max_spread_bps: '25'
   unknown_order_grace_seconds: 30
+  entry_order_ttl_seconds: 120

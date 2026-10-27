@@ -334,6 +334,9 @@ class PaperTickProcessor:
                         calendar=self._calendar,
                         clock=self._clock,
                     )
+        # Re-read the clock after ingesting: the snapshot only sees rows with ingested_at <= as_of,
+        # so an as_of taken before the fetch hides this tick's own fresh bar and quote.
+        now = self._clock.now()
         with self._sf.begin() as session:
             self._fence(session)
             snapshot = build_snapshot(
@@ -349,6 +352,9 @@ class PaperTickProcessor:
             self._assert_fenced()
             self._broker.process_tick(quotes=quotes, bars=bars)
             fills_applied = self._manager.sync_fills()
+            self._manager.cancel_stale_entries(
+                ttl=timedelta(seconds=self._config.risk.entry_order_ttl_seconds)
+            )
             if self._needs_reconcile():
                 self.reconcile()
         except LeaseLost:

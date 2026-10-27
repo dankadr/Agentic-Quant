@@ -417,6 +417,24 @@ def test_cancel_flows(env: Env) -> None:
     assert env.status(approved_never_submitted) == "CREATED"
 
 
+def test_cancel_stale_entries_cancels_old_entries_only(env: Env) -> None:
+    stale_entry = env.place(limit="99.00")
+    exit_order = env.place(limit="99.00", entry=False)  # the flag, not the side, marks an exit
+    env.manager.submit(stale_entry)
+    env.manager.submit(exit_order)
+    ttl = timedelta(seconds=120)
+    env.clock.advance(timedelta(seconds=60))
+    assert env.manager.cancel_stale_entries(ttl=ttl) == 0  # not old enough yet
+    fresh_entry = env.place(limit="99.00")
+    env.manager.submit(fresh_entry)
+    env.clock.advance(timedelta(seconds=90))
+    assert env.manager.cancel_stale_entries(ttl=ttl) == 1
+    assert env.status(stale_entry) == "CANCELED"
+    assert env.row(stale_entry).status_reason == "ENTRY_ORDER_TTL"
+    assert env.status(fresh_entry) == "ACKNOWLEDGED"
+    assert env.status(exit_order) == "ACKNOWLEDGED"
+
+
 def test_cancel_refuses_orders_in_limbo(
     db: Session, session_factory: sessionmaker[Session], clock: ManualClock, calendar
 ) -> None:  # type: ignore[no-untyped-def]
