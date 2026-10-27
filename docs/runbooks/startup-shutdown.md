@@ -28,6 +28,7 @@
 | 0 | clean stop | none |
 | 1 | startup failed (e.g. reconciliation error) | read logs; the lease was released |
 | 3 | lease lost or database failure | the supervisor restarts it; it reconciles before processing |
+| 4 | an approved agent-setting change was applied | expected: the supervisor restarts it with the new settings (see the README Agents view) |
 
 ## Recovery
 

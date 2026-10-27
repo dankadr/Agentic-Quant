@@ -1,5 +1,10 @@
 # Architecture overview
 
+Agent settings can be edited from the dashboard. Edits are proposals in `agent_config_proposals`
+(reviewed, audited). Services start from `configs/*.yaml` plus *applied* edits
+(`trading.agents.effective_config`); the scheduler leader applies approved edits only when no
+trading session is open, after which the worker and scheduler exit with code 4 and restart.
+
 ```mermaid
 flowchart LR
     subgraph untrusted["Untrusted / no execution access"]

@@ -154,6 +154,23 @@ denials. The key lives in this tab's sessionStorage only. The page is static, ma
 requests, runs under a strict CSP, and renders all dynamic text with `textContent` (agent output and
 headlines are untrusted); a test guards against `innerHTML` and friends.
 
+### Agents view
+
+One tab per agent (macro, fundamental, evaluator, consensus, technical) with a health dot. Each shows
+the numbers (runs, valid replies, tokens), the rules the agent follows (job, what it can and cannot
+affect, model and prompt version, valid output, failure behaviour; the prompt text is read-only),
+its recent decisions with the evidence and limits it stated and the orders it sized, its settings,
+and suggestions derived from recorded runs and trades. Suggestions show how much evidence stands
+behind them and stay "watching" below 30 decisions over 10 trading days
+(`agents.suggestions` in `configs/agents.yaml`).
+
+Settings (an agent's own `configs/agents.yaml` fields) are edited through **Review change**: an
+operator key proposes the change, sees a before/after diff, and approves it. Risk limits, the
+broker, strategies and the LLM endpoint are locked. An approved change is applied when no session is
+open (at least 10 minutes after the close); the scheduler then marks it applied and the worker and
+scheduler exit once with code 4 so Docker restarts them with the new settings. Nothing changes
+mid-session. Every proposal, approval and application is in the audit log.
+
 ## Paper run
 
 ```bash
