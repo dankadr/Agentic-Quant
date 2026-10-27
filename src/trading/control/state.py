@@ -16,8 +16,18 @@ from trading.monitoring.audit import record_audit
 
 
 class TradingState(StrEnum):
-    PAUSED = "PAUSED"
+    PAUSED = "PAUSED"  # freezes all new order submission
     PAPER_RUNNING = "PAPER_RUNNING"
+    EXIT_ONLY = "EXIT_ONLY"  # no new entries; protective sells continue
+    FLATTENING = "FLATTENING"  # EXIT_ONLY, and actively liquidating every position
+
+
+def blocks_order(trading_state: TradingState, *, is_entry: bool) -> bool:
+    """True when this trading state forbids submitting an order of this kind. The single rule
+    shared by the risk engine and the execution gate, so the two cannot disagree."""
+    if trading_state is TradingState.PAUSED:
+        return True
+    return is_entry and trading_state is not TradingState.PAPER_RUNNING
 
 
 class RiskState(StrEnum):

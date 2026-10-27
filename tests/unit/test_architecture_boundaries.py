@@ -104,13 +104,20 @@ def test_only_sanctioned_routes_mutate_state_through_the_api(app: FastAPI) -> No
     assert mutating == {
         ("POST", "/v1/control/pause"),
         ("POST", "/v1/control/resume-paper"),
+        # Operator commands change what the system MAY do (no new entries, cancel, liquidate). The
+        # executor carries them out through its own fenced cancel path; none submits an order.
+        ("POST", "/v1/control/stop-entries"),
+        ("POST", "/v1/control/cancel-open-orders"),
+        ("POST", "/v1/control/flatten"),
         # Parameter proposals: stored PENDING_REVIEW, reviewed by another principal, applied by the
         # executor at the next session start. They cannot place orders or touch risk limits.
         ("POST", "/v1/strategies/{strategy_id}/propose-config"),
         ("POST", "/v1/config-proposals/{proposal_id}/approve"),
         ("POST", "/v1/config-proposals/{proposal_id}/reject"),
     }
-    assert not [p for _, p in mutating if "order" in p or "risk" in p or "mode" in p]
+    # "cancel-open-orders" is the one sanctioned path that names orders: it cancels, never places.
+    placing = [p for _, p in mutating if p != "/v1/control/cancel-open-orders"]
+    assert not [p for p in placing if "order" in p or "risk" in p or "mode" in p]
     assert len(paths) >= 9  # guard against the check passing because the schema came back empty
 
 

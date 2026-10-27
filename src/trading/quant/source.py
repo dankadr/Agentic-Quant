@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.agents.macro import latest_macro_view
-from trading.control.state import RiskState, TradingState
+from trading.control.state import RiskState, TradingState, get_system_state
 from trading.core.config import AppConfig
 from trading.core.hashing import canonical_json
 from trading.data.calendar import MarketCalendar
@@ -117,6 +117,7 @@ class StrategyIntentSource:
             strategies = self._strategies(session)
             if not strategies:
                 return ()
+            trading_state = get_system_state(session).trading_state
             data = StrategyInput(
                 snapshot=snapshot,
                 bars=load_session_bars(
@@ -131,6 +132,7 @@ class StrategyIntentSource:
                 session=info,
                 entered_today=load_entered_today(session, self._account_id, info.open_at),
                 positions={p.symbol: p.qty for p in portfolio.positions},
+                flatten_now=trading_state is TradingState.FLATTENING,
             )
             signals: list[SignalProposal] = []
             for strategy in strategies:

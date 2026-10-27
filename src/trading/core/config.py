@@ -245,9 +245,6 @@ class Settings(BaseSettings):
     alpaca_secret_file: Path | None = None
     scratch_database_url: str | None = None  # backtests/research only; WIPED between runs
     llm_api_key_file: Path | None = None  # research agents; absent = agents do not run
-    # Market-data provider both roles must agree on. Research reads what execution writes, so a
-    # mismatch is refused at startup rather than silently scoping research to the wrong data.
-    provider_name: str | None = None
     release_revision: str = "unknown"  # git commit; injected at image build
     release_image: str = "unknown"  # image reference or digest; injected at deploy
 

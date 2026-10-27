@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 import trading
 from trading.api.app import create_app
 from trading.api.auth import Role, create_principal
-from trading.core.clock import SystemClock
+from trading.core.clock import Clock, SystemClock
 from trading.core.config import AppConfig, Settings, load_config
 from trading.core.time import ensure_utc
 from trading.data.calendar import XnysCalendar
@@ -41,6 +41,8 @@ if TYPE_CHECKING:
     from trading.agents.llm import LlmClient
     from trading.data.alpaca_news import AlpacaNewsSource
     from trading.data.alpaca_provider import AlpacaDataProvider
+    from trading.execution.controls import ControlSupervisor
+    from trading.services.handlers import WorkerContext
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 admin_app = typer.Typer(no_args_is_help=True, help="Administrative commands.")
@@ -102,7 +104,11 @@ def api() -> None:
     """Run the FastAPI control API (no broker access)."""
     settings, config, session_factory = _bootstrap("api")
     application = create_app(
-        settings=settings, config=config, session_factory=session_factory, clock=SystemClock()
+        settings=settings,
+        config=config,
+        session_factory=session_factory,
+        clock=SystemClock(),
+        calendar=_calendar(),  # without it readiness can never see the market is open
     )
     # Binds all interfaces inside the container; Compose publishes the port on 127.0.0.1 only.
     uvicorn.run(application, host="0.0.0.0", port=API_PORT, log_config=None)  # noqa: S104
@@ -157,14 +163,7 @@ def worker() -> None:
     clock = SystemClock()
     calendar = _calendar()
     provider = _alpaca_provider(settings)
-    provider_name = provider.name if provider is not None else "replay"
-    if settings.provider_name is not None and settings.provider_name != provider_name:
-        typer.echo(
-            f"refusing to start: TRADING_PROVIDER_NAME={settings.provider_name!r} but the"
-            f" market-data provider is {provider_name!r}",
-            err=True,
-        )
-        raise typer.Exit(1)
+    provider_name = _market_data_provider_name(settings)
 
     def ctx_factory(lease: Lease) -> WorkerContext:
         # Without Alpaca data keys ticks are no-ops (fail closed); with them the worker trades
@@ -194,8 +193,26 @@ def worker() -> None:
         ctx_factory=ctx_factory,
         stop=_stop_on_signals(),
         startup_hooks=[reconcile_on_start],
+        supervisor_factory=lambda ctx: _control_supervisor(ctx, session_factory, clock).run_cycle,
     )
     raise typer.Exit(code)
+
+
+def _control_supervisor(
+    ctx: "WorkerContext", session_factory: sessionmaker[Session], clock: Clock
+) -> "ControlSupervisor":
+    """Operator commands and exits are advanced by the worker that holds the executor lease."""
+    from trading.execution.controls import ControlSupervisor  # noqa: PLC0415
+
+    if ctx.runtime is None:  # the worker always builds a runtime; refuse to guess otherwise
+        raise RuntimeError("control supervisor requires a trading runtime")
+    return ControlSupervisor(
+        session_factory,
+        ctx.runtime.manager,
+        clock=clock,
+        lease=ctx.lease,
+        account_id=ctx.runtime.account_id,
+    )
 
 
 @app.command()
@@ -233,7 +250,7 @@ def research_worker() -> None:
         session_factory=session_factory,
         clock=clock,
         calendar=_calendar(),
-        provider_name=settings.provider_name or "replay",
+        provider_name=_market_data_provider_name(settings),
         llm=_llm_client(settings, config),
         news=_news_source(settings, config),
     )
@@ -289,6 +306,16 @@ def _alpaca_key_files(settings: Settings) -> tuple[Path, Path] | None:
     if not (key.read_text().strip() and secret.read_text().strip()):
         return None
     return key, secret
+
+
+def _market_data_provider_name(settings: Settings) -> str:
+    """The provider name execution writes under and research reads by. Both roles derive it from
+    the same key files, so they cannot disagree; without keys, execution ticks are no-ops."""
+    if _alpaca_key_files(settings) is None:
+        return "replay"
+    from trading.data.alpaca_provider import PROVIDER_NAME  # noqa: PLC0415
+
+    return PROVIDER_NAME
 
 
 def _alpaca_provider(settings: Settings, *, workers: int = 1) -> "AlpacaDataProvider | None":

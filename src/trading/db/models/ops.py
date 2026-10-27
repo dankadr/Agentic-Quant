@@ -80,6 +80,23 @@ class AuditEventRow(Base):
     details_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
 
+class OperationalCommandRow(Base):
+    """An operator's stop/cancel/flatten request, tracked until the executor finishes it."""
+
+    __tablename__ = "operational_commands"
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    kind: Mapped[str]
+    status: Mapped[str]
+    requested_by: Mapped[str]
+    request_id: Mapped[str | None]
+    reason: Mapped[str]
+    requested_version: Mapped[int]
+    requested_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+    completed_at: Mapped[datetime | None]
+    progress_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+
+
 class SystemStateRow(Base):
     __tablename__ = "system_state"
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)

@@ -9,6 +9,7 @@ If renewal fails the loop takes no new job, and any in-flight write is rejected 
 """
 
 import threading
+import time
 from collections.abc import Callable, Collection, Sequence
 from datetime import timedelta
 
@@ -91,6 +92,8 @@ def run_worker(
     startup_hooks: Sequence[Callable[[WorkerContext], None]] = (),
     handlers_factory: Callable[[WorkerContext], dict[str, Handler]] = build_handlers,
     kinds: Collection[str] = EXECUTION_KINDS | OPERATIONS_KINDS,
+    supervisor_factory: Callable[[WorkerContext], Callable[[], None]] | None = None,
+    supervise_every: float = 5.0,
 ) -> int:
     lease = _acquire(session_factory, clock, worker_id, lease_ttl, stop, acquire_retry)
     if lease is None:
@@ -120,9 +123,15 @@ def run_worker(
         interval=_renew_interval(lease_ttl),
         ttl=lease_ttl.total_seconds(),
     ).start()
+    supervise = supervisor_factory(ctx) if supervisor_factory is not None else None
+    next_supervise = 0.0
     _log.info("worker_started", worker_id=worker_id, fencing_token=lease.fencing_token)
     try:
         while not stop.is_set() and not keeper.lost.is_set():
+            # Operator controls and exits run on their own short cycle, not behind the job queue.
+            if supervise is not None and time.monotonic() >= next_supervise:
+                supervise()
+                next_supervise = time.monotonic() + supervise_every
             worked = runner.run_once()
             with session_factory.begin() as session:
                 dispatch_pending(session, {}, now=clock.now())

@@ -1,7 +1,5 @@
 import time
 
-from sqlalchemy.exc import OperationalError
-
 from trading.jobs.keepalive import Keepalive
 
 
@@ -33,30 +31,48 @@ def test_reports_loss_when_the_claim_is_gone() -> None:
     keeper.stop()
 
 
-def test_transient_database_errors_are_tolerated_within_the_ttl() -> None:
+def test_any_renewal_error_is_loss_immediately() -> None:
+    """Fail closed: a single failed renewal stops the claim, with no tolerance window."""
     calls = {"n": 0}
 
     def renew() -> bool:
         calls["n"] += 1
-        if calls["n"] <= 2:
-            raise OperationalError("select 1", {}, Exception("blip"))
+        raise ConnectionError("blip")
+
+    keeper = Keepalive("t", renew, interval=0.01, ttl=60.0).start()
+    assert _wait(keeper.lost.is_set)
+    keeper.stop()
+    assert calls["n"] == 1
+
+
+def test_a_renewal_that_overruns_the_ttl_is_loss() -> None:
+    """A renewal that hangs past the claim's expiry cannot be trusted, even if it later succeeds."""
+
+    def renew() -> bool:
+        time.sleep(0.5)
         return True
 
-    keeper = Keepalive("t", renew, interval=0.01, ttl=5.0).start()
-    assert _wait(lambda: calls["n"] >= 4)
+    keeper = Keepalive("t", renew, interval=0.01, ttl=0.2).start()
+    assert _wait(keeper.lost.is_set)
     keeper.stop()
-    assert not keeper.lost.is_set()
 
 
-def test_persistent_database_errors_declare_the_claim_lost_after_one_ttl() -> None:
+def test_loss_is_declared_before_the_claim_can_expire() -> None:
+    """With a renewal interval longer than the claim, the keeper must not sleep past expiry: it
+    declares loss at the margin, before the TTL elapses, without attempting a late renewal."""
+    calls: list[int] = []
+
     def renew() -> bool:
-        raise OperationalError("select 1", {}, Exception("down"))
+        calls.append(1)
+        return True
 
     started = time.monotonic()
-    keeper = Keepalive("t", renew, interval=0.01, ttl=0.1).start()
+    keeper = Keepalive("t", renew, interval=5.0, ttl=0.4).start()
     assert _wait(keeper.lost.is_set)
-    assert time.monotonic() - started >= 0.1
+    elapsed = time.monotonic() - started
     keeper.stop()
+    assert calls == []
+    assert elapsed < 0.4
 
 
 def test_stop_returns_promptly_even_with_a_long_interval() -> None:

@@ -40,8 +40,9 @@ Because `research` holds no executor lease, a stalled model call cannot interrup
 heartbeats, ticks, or operator commands. Its health check verifies database reachability only; a
 slow research job appears as a long-running row in `jobs`.
 
-`TRADING_PROVIDER_NAME` (optional): when set, the worker refuses to start unless the market-data
-provider it resolves matches. Research scopes its data by the same name, so the two must agree.
+Market-data provider: the worker and the research worker both derive the provider name from the
+same Alpaca data-key files (`alpaca-iex` when present, `replay` otherwise). Research scopes its data
+by that name, so both roles read the same data. Both services mount the data keys in compose.
 
 ## Lease renewal
 

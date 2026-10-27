@@ -9,7 +9,7 @@ nothing is allowed when the risk state is UNKNOWN or RECONCILIATION_REQUIRED.
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from trading.control.state import RiskState, TradingState
+from trading.control.state import RiskState, TradingState, blocks_order
 from trading.core.codes import RejectionCode
 from trading.core.config import PaperBrokerConfig, RiskPolicy
 from trading.core.enums import AssetType, OrderType, Side, TimeInForce
@@ -72,8 +72,12 @@ class DeterministicRiskEngine:
         )
 
         # 1-5: system and risk state
-        if account.trading_state is not TradingState.PAPER_RUNNING:
-            deny(RejectionCode.TRADING_PAUSED)
+        if blocks_order(account.trading_state, is_entry=is_entry):
+            deny(
+                RejectionCode.TRADING_PAUSED
+                if account.trading_state is TradingState.PAUSED
+                else RejectionCode.ENTRIES_DISABLED
+            )
         if account.risk_state is RiskState.UNKNOWN:
             deny(RejectionCode.RISK_STATE_UNKNOWN, "risk_state")
         elif pf is None:
