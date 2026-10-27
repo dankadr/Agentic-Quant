@@ -14,9 +14,15 @@ def _post(client: TestClient, path: str, key: str, *, version: int, idem: str): 
 
 
 def test_flatten_is_accepted_and_tracked(
-    client: TestClient, operator_key: str, viewer_key: str
+    client: TestClient,
+    operator_key: str,
+    viewer_key: str,
+    make_ready: Callable[[], None],
 ) -> None:
-    accepted = _post(client, "/v1/control/flatten", operator_key, version=1, idem="flat-1")
+    # Flatten is refused while the risk state is UNKNOWN, so start from a reconciled, NORMAL state.
+    make_ready()
+    version = client.get("/v1/system/status", headers=bearer(viewer_key)).json()["version"]
+    accepted = _post(client, "/v1/control/flatten", operator_key, version=version, idem="flat-1")
     assert accepted.status_code == 202
     body = accepted.json()
     assert body["state"] == "FLATTENING"

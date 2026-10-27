@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.factories import T0
 from trading.agents.llm import LlmError, LlmInvalidOutput, LlmResult
 from trading.agents.macro import MacroOutput, latest_macro_view, run_macro_agent
+from trading.core.clock import ManualClock
 from trading.core.config import load_config
 from trading.data.calendar import MarketCalendar
 from trading.data.instruments import upsert_universe
@@ -63,7 +64,9 @@ def seeded(db: Session) -> None:
 def run(
     sf: sessionmaker[Session], calendar: MarketCalendar, llm: FakeLlm, now: datetime = NOW
 ) -> str:
-    return run_macro_agent(sf, llm, config=CFG, calendar=calendar, provider_name="replay", now=now)  # type: ignore[arg-type]
+    return run_macro_agent(  # type: ignore[arg-type]
+        sf, llm, config=CFG, calendar=calendar, provider_name="replay", clock=ManualClock(now)
+    )
 
 
 def test_a_valid_answer_is_stored_with_the_full_contract_and_becomes_the_current_view(
@@ -161,13 +164,14 @@ def test_the_newest_valid_run_wins(
     seeded: None, db: Session, session_factory: sessionmaker[Session], calendar: MarketCalendar
 ) -> None:
     run(session_factory, calendar, FakeLlm(output(risk_multiplier=D("0.9"))))
+    # Inside the fixture's data window: a later run needs fresh bars to be a valid input at all.
     run(
         session_factory,
         calendar,
         FakeLlm(output(risk_multiplier=D("0.3"))),
-        now=NOW + timedelta(minutes=20),
+        now=NOW + timedelta(minutes=1),
     )
-    view = latest_macro_view(db, NOW + timedelta(minutes=21))
+    view = latest_macro_view(db, NOW + timedelta(minutes=2))
     assert view is not None
     assert view.risk_multiplier == D("0.3")
 
@@ -218,8 +222,17 @@ def test_job_wrappers_respect_enablement_missing_llm_and_staleness(
     clock = ManualClock(NOW)
     payload = {"at": (NOW - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ")}
 
-    def count() -> int:
-        return db.execute(text("select count(*) from agent_runs")).scalar_one()
+    def runs() -> list[tuple[str, str | None]]:
+        """(status, skip reason) of every macro run, oldest first."""
+        db.rollback()
+        rows = db.execute(
+            text("select status, result_json::text from agent_runs order by started_at")
+        ).all()
+        out: list[tuple[str, str | None]] = []
+        for status, body in rows:
+            reason = json.loads(body).get("skip_reason") if body else None
+            out.append((status, reason))
+        return out
 
     # disabled in config -> nothing happens, even with a model available
     macro_job(
@@ -231,7 +244,7 @@ def test_job_wrappers_respect_enablement_missing_llm_and_staleness(
         clock=clock,
         payload=payload,
     )  # type: ignore[arg-type]
-    assert count() == 0
+    assert runs() == []
     # enabled but no model configured -> nothing happens (and no crash)
     macro_job(
         session_factory,
@@ -242,7 +255,7 @@ def test_job_wrappers_respect_enablement_missing_llm_and_staleness(
         clock=clock,
         payload=payload,
     )
-    assert count() == 0
+    assert runs() == [("SKIPPED", "no_llm_key")]
     # a job that fires far too late is skipped, like a stale tick
     late = {"at": (NOW - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")}
     macro_job(
@@ -254,7 +267,7 @@ def test_job_wrappers_respect_enablement_missing_llm_and_staleness(
         clock=clock,
         payload=late,
     )  # type: ignore[arg-type]
-    assert count() == 0
+    assert runs()[-1] == ("SKIPPED", "stale_job")
     macro_job(
         session_factory,
         FakeLlm(output()),
@@ -264,4 +277,4 @@ def test_job_wrappers_respect_enablement_missing_llm_and_staleness(
         clock=clock,
         payload=payload,
     )  # type: ignore[arg-type]
-    assert count() == 1
+    assert [status for status, _ in runs()][-1] in {"COMPLETED", "FAILED"}

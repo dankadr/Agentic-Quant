@@ -35,8 +35,10 @@ def macro(db: Session, regime: str, multiplier: str, at: datetime) -> None:
     }
     db.execute(
         text(
-            "insert into agent_runs (id, agent_name, model, prompt_version, started_at, completed_at, result_json, status)"
-            " values (gen_random_uuid(), 'macro', 'm', 'macro-v1', :t, :t, CAST(:r AS jsonb), 'COMPLETED')"
+            "insert into agent_runs (id, agent_name, model, prompt_version, started_at, completed_at,"
+            " available_at, result_json, status)"
+            " values (gen_random_uuid(), 'macro', 'm', 'macro-v1', :t, :t, :t,"
+            " CAST(:r AS jsonb), 'COMPLETED')"
         ),
         {"t": at, "r": json.dumps(result)},
     )
@@ -121,7 +123,7 @@ def test_an_opposing_signal_from_another_strategy_is_a_conflict(
     macro(db, "TRENDING", "1.0", OPEN + timedelta(minutes=16))
     at = OPEN + timedelta(minutes=20)
     signal(db, "orb_v1", "SPY", "BUY", at)
-    signal(db, "vwap_v1", "SPY", "SELL", at + timedelta(seconds=20))
+    signal(db, "vwap_v1", "SPY", "SELL", at - timedelta(seconds=10))  # known BEFORE the entry
     trade(db, acct, "a", "orb_v1", "SPY", "100", "101", at + timedelta(seconds=5))
     db.commit()
     run_consensus_agent(session_factory, config=CFG, session_date=DAY, now=END)
@@ -129,6 +131,25 @@ def test_an_opposing_signal_from_another_strategy_is_a_conflict(
         text("select result_json from agent_runs where agent_name = 'consensus'")
     ).scalar_one()
     assert (r["agreed"], r["vetoed"], r["conflicts"]) == (0, 1, 1)
+
+
+def test_an_opposing_signal_that_arrives_after_the_entry_is_not_a_conflict(
+    db: Session, session_factory: sessionmaker[Session]
+) -> None:
+    """Causality: consensus may not use information that did not exist at the entry decision."""
+    seed_strategies(db, CFG, now=T0)
+    acct = open_account(db)
+    macro(db, "TRENDING", "1.0", OPEN + timedelta(minutes=16))
+    at = OPEN + timedelta(minutes=20)
+    signal(db, "orb_v1", "SPY", "BUY", at)
+    signal(db, "vwap_v1", "SPY", "SELL", at + timedelta(seconds=20))  # after the entry
+    trade(db, acct, "a", "orb_v1", "SPY", "100", "101", at + timedelta(seconds=5))
+    db.commit()
+    run_consensus_agent(session_factory, config=CFG, session_date=DAY, now=END)
+    r = db.execute(
+        text("select result_json from agent_runs where agent_name = 'consensus'")
+    ).scalar_one()
+    assert (r["agreed"], r["vetoed"], r["conflicts"]) == (1, 0, 0)
 
 
 def test_a_day_without_trades_reports_zero_and_never_fails(

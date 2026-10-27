@@ -6,6 +6,7 @@ agent sees deterministic numeric features only and can do nothing but return thi
 """
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -18,10 +19,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from trading.agents.llm import LlmError, LlmInvalidOutput, LlmResult
 from trading.agents.macro_features import compute_macro_features
+from trading.core.clock import Clock
 from trading.core.config import AppConfig
 from trading.core.hashing import canonical_json, content_hash
 from trading.core.time import ensure_utc, isoformat_z
 from trading.data.calendar import MarketCalendar
+from trading.data.models import Bar
 from trading.db.models.research import AgentRun
 from trading.monitoring.logging import get_logger
 from trading.quant.bars import load_session_bars
@@ -31,6 +34,10 @@ AGENT_NAME = "macro"
 PROMPT_VERSION = "macro-v1"
 INDEX_SYMBOLS = ("SPY", "QQQ", "IWM")
 MIN_BARS = 15
+BAR_LENGTH = timedelta(minutes=1)  # bar timestamps are bar STARTS
+# The newest closed bar of every index must be this recent, or the view is not built from fresh
+# data. A stale index would silently classify an old market as the current one.
+MAX_INPUT_AGE = timedelta(seconds=120)
 
 SYSTEM_PROMPT = """You are a market regime classifier inside an automated PAPER trading research
 system. You receive ONLY numeric features about today's regular session so far. You cannot take
@@ -85,15 +92,21 @@ class MacroView:
 
 
 def latest_macro_view(session: Session, now: datetime) -> MacroView | None:
-    """The newest COMPLETED macro run that has not expired at ``now`` (None if there is none)."""
+    """The newest macro view that had been AVAILABLE at ``now`` and has not expired by then.
+
+    Availability, not the start of the run, decides visibility: a response that started before
+    ``now`` but arrived after it cannot have informed a decision made at ``now``. Legacy runs with
+    no recorded availability time are never used for a causal decision.
+    """
     runs = session.scalars(
         select(AgentRun)
         .where(
             AgentRun.agent_name == AGENT_NAME,
             AgentRun.status == "COMPLETED",
-            AgentRun.started_at <= now,
+            AgentRun.available_at.is_not(None),
+            AgentRun.available_at <= now,
         )
-        .order_by(AgentRun.started_at.desc())
+        .order_by(AgentRun.available_at.desc())
         .limit(5)
     ).all()
     for run in runs:
@@ -116,9 +129,10 @@ def run_macro_agent(
     config: AppConfig,
     calendar: MarketCalendar,
     provider_name: str,
-    now: datetime,
+    clock: Clock,
 ) -> str:
     """Run once. Returns the stored status; never raises for model or data problems."""
+    now = clock.now()
     info = calendar.session_at(now)
     run_id = uuid4()
     model = config.agents.llm.model
@@ -131,17 +145,29 @@ def run_macro_agent(
                 prompt_version=PROMPT_VERSION,
                 started_at=now,
                 status="RUNNING",
+                attempt=1,
             )
         )
 
-    def finish(status: str, result: dict[str, object], used_model: str = model) -> str:
+    def finish(
+        status: str,
+        result: dict[str, object],
+        used_model: str = model,
+        tokens: tuple[int, int] | None = None,
+    ) -> str:
+        # Completion and availability are the moments this process actually finished, not the
+        # time the run was scheduled for. Only a COMPLETED output is available to decisions.
+        done = clock.now()
         with session_factory.begin() as session:
             row = session.get(AgentRun, run_id)
             assert row is not None  # noqa: S101 - we inserted it above
             row.status = status
-            row.completed_at = now
+            row.completed_at = done
+            row.available_at = done if status == "COMPLETED" else None
             row.model = used_model
-            row.cost_usd = Decimal(0)  # self-hosted endpoint
+            row.cost_usd = None  # unknown: a self-hosted endpoint has no metered cost
+            if tokens is not None:
+                row.prompt_tokens, row.completion_tokens = tokens
             row.result_json = json.loads(canonical_json(result))
         return status
 
@@ -159,6 +185,8 @@ def run_macro_agent(
     features = compute_macro_features(bars, index_symbols=INDEX_SYMBOLS, min_bars=MIN_BARS)
     if features is None:
         return finish("FAILED", {"error": "insufficient_data"})
+    if not _fresh(bars, now):
+        return finish("FAILED", {"error": "stale_input"})
     user = json.dumps(features.model_dump(mode="json"), sort_keys=True)
     try:
         result = llm.complete_json(SYSTEM_PROMPT, user, MacroOutput)
@@ -169,7 +197,8 @@ def run_macro_agent(
         _log.warning("macro_agent_llm_failed", error=str(exc))
         return finish("FAILED", {"error": str(exc), "input_hash": content_hash(user)})
     out = result.value
-    valid_until = now + timedelta(minutes=config.agents.macro.ttl_minutes)
+    created = clock.now()
+    valid_until = created + timedelta(minutes=config.agents.macro.ttl_minutes)
     return finish(
         "COMPLETED",
         {
@@ -177,7 +206,7 @@ def run_macro_agent(
             "run_id": str(run_id),
             "model_id": result.model,
             "prompt_version": PROMPT_VERSION,
-            "created_at": isoformat_z(now),
+            "created_at": isoformat_z(created),
             "valid_until": isoformat_z(valid_until),
             "regime": out.regime,
             "risk_multiplier": out.risk_multiplier,
@@ -189,4 +218,16 @@ def run_macro_agent(
             "tokens": {"prompt": result.prompt_tokens, "completion": result.completion_tokens},
         },
         used_model=result.model,
+        tokens=(result.prompt_tokens, result.completion_tokens),
     )
+
+
+def _fresh(bars: Mapping[str, Sequence[Bar]], now: datetime) -> bool:
+    """Every index must have a closed bar, and the oldest of those newest bars must be recent."""
+    closes = []
+    for symbol in INDEX_SYMBOLS:
+        series = bars.get(symbol)
+        if not series:
+            return False
+        closes.append(series[-1].ts + BAR_LENGTH)
+    return now - min(closes) <= MAX_INPUT_AGE

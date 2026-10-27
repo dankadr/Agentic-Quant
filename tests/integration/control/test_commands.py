@@ -5,8 +5,14 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.execution.env import build_env
-from trading.control.commands import CommandKind, CommandStatus, get_command, request_command
-from trading.control.state import TradingState, get_system_state
+from trading.control.commands import (
+    CommandKind,
+    CommandNotAllowed,
+    CommandStatus,
+    get_command,
+    request_command,
+)
+from trading.control.state import RiskState, TradingState, get_system_state
 from trading.core.clock import ManualClock
 from trading.core.enums import Side
 from trading.data.calendar import MarketCalendar
@@ -110,3 +116,45 @@ def test_a_stop_request_never_downgrades_an_in_progress_flatten(
     _request(session_factory, clock, CommandKind.FLATTEN)
     _, state = _request(session_factory, clock, CommandKind.STOP_ENTRIES)
     assert state.trading_state is TradingState.FLATTENING
+
+
+def test_a_stop_request_never_lifts_a_pause(
+    db: Session,
+    session_factory: sessionmaker[Session],
+    clock: ManualClock,
+    calendar: MarketCalendar,
+) -> None:
+    """Review finding: stop-entries from PAUSED used to move to EXIT_ONLY, unfreezing sells."""
+    build_env(db, session_factory, clock, calendar, running=False)
+    _, state = _request(session_factory, clock, CommandKind.STOP_ENTRIES)
+    assert state.trading_state is TradingState.PAUSED
+
+
+def test_cancel_open_orders_still_runs_while_paused(
+    db: Session,
+    session_factory: sessionmaker[Session],
+    clock: ManualClock,
+    calendar: MarketCalendar,
+) -> None:
+    """Cancelling is not submitting: a paused system can still cancel what is working."""
+    env = build_env(db, session_factory, clock, calendar, running=False)
+    _, state = _request(session_factory, clock, CommandKind.CANCEL_OPEN_ORDERS)
+    assert state.trading_state is TradingState.PAUSED
+    _supervise(env)  # must not raise; with nothing open it completes at once
+
+
+def test_flatten_is_refused_while_the_risk_state_is_unknown(
+    db: Session,
+    session_factory: sessionmaker[Session],
+    clock: ManualClock,
+    calendar: MarketCalendar,
+) -> None:
+    build_env(db, session_factory, clock, calendar, risk=RiskState.UNKNOWN)
+    try:
+        _request(session_factory, clock, CommandKind.FLATTEN)
+    except CommandNotAllowed:
+        pass
+    else:  # pragma: no cover - the refusal is the behaviour under test
+        raise AssertionError("flatten must be refused while the risk state is UNKNOWN")
+    with session_factory() as s:
+        assert get_system_state(s).trading_state is not TradingState.FLATTENING

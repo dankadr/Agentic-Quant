@@ -14,7 +14,13 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from trading.control.state import SystemState, TradingState, get_system_state, set_trading_state
+from trading.control.state import (
+    RiskState,
+    SystemState,
+    TradingState,
+    get_system_state,
+    set_trading_state,
+)
 from trading.core.errors import TradingError
 from trading.db.models.ops import OperationalCommandRow
 from trading.jobs.outbox import emit_event
@@ -43,6 +49,13 @@ _TARGET_STATE = {
 
 class CommandNotFound(TradingError):
     """No operational command has this id."""
+
+
+class CommandNotAllowed(TradingError):
+    """The command is refused in the current state (nothing was recorded or changed)."""
+
+
+_UNSAFE_TO_LIQUIDATE = frozenset({RiskState.UNKNOWN, RiskState.RECONCILIATION_REQUIRED})
 
 
 @dataclass(frozen=True)
@@ -80,12 +93,21 @@ def request_command(
 ) -> tuple[CommandView, SystemState]:
     """Record the command and move the trading state, compare-and-set on ``expected_version``.
 
-    A stop request never downgrades an in-progress flatten: the most restrictive state wins.
+    The most restrictive state always wins. A stop or cancel never lifts a pause or downgrades an
+    in-progress flatten; cancellation still runs while paused, because cancelling is not submitting.
+    Flatten out of PAUSED is the one explicit way to liquidate from a pause, and it is refused while
+    the risk state is unknown or needs reconciliation.
     """
     current = get_system_state(session, for_update=True)
     target = _TARGET_STATE[kind]
-    if current.trading_state is TradingState.FLATTENING:
+    if current.trading_state is TradingState.PAUSED and kind is not CommandKind.FLATTEN:
+        target = TradingState.PAUSED
+    elif current.trading_state is TradingState.FLATTENING and kind is not CommandKind.FLATTEN:
         target = TradingState.FLATTENING
+    if kind is CommandKind.FLATTEN and current.risk_state in _UNSAFE_TO_LIQUIDATE:
+        raise CommandNotAllowed(
+            f"cannot flatten while the risk state is {current.risk_state.value}"
+        )
     state, _ = set_trading_state(
         session,
         target=target,

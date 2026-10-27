@@ -15,6 +15,7 @@ from trading.api.problems import ApiProblem
 from trading.api.routes.health import compute_readiness
 from trading.control.commands import (
     CommandKind,
+    CommandNotAllowed,
     CommandNotFound,
     CommandView,
     get_command,
@@ -140,15 +141,18 @@ def _command_action(
     body: ControlRequest,
     kind: CommandKind,
 ) -> tuple[int, dict[str, Any]]:
-    view, state = request_command(
-        session,
-        kind=kind,
-        actor=principal.name,
-        reason=body.reason,
-        expected_version=body.expected_version,
-        request_id=getattr(request.state, "request_id", None),
-        now=clock.now(),
-    )
+    try:
+        view, state = request_command(
+            session,
+            kind=kind,
+            actor=principal.name,
+            reason=body.reason,
+            expected_version=body.expected_version,
+            request_id=getattr(request.state, "request_id", None),
+            now=clock.now(),
+        )
+    except CommandNotAllowed as exc:
+        raise ApiProblem(409, "COMMAND_NOT_ALLOWED", str(exc)) from exc
     return 202, {
         "command_id": str(view.id),
         "kind": view.kind.value,

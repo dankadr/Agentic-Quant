@@ -60,7 +60,13 @@ class AgentRun(Base):
     snapshot_id: Mapped[UUID | None] = mapped_column(ForeignKey("market_snapshots.id"))
     result_json: Mapped[dict[str, Any] | None]
     status: Mapped[str]
-    cost_usd: Mapped[Decimal | None] = mapped_column(CASH)
+    cost_usd: Mapped[Decimal | None] = mapped_column(CASH)  # NULL = unknown, never implied zero
+    # When the output became usable. NULL on legacy rows: availability is unverifiable, so
+    # causal decisions must not use them.
+    available_at: Mapped[datetime | None]
+    attempt: Mapped[int] = mapped_column(default=1)
+    prompt_tokens: Mapped[int | None]
+    completion_tokens: Mapped[int | None]
 
 
 class StrategyConfigProposal(Base):

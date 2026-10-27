@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, sessionmaker
 import trading
 from trading.api.middleware import MetricsMiddleware, RequestIdMiddleware
 from trading.api.problems import register_handlers
-from trading.api.routes import audit, control, health, portfolio, quant, system
+from trading.api.routes import agents, audit, control, health, portfolio, quant, system
 from trading.core.clock import Clock
 from trading.core.config import AppConfig, Settings
 from trading.core.release import release_info
@@ -43,4 +43,5 @@ def create_app(
     app.include_router(audit.router)
     app.include_router(portfolio.router)
     app.include_router(quant.router)
+    app.include_router(agents.router)
     return app
