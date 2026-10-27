@@ -53,13 +53,14 @@ class ServiceRole(StrEnum):
     SCHEDULER = "scheduler"
 
 
-def _bootstrap(service: str) -> tuple[Settings, AppConfig, sessionmaker[Session]]:
+def _bootstrap(service: str) -> tuple[Settings, AppConfig, sessionmaker[Session], str | None]:
     settings = Settings()
     configure_logging(settings.log_level, settings.log_json)
     start_metrics_server(settings.metrics_port or METRICS_PORTS[service])
     session_factory = make_session_factory(make_engine(settings.resolved_database_url()))
     # configs/*.yaml plus agent-setting edits applied since; one-shot CLI commands use plain YAML.
-    return settings, load_effective_config(settings.config_dir, session_factory), session_factory
+    config, version = load_effective_config(settings.config_dir, session_factory)
+    return settings, config, session_factory, version
 
 
 def _stop_on_signals() -> threading.Event:
@@ -101,7 +102,7 @@ def create_api_key(
 @app.command()
 def api() -> None:
     """Run the FastAPI control API (no broker access)."""
-    settings, config, session_factory = _bootstrap("api")
+    settings, config, session_factory, _ = _bootstrap("api")
     application = create_app(
         settings=settings, config=config, session_factory=session_factory, clock=SystemClock()
     )
@@ -154,7 +155,7 @@ def worker() -> None:
     from trading.services.handlers import WorkerContext, reconcile_on_start  # noqa: PLC0415
     from trading.services.worker import run_worker  # noqa: PLC0415
 
-    settings, config, session_factory = _bootstrap("worker")
+    settings, config, session_factory, config_version = _bootstrap("worker")
     clock = SystemClock()
     calendar = _calendar()
     provider = _alpaca_provider(settings)
@@ -191,6 +192,7 @@ def worker() -> None:
         ctx_factory=ctx_factory,
         stop=_stop_on_signals(),
         startup_hooks=[reconcile_on_start],
+        config_version=config_version,
     )
     raise typer.Exit(code)
 
@@ -200,7 +202,7 @@ def scheduler() -> None:
     """Run the single-leader scheduler."""
     from trading.services.scheduler import run_scheduler  # noqa: PLC0415
 
-    settings, _config, session_factory = _bootstrap("scheduler")
+    settings, _config, session_factory, config_version = _bootstrap("scheduler")
     code = run_scheduler(
         session_factory=session_factory,
         clock=SystemClock(),
@@ -208,6 +210,7 @@ def scheduler() -> None:
         calendar=_calendar(),
         stop=_stop_on_signals(),
         agents=_config.agents,
+        config_version=config_version,
     )
     raise typer.Exit(code)
 

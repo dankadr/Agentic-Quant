@@ -14,9 +14,9 @@ def test_long_running_services_start_from_the_effective_config(
     marker = base.model_copy()  # a distinct object standing for "the effective config"
     seen: dict[str, Any] = {}
 
-    def fake_effective(config_dir: Path, session_factory: object) -> AppConfig:
+    def fake_effective(config_dir: Path, session_factory: object) -> tuple[AppConfig, str | None]:
         seen["dir"], seen["factory"] = config_dir, session_factory
-        return marker
+        return marker, "v1"
 
     sentinel = object()
     monkeypatch.setattr(cli, "load_effective_config", fake_effective)
@@ -27,8 +27,8 @@ def test_long_running_services_start_from_the_effective_config(
     monkeypatch.setenv("TRADING_DATABASE_URL", "postgresql+psycopg://x:y@localhost/z")
     monkeypatch.setenv("TRADING_CONFIG_DIR", "configs")
 
-    _, config, factory = cli._bootstrap("worker")
+    _, config, factory, version = cli._bootstrap("worker")
 
-    assert config is marker
+    assert (config is marker, version) == (True, "v1")
     assert seen == {"dir": Path("configs"), "factory": sentinel}
     assert factory is sentinel

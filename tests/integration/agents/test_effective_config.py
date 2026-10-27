@@ -1,6 +1,9 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
+import pytest
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.factories import T0
@@ -8,12 +11,13 @@ from trading.agents.config_proposals import propose_agent_config
 from trading.agents.effective_config import (
     apply_approved_agent_config,
     apply_when_idle,
-    config_changed_since,
+    config_changed,
+    config_version,
     load_effective_config,
     overlay_agents,
 )
 from trading.core.clock import ManualClock
-from trading.core.config import AgentsConfig, load_config
+from trading.core.config import load_config
 from trading.data.calendar import MarketCalendar
 from trading.db.models.research import AgentConfigProposal
 
@@ -67,11 +71,15 @@ def test_apply_marks_applied_once(db: Session) -> None:
     assert overlay_agents(BASE, db).macro.run_every_minutes == 15
 
 
-def test_config_changed_since(db: Session) -> None:
+def test_config_version_changes_when_an_edit_is_applied(db: Session) -> None:
+    assert config_version(db) is None
     _proposal(db, "APPROVED")
+    assert config_changed(db, None) is False  # approved is not applied
     apply_approved_agent_config(db, now=T0 + timedelta(hours=1))
-    assert config_changed_since(db, T0) is True
-    assert config_changed_since(db, T0 + timedelta(hours=2)) is False
+    version = config_version(db)
+    assert version is not None
+    assert config_changed(db, None) is True
+    assert config_changed(db, version) is False
 
 
 def test_apply_when_idle_waits_for_the_session_to_end(
@@ -111,12 +119,34 @@ def test_overlay_ignores_rows_that_name_locked_scopes_or_non_editable_fields(db:
     assert overlay_agents(BASE, db) == BASE
 
 
-def test_load_effective_config_reads_applied_overrides(
+def test_load_effective_config_reads_applied_overrides_and_their_version(
     db: Session, session_factory: sessionmaker[Session]
 ) -> None:
-    _proposal(db, "APPLIED")
+    row = _proposal(db, "APPLIED")
+    row.applied_at = T0 + timedelta(hours=1)
     db.commit()
-    config = load_effective_config(Path("configs"), session_factory)
+    config, version = load_effective_config(Path("configs"), session_factory)
     assert config.agents.macro.run_every_minutes == 15
-    assert isinstance(config.agents, AgentsConfig)
     assert config.risk == load_config(Path("configs")).risk  # only agents are overlaid
+    assert version == config_version(db)
+
+
+def test_a_database_error_fails_startup_instead_of_running_plain_yaml() -> None:
+    class Down:
+        def __call__(self) -> Any:
+            raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    with pytest.raises(OperationalError):
+        load_effective_config(Path("configs"), Down())  # type: ignore[arg-type]
+
+
+def test_only_a_missing_table_falls_back_to_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Missing(Exception):
+        sqlstate = "42P01"  # undefined_table: migration 0004 has not run yet
+
+    class NoTable:
+        def __call__(self) -> Any:
+            raise ProgrammingError("SELECT 1", {}, Missing())
+
+    config, version = load_effective_config(Path("configs"), NoTable())  # type: ignore[arg-type]
+    assert (config, version) == (load_config(Path("configs")), None)

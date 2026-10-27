@@ -7,7 +7,7 @@ from datetime import timedelta
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
-from trading.agents.effective_config import apply_when_idle, config_changed_since
+from trading.agents.effective_config import apply_when_idle, config_changed
 from trading.core.clock import Clock
 from trading.core.config import AgentsConfig
 from trading.data.calendar import MarketCalendar
@@ -51,6 +51,7 @@ def run_scheduler(
     interval: float = 10.0,
     acquire_retry: float = 5.0,
     config_check_interval: float = 30.0,
+    config_version: str | None = None,
 ) -> int:
     lease = None
     while lease is None and not stop.is_set():
@@ -67,7 +68,7 @@ def run_scheduler(
         return EXIT_OK
     LEASE_HELD.labels(SCHEDULER_LEASE).set(1)
     _log.info("scheduler_started", holder=holder, fencing_token=lease.fencing_token)
-    started_at = last_renew = clock.now()
+    last_renew = clock.now()
     last_config_check = time.monotonic()
     try:
         while not stop.is_set():
@@ -87,7 +88,7 @@ def run_scheduler(
                     with session_factory.begin() as session:
                         apply_when_idle(session, clock, calendar)
                 with session_factory() as session:
-                    reload = config_changed_since(session, started_at)
+                    reload = config_changed(session, config_version)
                 if reload:
                     _log.info("scheduler_config_reload", holder=holder)
                     LEASE_HELD.labels(SCHEDULER_LEASE).set(0)

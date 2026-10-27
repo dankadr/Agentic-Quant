@@ -10,8 +10,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from pydantic import ValidationError
-from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.agents.config_proposals import APPLIED, APPROVED
@@ -64,15 +64,45 @@ def overlay_agents(
     return current
 
 
-def load_effective_config(config_dir: Path, session_factory: sessionmaker[Session]) -> AppConfig:
+UNDEFINED_TABLE = "42P01"
+
+
+def config_version(session: Session) -> str | None:
+    """Identifies the latest applied edit (None before any). A process remembers the version its
+    settings were loaded at; a different value later means it must restart to pick up an edit."""
+    latest = session.scalar(
+        select(func.max(AgentConfigProposal.applied_at)).where(
+            AgentConfigProposal.status == APPLIED
+        )
+    )
+    return None if latest is None else latest.isoformat()
+
+
+def config_changed(session: Session, known: str | None) -> bool:
+    return config_version(session) != known
+
+
+def load_effective_config(
+    config_dir: Path, session_factory: sessionmaker[Session]
+) -> tuple[AppConfig, str | None]:
+    """The YAML config with applied edits overlaid, and the version it was loaded at.
+
+    The version is read before the overlay, so an edit applied in between only causes one extra
+    restart, never a missed one. A database error stops startup (the supervisor retries) rather
+    than silently running plain YAML; only a table that does not exist yet (migration 0004 not
+    run) falls back to YAML.
+    """
     config = load_config(config_dir)
     try:
         with session_factory() as session:
+            version = config_version(session)
             agents = overlay_agents(config.agents, session)
-    except SQLAlchemyError:
-        _log.warning("agent_config_overlay_unavailable", exc_info=True)
-        return config
-    return config.model_copy(update={"agents": agents})
+    except ProgrammingError as exc:
+        if getattr(exc.orig, "sqlstate", None) != UNDEFINED_TABLE:
+            raise
+        _log.warning("agent_config_table_missing")
+        return config, None
+    return config.model_copy(update={"agents": agents}), version
 
 
 def apply_approved_agent_config(session: Session, *, now: datetime) -> int:
@@ -108,14 +138,3 @@ def apply_when_idle(session: Session, clock: Clock, calendar: MarketCalendar) ->
     if info is not None and info.open_at - BEFORE_OPEN <= now <= info.close_at + AFTER_CLOSE:
         return 0
     return apply_approved_agent_config(session, now=now)
-
-
-def config_changed_since(session: Session, started_at: datetime) -> bool:
-    return (
-        session.scalar(
-            select(AgentConfigProposal.id)
-            .where(AgentConfigProposal.applied_at > started_at)
-            .limit(1)
-        )
-        is not None
-    )

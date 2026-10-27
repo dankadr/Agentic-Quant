@@ -207,3 +207,22 @@ def test_reload_exit_waits_for_the_running_job(
     worker.thread.join(15)
     assert worker.result["code"] == 4
     assert job_states(session_factory) == ["SUCCEEDED"]  # the job finished before the exit
+
+
+def test_worker_started_with_an_older_config_version_reloads_at_once(
+    db: Session, session_factory: sessionmaker[Session]
+) -> None:
+    # An edit landed after this process loaded its config but before it got the lease.
+    with session_factory.begin() as s:
+        s.execute(
+            text(
+                "insert into agent_config_proposals (agent_name, changes_json, base_json,"
+                " rationale, status, source, proposed_by, created_at, applied_at) values"
+                " ('macro', '{\"run_every_minutes\": 15}', '{\"run_every_minutes\": 30}', 'r',"
+                " 'APPLIED', 'OPERATOR', 'op', now(), now() - interval '1 minute')"
+            )
+        )
+    worker = start_worker(session_factory, config_version=None, config_check_interval=0.1)
+    worker.thread.join(10)
+    assert not worker.thread.is_alive()
+    assert worker.result["code"] == 4

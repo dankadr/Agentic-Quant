@@ -14,7 +14,7 @@ from datetime import timedelta
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
-from trading.agents.effective_config import config_changed_since
+from trading.agents.effective_config import config_changed
 from trading.core.clock import Clock
 from trading.jobs.lease import (
     EXECUTOR_LEASE,
@@ -80,6 +80,7 @@ def run_worker(
     poll: float = 1.0,
     acquire_retry: float = 5.0,
     config_check_interval: float = 30.0,
+    config_version: str | None = None,
     startup_hooks: Sequence[Callable[[WorkerContext], None]] = (),
     handlers_factory: Callable[[WorkerContext], dict[str, Handler]] = build_handlers,
 ) -> int:
@@ -105,7 +106,7 @@ def run_worker(
         lease_for=lease_ttl,
     )
     renew_every = lease_ttl / 3
-    started_at = last_renew = clock.now()
+    last_renew = clock.now()
     last_config_check = time.monotonic()
     _log.info("worker_started", worker_id=worker_id, fencing_token=lease.fencing_token)
     try:
@@ -125,7 +126,7 @@ def run_worker(
             if time.monotonic() - last_config_check >= config_check_interval:
                 last_config_check = time.monotonic()
                 with session_factory() as session:
-                    reload = config_changed_since(session, started_at)
+                    reload = config_changed(session, config_version)
                 if reload:  # between jobs, never during one
                     _log.info("worker_config_reload", worker_id=worker_id)
                     LEASE_HELD.labels(EXECUTOR_LEASE).set(0)

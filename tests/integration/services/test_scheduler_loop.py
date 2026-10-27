@@ -104,13 +104,7 @@ def test_scheduler_applies_approved_agent_config_when_idle_then_exits_for_reload
 ) -> None:
     from datetime import UTC, datetime
 
-    class TickingClock(ManualClock):
-        # Every reading is later than the last, so an edit applied after startup is "newer".
-        def now(self) -> datetime:
-            self.advance(timedelta(milliseconds=10))
-            return super().now()
-
-    sunday = TickingClock(datetime(2026, 10, 18, 15, 0, tzinfo=UTC))  # no session on a Sunday
+    sunday = ManualClock(datetime(2026, 10, 18, 15, 0, tzinfo=UTC))  # no session on a Sunday
     with session_factory.begin() as s:
         s.execute(
             text(
