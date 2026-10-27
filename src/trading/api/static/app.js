@@ -64,7 +64,7 @@ function context() {
   return {
     status, ready: state.ready, day, explicit: !!state.date, isLive: live && !!sess && sess.is_open,
     session: sess, openMs: sess ? new Date(sess.open_at).getTime() : new Date(day + "T13:30:00Z").getTime(),
-    actions: { review: reviewProposal },
+    actions: { review: reviewProposal, agentChange, agentReview, agentSuggestion },
   };
 }
 
@@ -189,6 +189,54 @@ async function reviewProposal(p, approve) {
     refresh();
   } catch (e) {
     toast("Review failed: " + e.message + (e.status === 403 ? " (needs an operator key that is not the proposer)" : ""), true);
+  }
+}
+
+async function agentChange(name, changes, config) {
+  const body = el("div", null, "stack");
+  const dl = el("dl", null, "kv diff");
+  for (const [k, v] of Object.entries(changes)) {
+    const old = (config.find((f) => f.name === k) || {}).value;
+    const dd = el("dd");
+    dd.append(el("span", [].concat(old).join(", "), "old"), document.createTextNode(" → "), el("span", [].concat(v).join(", "), "new"));
+    dl.append(el("dt", k), dd);
+  }
+  const note = el("textarea", null, null, { "aria-label": "Why this change", placeholder: "Why this change (required)" });
+  append(body, el("p", "Change " + name + " settings?"), dl, note,
+    el("p", "Applies after the trading session ends; running services restart once to load it. You can see it under Edit history.", "muted small"));
+  const ok = await openDialog({ title: "Review change", body, confirm: "Approve change" });
+  if (!ok) return false;
+  const reason = note.value.trim();
+  if (!reason) { toast("A reason is required", true); return false; }
+  try {
+    const created = await post("/v1/agents/" + encodeURIComponent(name) + "/config-proposals", { changes, rationale: reason });
+    await post("/v1/agent-config-proposals/" + created.id + "/review", { approve: true });
+    toast("Approved. It applies after the session ends.");
+    refresh();
+    return true;
+  } catch (e) {
+    toast("Change failed: " + e.message + (e.status === 403 ? " (an operator key is required)" : ""), true);
+    return false;
+  }
+}
+
+async function agentReview(p, approve) {
+  try {
+    await post("/v1/agent-config-proposals/" + p.id + "/review", { approve });
+    toast("Proposal " + (approve ? "approved. It applies after the session ends." : "rejected"));
+    refresh(true);
+  } catch (e) {
+    toast("Review failed: " + e.message + (e.status === 403 ? " (an operator key is required)" : ""), true);
+  }
+}
+
+async function agentSuggestion(name, s) {
+  try {
+    await post("/v1/agents/" + encodeURIComponent(name) + "/config-proposals", { changes: { [s.field]: s.proposed }, rationale: s.title, source: "SUGGESTION" });
+    toast("Saved as a proposal. Review it under Edit history.");
+    refresh(true);
+  } catch (e) {
+    toast("Could not save: " + e.message + (e.status === 403 ? " (an operator key is required)" : ""), true);
   }
 }
 

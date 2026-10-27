@@ -143,6 +143,7 @@ def test_dashboard_code_never_renders_untrusted_text_as_html() -> None:
         "charts.js",
         "util.js",
         "api.js",
+        "agentpanel.js",
         "style.css",
     } <= set(files)
     for name, body in files.items():
@@ -164,6 +165,19 @@ def test_dashboard_code_never_renders_untrusted_text_as_html() -> None:
     # no external calls or CDNs; the SVG namespace is an identifier, not a request
     blob = "\n".join(files.values()).replace("http://www.w3.org/2000/svg", "")
     assert re.findall(r"https?://[^\s\"')]+", blob) == []
+
+
+def test_agents_view_is_wired_to_the_agent_panel_endpoints() -> None:
+    views = (STATIC / "views.js").read_text()
+    panel = (STATIC / "agentpanel.js").read_text()
+    assert 'from "./agentpanel.js"' in views
+    for path in ("/v1/agents", "/decisions", "/suggestions"):
+        assert path in panel, path
+    app_js = (STATIC / "app.js").read_text()
+    for path in ("/config-proposals", "/v1/agent-config-proposals/"):
+        assert path in app_js, path
+    # locked scopes are shown, never offered as inputs
+    assert "locked" in panel
 
 
 # ---- data coverage and research ------------------------------------------------------------------

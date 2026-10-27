@@ -210,3 +210,12 @@ dialog textarea { width: 100%; min-height: 70px; resize: vertical; margin-top: 8
   dialog, .toast { transform: none; } .meter > span { transition: none; }
 }
 @media (prefers-contrast: more) { :root { --border: #6b7a90; --muted: #c5d0de; } :root[data-theme="light"] { --border: #5b6b80; --muted: #1e293b; } }
+
+/* agent panel */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--border-strong); }
+.dot.good { background: var(--good); }
+.dot.warn { background: var(--warn); }
+.dot.bad { background: var(--bad); }
+.label { color: var(--muted); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; margin: 6px 0 2px; }
+.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+input[type="number"], input[type="text"] { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; font: inherit; min-width: 90px; }

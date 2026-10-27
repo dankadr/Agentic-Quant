@@ -1,5 +1,6 @@
 import { api, optional } from "./api.js";
 import { barChart, heatmap, equityChart, meter } from "./charts.js";
+import { agentState, agentTabs, loadAgent, renderAgentPanel } from "./agentpanel.js";
 import { append, badge, card, chip, clear, el, empty, fmtDateTime, fmtMoney, fmtPct, fmtTime, ago, glyph, num, signedUsd, stable, table, trend, usd } from "./util.js";
 
 // A panel remembers what it last rendered so a refresh with unchanged data touches nothing
@@ -18,15 +19,6 @@ function panel(title, opts) {
     },
   };
 }
-
-const AGENTS = ["macro", "fundamental", "consensus", "evaluator", "technical"];
-const AGENT_BLURB = {
-  macro: "Market regime + entry-size multiplier",
-  fundamental: "News watchlist + catalysts",
-  consensus: "Shadow veto counterfactual",
-  evaluator: "Daily written review",
-  technical: "Parameter proposals from research",
-};
 
 // ---------- shared renderers ----------
 
@@ -423,41 +415,46 @@ function mountStrategies(root) {
 
 // ---------- agents ----------
 
-function mountAgents(root) {
+function mountAgents(root, ctx) {
   const grid = el("div", null, "grid");
-  const summary = panel("Latest per agent", { cls: "col-12" });
+  const tabs = panel("Agents", { cls: "col-12" });
+  const host = el("div", null, "stack col-12");
   const history = panel("Run history", { cls: "col-12" });
-  append(grid, summary.node, history.node);
+  append(grid, tabs.node, host, history.node);
   root.append(grid);
-  let filter = "all", cache = [];
-  function draw() {
-    const latest = {};
-    for (const r of cache) if (!latest[r.agent_name]) latest[r.agent_name] = r;
-    summary.set(latest, () => {
-      const box = el("div", null, "cards");
-      for (const name of AGENTS) {
-        const run = latest[name];
-        const c = el("section", null, "card");
-        const head = el("div", null, "agent-head");
-        head.append(el("h3", name, "agent-name"));
-        if (run) head.append(chip(run.status, statusLevel(run.status)), el("span", ago(run.started_at), "muted small"));
-        else head.append(chip("never ran"));
-        c.append(head, el("p", AGENT_BLURB[name], "muted small"));
-        if (run) c.append(runItem(run, false, true));
-        box.append(c);
-      }
-      return box;
-    });
-    const shown = cache.filter((r) => filter === "all" || r.agent_name === filter);
-    history.set({ shown, filter }, () => {
+  let cache = [], list = null, current = null, drawn = null;
+
+  function drawTabs() { tabs.set({ list, selected: agentState.selected }, () => agentTabs(list && list.items, pick)); }
+  function drawDetail(force) {
+    const sig = stable({ current, drafts: agentState.drafts[agentState.selected] || null });
+    if (!force && sig === drawn) return;
+    drawn = sig;
+    renderAgentPanel(host, current, ctx.actions, () => drawDetail(true));
+  }
+  function drawHistory() {
+    const shown = cache.filter((r) => r.agent_name === agentState.selected);
+    history.set({ shown }, () => {
       const box = el("div", null, "stack");
-      box.append(filterBar([["all", "All"], ...AGENTS.map((a) => [a, a])], filter, (v) => { filter = v; draw(); }, "Agent filter"));
       if (!shown.length) box.append(empty("no runs"));
       for (const run of shown) box.append(runItem(run, false));
       return box;
     });
   }
-  return (data) => { cache = (data.runs && data.runs.items) || []; draw(); };
+  async function pick(name) {
+    agentState.selected = name;
+    drawTabs();
+    current = await loadAgent(name);
+    drawDetail(true);
+    drawHistory();
+  }
+  return (data) => {
+    cache = (data.runs && data.runs.items) || [];
+    list = data.list;
+    if (data.current && data.current.name === agentState.selected) current = data.current;
+    drawTabs();
+    drawDetail(false);
+    drawHistory();
+  };
 }
 
 // ---------- research ----------
@@ -594,7 +591,10 @@ export const VIEWS = {
     fetch: (c) => Promise.all([optional("/v1/strategies"), optional("/v1/report/daily?date=" + c.day), optional("/v1/signals?limit=100"), optional("/v1/config-proposals?limit=50"), optional("/v1/positions?limit=100")])
       .then(([strategies, report, signals, proposals, positions]) => ({ strategies, report, signals, proposals, positions })),
   },
-  agents: { label: "Agents", icon: "agents", mount: mountAgents, fetch: () => optional("/v1/agents/runs?limit=80").then((runs) => ({ runs })) },
+  agents: {
+    label: "Agents", icon: "agents", mount: mountAgents,
+    fetch: () => Promise.all([optional("/v1/agents"), optional("/v1/agents/runs?limit=80"), loadAgent(agentState.selected)]).then(([list, runs, current]) => ({ list, runs, current })),
+  },
   research: {
     label: "Research", icon: "research", mount: mountResearch,
     fetch: () => Promise.all([optional("/v1/config-proposals?limit=50"), optional("/v1/research/experiments?limit=50"), optional("/v1/strategies")]).then(([proposals, experiments, strategies]) => ({ proposals, experiments, strategies })),
