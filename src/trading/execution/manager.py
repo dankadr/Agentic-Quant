@@ -392,6 +392,24 @@ class ExecutionManager:
                         session, order, target, reason="BROKER_" + target.value, now=now
                     )
 
+    def cancel_stale_entries(self, *, ttl: timedelta) -> int:
+        """Cancel entry orders still open at the broker after ``ttl``; exits are left alone."""
+        with self._sf() as session:
+            cutoff = self._clock.now() - ttl
+            stale = session.scalars(
+                select(Order.id)
+                .join(OrderIntent, OrderIntent.id == Order.intent_id)
+                .where(
+                    OrderIntent.is_entry.is_(True),
+                    Order.status.in_([s.value for s in OPEN_AT_BROKER]),
+                    Order.created_at <= cutoff,
+                )
+            ).all()
+        cancelled = 0
+        for order_id in stale:
+            cancelled += self.cancel(order_id, reason="ENTRY_ORDER_TTL") is OrderStatus.CANCELED
+        return cancelled
+
     def cancel(self, order_id: UUID, *, reason: str) -> OrderStatus:
         """Cancel an order where that is safe; orders in limbo wait for reconciliation."""
         with self._sf.begin() as session:

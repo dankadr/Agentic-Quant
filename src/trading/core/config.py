@@ -61,6 +61,9 @@ class RiskPolicy(_Frozen):
     entry_cutoff_minutes_before_close: int = 15
     max_spread_bps: Dec
     unknown_order_grace_seconds: int = 30
+    # An entry limit order not filled within this long is cancelled: a late fill is no longer the
+    # trade the strategy signalled. Exits are never cancelled by this.
+    entry_order_ttl_seconds: int = Field(default=120, gt=0)
 
 
 class PaperBrokerConfig(_Frozen):
