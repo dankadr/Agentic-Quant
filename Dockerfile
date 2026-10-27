@@ -15,10 +15,13 @@ COPY --from=builder /app/.venv /app/.venv
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY configs ./configs
+# The git commit this image was built from; reported by /v1/system/status as release identity.
+ARG TRADING_RELEASE_REVISION=unknown
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     TRADING_PROJECT_ROOT=/app \
-    TRADING_CONFIG_DIR=/app/configs
+    TRADING_CONFIG_DIR=/app/configs \
+    TRADING_RELEASE_REVISION=${TRADING_RELEASE_REVISION}
 USER 10001
 ENTRYPOINT ["trading"]
 CMD ["--help"]

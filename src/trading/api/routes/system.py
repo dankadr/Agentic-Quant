@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from trading.api.auth import AuthPrincipal, require_viewer
@@ -16,6 +16,14 @@ from trading.db.models.market import MarketBar
 router = APIRouter(prefix="/v1/system", tags=["system"])
 
 
+class ReleaseStatus(BaseModel):
+    revision: str
+    image: str
+    config_sha256: str
+    schema_head: str | None  # newest migration shipped with this code
+    schema_applied: str | None  # migration the database actually has
+
+
 class SystemStatus(BaseModel):
     mode: str
     trading_enabled: bool
@@ -26,6 +34,7 @@ class SystemStatus(BaseModel):
     session: dict[str, object] | None
     last_data_at: UtcDatetime | None
     last_reconciled_at: UtcDatetime | None
+    release: ReleaseStatus
 
 
 def _session_info(request: Request, clock: Clock) -> dict[str, object] | None:
@@ -56,6 +65,7 @@ def system_status(
     clock: Clock = Depends(get_clock),
 ) -> SystemStatus:
     state = get_system_state(session)
+    release = request.app.state.release
     return SystemStatus(
         mode=state.mode,
         trading_enabled=state.trading_enabled,
@@ -66,4 +76,16 @@ def system_status(
         session=_session_info(request, clock),
         last_data_at=session.scalar(select(func.max(MarketBar.ingested_at))),
         last_reconciled_at=state.last_reconciled_at,
+        release=ReleaseStatus(
+            revision=release.revision,
+            image=release.image,
+            config_sha256=release.config_sha256,
+            schema_head=release.schema_head,
+            schema_applied=session.scalar(
+                text(
+                    "SELECT CASE WHEN to_regclass('public.alembic_version') IS NULL THEN NULL"
+                    " ELSE (SELECT version_num FROM alembic_version LIMIT 1) END"
+                )
+            ),
+        ),
     )

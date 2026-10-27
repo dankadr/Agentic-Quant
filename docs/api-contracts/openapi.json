@@ -823,6 +823,53 @@
         "title": "ProposeRequest",
         "type": "object"
       },
+      "ReleaseStatus": {
+        "properties": {
+          "config_sha256": {
+            "title": "Config Sha256",
+            "type": "string"
+          },
+          "image": {
+            "title": "Image",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "schema_applied": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema Applied"
+          },
+          "schema_head": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema Head"
+          }
+        },
+        "required": [
+          "revision",
+          "image",
+          "config_sha256",
+          "schema_head",
+          "schema_applied"
+        ],
+        "title": "ReleaseStatus",
+        "type": "object"
+      },
       "ReviewRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1042,6 +1089,9 @@
             "title": "Mode",
             "type": "string"
           },
+          "release": {
+            "$ref": "#/components/schemas/ReleaseStatus"
+          },
           "risk_reason": {
             "anyOf": [
               {
@@ -1091,7 +1141,8 @@
           "version",
           "session",
           "last_data_at",
-          "last_reconciled_at"
+          "last_reconciled_at",
+          "release"
         ],
         "title": "SystemStatus",
         "type": "object"

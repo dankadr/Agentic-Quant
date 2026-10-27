@@ -51,7 +51,8 @@ def test_importing_the_api_never_loads_broker_code() -> None:
 
 
 @pytest.mark.parametrize(
-    "entrypoint", ["trading.cli", "trading.services.scheduler", "trading.api.app"]
+    "entrypoint",
+    ["trading.cli", "trading.services.scheduler", "trading.api.app", "trading.services.research"],
 )
 def test_non_worker_entrypoints_never_load_broker_code(entrypoint: str) -> None:
     """Review I4: the API/scheduler containers run `trading.cli`, so it must not pull in brokers."""

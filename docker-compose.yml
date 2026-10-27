@@ -1,5 +1,6 @@
-# PAPER_ONLY stack. There are no broker or trading credentials anywhere in this file. The only
-# external credential is the Alpaca MARKET DATA key pair (data-only), mounted into the worker alone.
+# PAPER_ONLY stack. There are no broker or trading credentials anywhere in this file. The external
+# credentials are the Alpaca MARKET DATA key pair (data-only; worker and research) and the LLM key
+# (research only).
 name: robinhood-trading
 
 x-app-env: &app-env
@@ -12,8 +13,13 @@ x-app-env: &app-env
   TRADING_LOG_LEVEL: INFO
 
 x-app: &app
-  image: robinhood-trading:local
-  build: .
+  # Tagged by release revision, so a deployment names exactly the code it runs. `:local` is only
+  # the fallback for an unversioned build.
+  image: robinhood-trading:${TRADING_RELEASE_REVISION:-local}
+  build:
+    context: .
+    args:
+      TRADING_RELEASE_REVISION: ${TRADING_RELEASE_REVISION:-unknown}
   restart: unless-stopped
   environment: *app-env
   secrets: [db_app_password]
@@ -70,8 +76,7 @@ services:
       <<: *app-env
       TRADING_ALPACA_KEY_ID_FILE: /run/secrets/alpaca_key_id
       TRADING_ALPACA_SECRET_FILE: /run/secrets/alpaca_secret
-      TRADING_LLM_API_KEY_FILE: /run/secrets/llm_api_key
-    secrets: [db_app_password, alpaca_key_id, alpaca_secret, llm_api_key]
+    secrets: [db_app_password, alpaca_key_id, alpaca_secret]
     healthcheck:
       test: ["CMD", "trading", "healthcheck", "worker"]
       interval: 10s
@@ -89,6 +94,24 @@ services:
       retries: 6
       start_period: 20s
 
+  # Model-driven research. No executor lease and no broker code: a stalled model call delays
+  # research output only. It reads market-data and news keys (never trading keys) and the LLM key.
+  research:
+    <<: *app
+    command: ["research-worker"]
+    environment:
+      <<: *app-env
+      TRADING_ALPACA_KEY_ID_FILE: /run/secrets/alpaca_key_id
+      TRADING_ALPACA_SECRET_FILE: /run/secrets/alpaca_secret
+      TRADING_LLM_API_KEY_FILE: /run/secrets/llm_api_key
+    secrets: [db_app_password, alpaca_key_id, alpaca_secret, llm_api_key]
+    healthcheck:
+      test: ["CMD", "trading", "healthcheck", "research"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
   prometheus:
     image: prom/prometheus:v2.55.1
     restart: unless-stopped
@@ -97,7 +120,7 @@ services:
       - promdata:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
-    depends_on: [api, worker, scheduler]
+    depends_on: [api, worker, scheduler, research]
 
 volumes:
   pgdata:

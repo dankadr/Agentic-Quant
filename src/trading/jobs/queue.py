@@ -144,6 +144,34 @@ def complete(
     return row is not None
 
 
+def renew(
+    session: Session,
+    job_id: UUID,
+    *,
+    worker_id: str,
+    attempts: int,
+    now: datetime,
+    lease_for: timedelta,
+) -> bool:
+    """Extend a running job's lease. False when this claim no longer owns it (it expired and
+    was reclaimed, or the job finished): the caller must treat its result as obsolete."""
+    row = session.execute(
+        text(
+            "UPDATE jobs SET lease_until = :until, updated_at = :now"
+            " WHERE id = :id AND state = 'RUNNING' AND locked_by = :worker AND attempts = :attempts"
+            " AND lease_until >= :now RETURNING id"
+        ),
+        {
+            "id": job_id,
+            "until": now + lease_for,
+            "now": now,
+            "worker": worker_id,
+            "attempts": attempts,
+        },
+    ).one_or_none()
+    return row is not None
+
+
 def fail(
     session: Session, job_id: UUID, *, worker_id: str, attempts: int, error: str, now: datetime
 ) -> JobState | None:

@@ -35,7 +35,7 @@ from trading.risk.halts import NotInHaltError, clear_drawdown_halt
 from trading.services.health import check_health, new_holder_id
 
 API_PORT = 8000
-METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102}
+METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102, "research": 9103}
 
 if TYPE_CHECKING:
     from trading.agents.llm import LlmClient
@@ -50,6 +50,7 @@ app.add_typer(admin_app, name="admin")
 class ServiceRole(StrEnum):
     WORKER = "worker"
     SCHEDULER = "scheduler"
+    RESEARCH = "research"
 
 
 def _bootstrap(service: str) -> tuple[Settings, AppConfig, sessionmaker[Session]]:
@@ -156,8 +157,14 @@ def worker() -> None:
     clock = SystemClock()
     calendar = _calendar()
     provider = _alpaca_provider(settings)
-    llm = _llm_client(settings, config)
-    news = _news_source(settings, config)
+    provider_name = provider.name if provider is not None else "replay"
+    if settings.provider_name is not None and settings.provider_name != provider_name:
+        typer.echo(
+            f"refusing to start: TRADING_PROVIDER_NAME={settings.provider_name!r} but the"
+            f" market-data provider is {provider_name!r}",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     def ctx_factory(lease: Lease) -> WorkerContext:
         # Without Alpaca data keys ticks are no-ops (fail closed); with them the worker trades
@@ -169,7 +176,7 @@ def worker() -> None:
             lease=lease,
             calendar=calendar,
             provider=provider,
-            provider_name=provider.name if provider is not None else "replay",
+            provider_name=provider_name,
         )
         return WorkerContext(
             settings=settings,
@@ -178,8 +185,6 @@ def worker() -> None:
             clock=clock,
             lease=lease,
             runtime=runtime,
-            llm=llm,
-            news=news,
         )
 
     code = run_worker(
@@ -206,6 +211,38 @@ def scheduler() -> None:
         calendar=_calendar(),
         stop=_stop_on_signals(),
         agents=_config.agents,
+    )
+    raise typer.Exit(code)
+
+
+@app.command("research-worker")
+def research_worker() -> None:
+    """Run the research worker: model-driven agent jobs, with no executor lease and no broker."""
+    # Same isolation rule as the worker: this process never loads broker code.
+    from trading.services.research import (  # noqa: PLC0415
+        ResearchContext,
+        build_research_handlers,
+        run_research_worker,
+    )
+
+    settings, config, session_factory = _bootstrap("research")
+    clock = SystemClock()
+    ctx = ResearchContext(
+        settings=settings,
+        config=config,
+        session_factory=session_factory,
+        clock=clock,
+        calendar=_calendar(),
+        provider_name=settings.provider_name or "replay",
+        llm=_llm_client(settings, config),
+        news=_news_source(settings, config),
+    )
+    code = run_research_worker(
+        session_factory=session_factory,
+        clock=clock,
+        worker_id=new_holder_id(settings.worker_id),
+        handlers=build_research_handlers(ctx),
+        stop=_stop_on_signals(),
     )
     raise typer.Exit(code)
 

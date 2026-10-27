@@ -5,6 +5,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 
 def _config(url: str) -> Config:
@@ -22,3 +23,9 @@ def upgrade(url: str, revision: str = "head") -> None:
         command.downgrade(cfg, "base")
     else:
         command.upgrade(cfg, revision)
+
+
+def schema_head() -> str | None:
+    """The newest migration this code knows about, or None when no migrations are shipped."""
+    cfg = _config("sqlite://")
+    return ScriptDirectory.from_config(cfg).get_current_head()

@@ -9,7 +9,9 @@ from trading.api.problems import register_handlers
 from trading.api.routes import audit, control, health, portfolio, quant, system
 from trading.core.clock import Clock
 from trading.core.config import AppConfig, Settings
+from trading.core.release import release_info
 from trading.data.calendar import MarketCalendar
+from trading.db.migrate import schema_head
 
 
 def create_app(
@@ -26,6 +28,12 @@ def create_app(
     app.state.session_factory = session_factory
     app.state.clock = clock
     app.state.calendar = calendar
+    app.state.release = release_info(
+        revision=settings.release_revision,
+        image=settings.release_image,
+        config_dir=settings.config_dir,
+        schema_head=schema_head(),
+    )
     register_handlers(app)
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(RequestIdMiddleware)  # added last = outermost
