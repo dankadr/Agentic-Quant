@@ -95,3 +95,55 @@ def test_scheduler_exits_when_lease_taken_over(
     t.join(10)
     assert not t.is_alive()
     assert result["code"] == 3
+
+
+def test_scheduler_applies_approved_agent_config_when_idle_then_exits_for_reload(
+    db: Session,
+    session_factory: sessionmaker[Session],
+    calendar,  # type: ignore[no-untyped-def]
+) -> None:
+    from datetime import UTC, datetime
+
+    class TickingClock(ManualClock):
+        # Every reading is later than the last, so an edit applied after startup is "newer".
+        def now(self) -> datetime:
+            self.advance(timedelta(milliseconds=10))
+            return super().now()
+
+    sunday = TickingClock(datetime(2026, 10, 18, 15, 0, tzinfo=UTC))  # no session on a Sunday
+    with session_factory.begin() as s:
+        s.execute(
+            text(
+                "insert into agent_config_proposals (agent_name, changes_json, base_json,"
+                " rationale, status, source, proposed_by, created_at) values"
+                " ('macro', '{\"run_every_minutes\": 15}', '{\"run_every_minutes\": 30}', 'r',"
+                " 'APPROVED', 'OPERATOR', 'op', :t)"
+            ),
+            {"t": datetime(2026, 10, 18, 14, 0, tzinfo=UTC)},
+        )
+    result: dict[str, int] = {}
+    stop = threading.Event()
+
+    def target() -> None:
+        result["code"] = run_scheduler(
+            session_factory=session_factory,
+            clock=sunday,
+            holder="s1",
+            calendar=calendar,
+            stop=stop,
+            lease_ttl=TTL,
+            interval=0.1,
+            acquire_retry=0.1,
+            config_check_interval=0.1,
+        )
+
+    t = threading.Thread(target=target, daemon=True)
+    t.start()
+    t.join(15)
+    stop.set()  # never leak a scheduler into the next test
+    t.join(5)
+    assert result["code"] == 4
+    with session_factory() as s:
+        assert (
+            s.execute(text("select status from agent_config_proposals")).scalar_one() == "APPLIED"
+        )

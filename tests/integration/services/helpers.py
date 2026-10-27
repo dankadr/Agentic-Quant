@@ -70,6 +70,7 @@ def start_worker(
     startup_hooks: Any = (),
     lease_ttl: timedelta = TTL,
     handlers_factory: Any = None,
+    **run_kwargs: Any,
 ) -> WorkerHandle:
     stop = threading.Event()
     handle = WorkerHandle(thread=threading.Thread(daemon=True), stop=stop)
@@ -96,6 +97,7 @@ def start_worker(
             acquire_retry=0.1,
             startup_hooks=startup_hooks,
             **({"handlers_factory": handlers_factory} if handlers_factory else {}),
+            **run_kwargs,
         )
 
     handle.thread = threading.Thread(target=target, daemon=True)

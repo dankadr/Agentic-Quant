@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 import trading
+from trading.agents.effective_config import load_effective_config
 from trading.api.app import create_app
 from trading.api.auth import Role, create_principal
 from trading.core.clock import SystemClock
@@ -55,9 +56,10 @@ class ServiceRole(StrEnum):
 def _bootstrap(service: str) -> tuple[Settings, AppConfig, sessionmaker[Session]]:
     settings = Settings()
     configure_logging(settings.log_level, settings.log_json)
-    config = load_config(settings.config_dir)
     start_metrics_server(settings.metrics_port or METRICS_PORTS[service])
-    return settings, config, make_session_factory(make_engine(settings.resolved_database_url()))
+    session_factory = make_session_factory(make_engine(settings.resolved_database_url()))
+    # configs/*.yaml plus agent-setting edits applied since; one-shot CLI commands use plain YAML.
+    return settings, load_effective_config(settings.config_dir, session_factory), session_factory
 
 
 def _stop_on_signals() -> threading.Event:

@@ -1,17 +1,20 @@
 """The trading worker: one active executor, guarded by a fenced lease.
 
-Exit codes: 0 clean stop, 1 startup failure, 3 lease lost or database failure. A non-zero exit
+Exit codes: 0 clean stop, 1 startup failure, 3 lease lost or database failure, 4 an approved
+agent-config change was applied (restart to load it). A non-zero exit
 lets the container supervisor restart the process, which re-acquires the lease and reconciles
 before processing anything.
 """
 
 import threading
+import time
 from collections.abc import Callable, Sequence
 from datetime import timedelta
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
+from trading.agents.effective_config import config_changed_since
 from trading.core.clock import Clock
 from trading.jobs.lease import (
     EXECUTOR_LEASE,
@@ -25,7 +28,12 @@ from trading.jobs.outbox import dispatch_pending
 from trading.jobs.runner import Handler, JobRunner
 from trading.monitoring.logging import get_logger
 from trading.monitoring.metrics import LEASE_HELD
-from trading.services.exit_codes import EXIT_LEASE_LOST, EXIT_OK, EXIT_STARTUP_FAILED
+from trading.services.exit_codes import (
+    EXIT_CONFIG_RELOAD,
+    EXIT_LEASE_LOST,
+    EXIT_OK,
+    EXIT_STARTUP_FAILED,
+)
 from trading.services.handlers import WorkerContext, build_handlers
 
 _log = get_logger(__name__)
@@ -71,6 +79,7 @@ def run_worker(
     lease_ttl: timedelta = timedelta(seconds=30),
     poll: float = 1.0,
     acquire_retry: float = 5.0,
+    config_check_interval: float = 30.0,
     startup_hooks: Sequence[Callable[[WorkerContext], None]] = (),
     handlers_factory: Callable[[WorkerContext], dict[str, Handler]] = build_handlers,
 ) -> int:
@@ -96,7 +105,8 @@ def run_worker(
         lease_for=lease_ttl,
     )
     renew_every = lease_ttl / 3
-    last_renew = clock.now()
+    started_at = last_renew = clock.now()
+    last_config_check = time.monotonic()
     _log.info("worker_started", worker_id=worker_id, fencing_token=lease.fencing_token)
     try:
         while not stop.is_set():
@@ -112,6 +122,15 @@ def run_worker(
             worked = runner.run_once()
             with session_factory.begin() as session:
                 dispatch_pending(session, {}, now=clock.now())
+            if time.monotonic() - last_config_check >= config_check_interval:
+                last_config_check = time.monotonic()
+                with session_factory() as session:
+                    reload = config_changed_since(session, started_at)
+                if reload:  # between jobs, never during one
+                    _log.info("worker_config_reload", worker_id=worker_id)
+                    LEASE_HELD.labels(EXECUTOR_LEASE).set(0)
+                    _release(session_factory, lease)
+                    return EXIT_CONFIG_RELOAD
             if not worked:
                 stop.wait(poll)
     except (SQLAlchemyError, LeaseLost):

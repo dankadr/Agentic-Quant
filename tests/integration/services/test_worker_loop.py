@@ -156,3 +156,54 @@ def test_worker_exits_nonzero_when_a_handler_hits_lease_loss_or_a_database_error
     worker.thread.join(10)
     assert not worker.thread.is_alive()
     assert worker.result["code"] == 3
+
+
+def _apply_config_change(sf: sessionmaker[Session]) -> None:
+    """An approved agent-config edit applied just now (after any worker started)."""
+    with sf.begin() as s:
+        s.execute(
+            text(
+                "insert into agent_config_proposals (agent_name, changes_json, base_json,"
+                " rationale, status, source, proposed_by, created_at, applied_at) values"
+                " ('macro', '{\"run_every_minutes\": 15}', '{\"run_every_minutes\": 30}', 'r',"
+                " 'APPLIED', 'OPERATOR', 'op', :t, :t)"
+            ),
+            {"t": SystemClock().now() + timedelta(seconds=1)},
+        )
+
+
+def test_worker_exits_for_reload_when_agent_config_was_applied(
+    db: Session, session_factory: sessionmaker[Session]
+) -> None:
+    worker = start_worker(session_factory, config_check_interval=0.1)
+    assert wait_until(lambda: lease_holder(session_factory, EXECUTOR_LEASE) == "w1")
+    _apply_config_change(session_factory)
+    worker.thread.join(10)
+    assert not worker.thread.is_alive()
+    assert worker.result["code"] == 4
+    assert lease_holder(session_factory, EXECUTOR_LEASE) is None  # released for the restart
+
+
+def test_reload_exit_waits_for_the_running_job(
+    db: Session, session_factory: sessionmaker[Session]
+) -> None:
+    import threading
+
+    started = threading.Event()
+
+    def slow_handlers(ctx: WorkerContext) -> dict:  # type: ignore[type-arg]
+        def heartbeat(job: object) -> None:
+            started.set()
+            _apply_config_change(session_factory)  # applied while the job is running
+            started.wait(0.5)
+            threading.Event().wait(0.8)
+
+        return {"heartbeat": heartbeat}
+
+    _enqueue_heartbeat(session_factory)
+    worker = start_worker(
+        session_factory, handlers_factory=slow_handlers, config_check_interval=0.1
+    )
+    worker.thread.join(15)
+    assert worker.result["code"] == 4
+    assert job_states(session_factory) == ["SUCCEEDED"]  # the job finished before the exit
