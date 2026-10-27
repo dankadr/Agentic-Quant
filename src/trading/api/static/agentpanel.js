@@ -140,8 +140,9 @@ function decisions(d) {
   const items = (d.decisions && d.decisions.items) || [];
   const box = el("div", null, "stack");
   if (!items.length) box.append(empty("no decisions yet"));
-  for (const x of items) {
+  items.forEach((x, i) => {
     const det = el("details", null, "run");
+    if (i === 0) det.setAttribute("open", "");  // the latest decision's "why" is visible at a glance
     const sum = el("summary");
     append(sum, el("span", fmtDateTime(x.at), "mono small"), document.createTextNode(" "),
       chip(x.status, x.status === "COMPLETED" ? "good" : "bad"), document.createTextNode(" "),
@@ -155,7 +156,7 @@ function decisions(d) {
     if (x.input_hash) body.append(el("p", "input " + x.input_hash, "muted small mono"));
     det.append(body);
     box.append(det);
-  }
+  });
   return section("Recent decisions: why", box);
 }
 
