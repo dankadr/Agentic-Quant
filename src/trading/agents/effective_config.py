@@ -27,12 +27,17 @@ _log = get_logger(__name__)
 SETTLE = timedelta(minutes=10)
 
 
-def overlay_agents(base: AgentsConfig, session: Session) -> AgentsConfig:
-    """Apply every APPLIED proposal in order. One that no longer validates is skipped, not fatal."""
+def overlay_agents(
+    base: AgentsConfig, session: Session, statuses: tuple[str, ...] = (APPLIED,)
+) -> AgentsConfig:
+    """Apply proposals in the given statuses, oldest first. A stale one is skipped, not fatal.
+
+    Services use the default (APPLIED only). The API passes APPLIED+APPROVED to show what will
+    run after the next session boundary."""
     current = base
     rows = session.scalars(
         select(AgentConfigProposal)
-        .where(AgentConfigProposal.status == APPLIED)
+        .where(AgentConfigProposal.status.in_(statuses))
         .order_by(AgentConfigProposal.created_at, AgentConfigProposal.id)
     )
     for row in rows:

@@ -7,6 +7,7 @@ import trading
 from trading.api.middleware import MetricsMiddleware, RequestIdMiddleware
 from trading.api.problems import register_handlers
 from trading.api.routes import (
+    agents,
     audit,
     control,
     dashboard,
@@ -45,5 +46,6 @@ def create_app(
     app.include_router(portfolio.router)
     app.include_router(quant.router)
     app.include_router(dashboard.router)
+    app.include_router(agents.router)  # after dashboard: /v1/agents/runs must match first
     app.include_router(transactions.router)
     return app
