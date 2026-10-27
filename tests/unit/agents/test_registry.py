@@ -37,3 +37,10 @@ def test_llm_agents_expose_their_prompt_text() -> None:
 def test_risk_and_trading_scopes_are_locked() -> None:
     assert {"risk", "paper_broker", "system", "universe", "strategies", "llm"} <= set(LOCKED_SCOPES)
     assert not any(a in LOCKED_SCOPES for a in AGENT_REGISTRY)
+
+
+def test_agents_that_need_secrets_say_so() -> None:
+    for name in ("macro", "fundamental", "evaluator", "technical"):
+        assert any("LLM" in r for r in AGENT_REGISTRY[name].requires), name
+    assert any("Alpaca" in r for r in AGENT_REGISTRY["fundamental"].requires)
+    assert AGENT_REGISTRY["consensus"].requires == ()

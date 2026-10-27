@@ -70,6 +70,7 @@ function rules(d) {
     ["Model", i.uses_llm ? "LLM, prompt " + i.prompt_version : "deterministic, no model (" + i.prompt_version + ")"],
     ["Valid output", i.valid_output],
     ["When it fails", i.on_failure],
+    ["Needs", i.requires.length ? i.requires.join("; ") : "nothing beyond the database"],
   ]));
   if (i.prompt_text) {
     const det = el("details", null, "run");
@@ -127,7 +128,7 @@ function settings(d, actions, redraw) {
   review.addEventListener("click", async () => {
     const changes = sync();
     if (!Object.keys(changes).length) return;
-    if (await actions.agentChange(d.name, changes, detail.config)) { agentState.drafts[d.name] = {}; redraw(); }
+    if (await actions.agentChange(d.name, changes, detail.config, detail.info.requires)) { agentState.drafts[d.name] = {}; redraw(); }
   });
   const buttons = el("div", null, "row");
   append(buttons, review, reset);

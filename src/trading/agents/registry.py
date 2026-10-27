@@ -40,6 +40,7 @@ class AgentInfo:
     valid_output: str
     on_failure: str
     editable: tuple[str, ...]
+    requires: tuple[str, ...] = ()
 
 
 def _fields(name: str) -> tuple[str, ...]:
@@ -66,6 +67,7 @@ AGENT_REGISTRY: Mapping[str, AgentInfo] = {
         on_failure="A missing or stale view is ignored (multiplier 1) unless `required` is true; "
         "it is recorded either way.",
         editable=_fields("macro"),
+        requires=("LLM key (secrets/llm_api_key)",),
     ),
     "fundamental": AgentInfo(
         name="fundamental",
@@ -79,6 +81,10 @@ AGENT_REGISTRY: Mapping[str, AgentInfo] = {
         "text",
         on_failure="The run is recorded as REJECTED_INVALID or FAILED and nothing else changes.",
         editable=_fields("fundamental"),
+        requires=(
+            "LLM key (secrets/llm_api_key)",
+            "Alpaca news keys (secrets/alpaca_key_id, secrets/alpaca_secret)",
+        ),
     ),
     "evaluator": AgentInfo(
         name="evaluator",
@@ -91,6 +97,7 @@ AGENT_REGISTRY: Mapping[str, AgentInfo] = {
         valid_output="a structured review whose lists respect the schema's length limits",
         on_failure="A reply that breaks the schema is stored as REJECTED_INVALID with the error.",
         editable=_fields("evaluator"),
+        requires=("LLM key (secrets/llm_api_key)",),
     ),
     "consensus": AgentInfo(
         name="consensus",
@@ -118,5 +125,6 @@ AGENT_REGISTRY: Mapping[str, AgentInfo] = {
         "sensitivity-robust, and every value was actually tested",
         on_failure="No proposal is filed; the reason is recorded.",
         editable=_fields("technical"),
+        requires=("LLM key (secrets/llm_api_key)",),
     ),
 }

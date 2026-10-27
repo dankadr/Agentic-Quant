@@ -192,7 +192,7 @@ async function reviewProposal(p, approve) {
   }
 }
 
-async function agentChange(name, changes, config) {
+async function agentChange(name, changes, config, requires) {
   const body = el("div", null, "stack");
   const dl = el("dl", null, "kv diff");
   for (const [k, v] of Object.entries(changes)) {
@@ -202,7 +202,11 @@ async function agentChange(name, changes, config) {
     dl.append(el("dt", k), dd);
   }
   const note = el("textarea", null, null, { "aria-label": "Why this change", placeholder: "Why this change (required)" });
-  append(body, el("p", "Change " + name + " settings?"), dl, note,
+  append(body, el("p", "Change " + name + " settings?"), dl);
+  if (changes.enabled === true && requires && requires.length) {
+    body.append(el("p", "Enabling " + name + " needs: " + requires.join("; ") + ". Without them its job is skipped and nothing runs. This page cannot check that they are present.", "warn small"));
+  }
+  append(body, note,
     el("p", "Applies after the trading session ends; running services restart once to load it. You can see it under Edit history.", "muted small"));
   const ok = await openDialog({ title: "Review change", body, confirm: "Approve change" });
   if (!ok) return false;

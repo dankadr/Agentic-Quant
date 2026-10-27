@@ -63,6 +63,7 @@ class AgentInfoOut(BaseModel):
     prompt_text: str | None
     valid_output: str
     on_failure: str
+    requires: list[str]
 
 
 class SummaryOut(BaseModel):

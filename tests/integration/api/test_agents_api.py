@@ -47,6 +47,7 @@ def test_empty_agent_detail_is_200_and_idle(client: TestClient, viewer_key: str)
     body = client.get("/v1/agents/macro", headers=bearer(viewer_key)).json()
     assert body["summary"]["health"] == "idle"
     assert body["info"]["name"] == "macro" and body["info"]["prompt_version"] == "macro-v1"
+    assert any("LLM" in r for r in body["info"]["requires"])
     fields = {f["name"]: f for f in body["config"]}
     assert (fields["run_every_minutes"]["value"], fields["run_every_minutes"]["pending"]) == (
         30,

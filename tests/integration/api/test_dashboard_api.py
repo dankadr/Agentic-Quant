@@ -178,6 +178,8 @@ def test_agents_view_is_wired_to_the_agent_panel_endpoints() -> None:
         assert path in app_js, path
     # locked scopes are shown, never offered as inputs
     assert "locked" in panel
+    # enabling an agent warns about what it needs (the API cannot see the worker's secrets)
+    assert "requires" in panel and "requires" in app_js
 
 
 # ---- data coverage and research ------------------------------------------------------------------

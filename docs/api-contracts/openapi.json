@@ -84,6 +84,13 @@
             "title": "Prompt Version",
             "type": "string"
           },
+          "requires": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Requires",
+            "type": "array"
+          },
           "uses_llm": {
             "title": "Uses Llm",
             "type": "boolean"
@@ -102,7 +109,8 @@
           "prompt_version",
           "prompt_text",
           "valid_output",
-          "on_failure"
+          "on_failure",
+          "requires"
         ],
         "title": "AgentInfoOut",
         "type": "object"

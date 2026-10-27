@@ -426,8 +426,9 @@ function mountAgents(root, ctx) {
 
   function drawTabs() { tabs.set({ list, selected: agentState.selected }, () => agentTabs(list && list.items, pick)); }
   function drawDetail(force) {
-    const sig = stable({ current, drafts: agentState.drafts[agentState.selected] || null });
+    const sig = stable(current);  // drafts are deliberately not part of it: typing must not redraw
     if (!force && sig === drawn) return;
+    if (!force && host.contains(document.activeElement)) return;  // never yank a field mid-typing
     drawn = sig;
     renderAgentPanel(host, current, ctx.actions, () => drawDetail(true));
   }

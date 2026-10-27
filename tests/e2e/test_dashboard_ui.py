@@ -239,3 +239,18 @@ def test_history_shows_daily_pnl_bars_and_a_sessions_table(new_page, demo: Demo)
         page.query_selector("rect.bar.up") is not None
         and page.query_selector("rect.bar.down") is not None
     )
+
+
+def test_typing_in_an_agent_setting_survives_a_background_refresh(new_page, demo: Demo) -> None:  # type: ignore[no-untyped-def]
+    page = new_page()
+    login(page, demo, route="agents")
+    page.wait_for_selector("#cfg-run_every_minutes")
+    field = page.locator("#cfg-run_every_minutes")
+    field.click()
+    field.fill("20")
+    page.dispatch_event("body", "keydown")  # no-op; the refresh below is what matters
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")  # forces a refresh
+    page.wait_for_timeout(1500)
+    assert page.evaluate("document.activeElement && document.activeElement.id") == "cfg-run_every_minutes"
+    assert page.input_value("#cfg-run_every_minutes") == "20"
+    assert "Review change (1)" in page.inner_text("#view")
