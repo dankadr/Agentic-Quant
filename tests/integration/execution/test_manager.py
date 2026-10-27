@@ -418,10 +418,14 @@ def test_cancel_flows(env: Env) -> None:
 
 
 def test_cancel_stale_entries_cancels_old_entries_only(env: Env) -> None:
+    bought = env.place()
+    env.manager.submit(bought)
+    env.tick()  # fills, so there is a position to sell
+    env.manager.sync_fills()
+    exit_order = env.place(side=Side.SELL, limit="101.00")
     stale_entry = env.place(limit="99.00")
-    exit_order = env.place(limit="99.00", entry=False)  # the flag, not the side, marks an exit
-    env.manager.submit(stale_entry)
     env.manager.submit(exit_order)
+    env.manager.submit(stale_entry)
     ttl = timedelta(seconds=120)
     env.clock.advance(timedelta(seconds=60))
     assert env.manager.cancel_stale_entries(ttl=ttl) == 0  # not old enough yet
@@ -432,7 +436,7 @@ def test_cancel_stale_entries_cancels_old_entries_only(env: Env) -> None:
     assert env.status(stale_entry) == "CANCELED"
     assert env.row(stale_entry).status_reason == "ENTRY_ORDER_TTL"
     assert env.status(fresh_entry) == "ACKNOWLEDGED"
-    assert env.status(exit_order) == "ACKNOWLEDGED"
+    assert env.status(exit_order) == "ACKNOWLEDGED"  # exits are never cancelled by the TTL
 
 
 def test_cancel_refuses_orders_in_limbo(
