@@ -108,6 +108,10 @@ def test_only_sanctioned_routes_mutate_state_through_the_api(app: FastAPI) -> No
         ("POST", "/v1/strategies/{strategy_id}/propose-config"),
         ("POST", "/v1/config-proposals/{proposal_id}/approve"),
         ("POST", "/v1/config-proposals/{proposal_id}/reject"),
+        # Agent settings (dashboard Agents panel): proposals for the fields an agent exposes, never
+        # risk, broker or mode; approved edits apply only when no session is open.
+        ("POST", "/v1/agents/{name}/config-proposals"),
+        ("POST", "/v1/agent-config-proposals/{proposal_id}/review"),
     }
     assert not [p for _, p in mutating if "order" in p or "risk" in p or "mode" in p]
     assert len(paths) >= 9  # guard against the check passing because the schema came back empty
