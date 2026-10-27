@@ -18,8 +18,15 @@ from trading.api.routes import (
     transactions,
 )
 from trading.core.clock import Clock
-from trading.core.config import AppConfig, Settings
+from trading.core.config import AgentsConfig, AppConfig, ConfigError, Settings, load_config
 from trading.data.calendar import MarketCalendar
+
+
+def _yaml_agents(settings: Settings, config: AppConfig) -> AgentsConfig:
+    try:
+        return load_config(settings.config_dir).agents
+    except ConfigError:
+        return config.agents
 
 
 def create_app(
@@ -33,6 +40,9 @@ def create_app(
     app = FastAPI(title="Trading API", version=trading.__version__)
     app.state.settings = settings
     app.state.config = config
+    # The YAML defaults: what agent settings are before any dashboard edit. The agents routes
+    # overlay applied edits per request, so they stay right after a service restarts for a reload.
+    app.state.yaml_agents = _yaml_agents(settings, config)
     app.state.session_factory = session_factory
     app.state.clock = clock
     app.state.calendar = calendar

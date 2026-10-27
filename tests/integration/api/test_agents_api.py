@@ -164,3 +164,40 @@ def test_same_idempotency_key_for_a_different_agent_creates_its_own_proposal(
     assert (a.json()["agent_name"], b.json()["agent_name"]) == ("macro", "fundamental")
     db.rollback()
     assert db.execute(text("select count(*) from agent_config_proposals")).scalar_one() == 2
+
+
+def test_applied_edits_show_as_the_running_value_not_as_pending(
+    client: TestClient, db: Session, viewer_key: str, operator_key: str
+) -> None:
+    created = post(client, "/v1/agents/macro/config-proposals", operator_key, NEW).json()
+    post(
+        client,
+        f"/v1/agent-config-proposals/{created['id']}/review",
+        operator_key,
+        {"approve": True},
+        "k2",
+    )
+    db.execute(text("update agent_config_proposals set status = 'APPLIED', applied_at = now()"))
+    db.commit()  # the services applied it and restarted; this API process still has the old startup config
+    detail = client.get("/v1/agents/macro", headers=bearer(viewer_key)).json()
+    field = {f["name"]: f for f in detail["config"]}["run_every_minutes"]
+    assert (field["value"], field["pending"]) == (15, None)
+    disabled = post(client, "/v1/agents/fundamental/config-proposals", operator_key,
+                    {"changes": {"enabled": False}, "rationale": "off"}, "k3").json()  # fmt: skip
+    post(
+        client,
+        f"/v1/agent-config-proposals/{disabled['id']}/review",
+        operator_key,
+        {"approve": True},
+        "k4",
+    )
+    db.execute(
+        text(
+            "update agent_config_proposals set status = 'APPLIED', applied_at = now() where status = 'APPROVED'"
+        )
+    )
+    db.commit()
+    items = {
+        a["name"]: a for a in client.get("/v1/agents", headers=bearer(viewer_key)).json()["items"]
+    }
+    assert items["fundamental"]["enabled"] is False

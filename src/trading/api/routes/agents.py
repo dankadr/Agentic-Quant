@@ -29,11 +29,11 @@ from trading.agents.registry import AGENT_REGISTRY, LOCKED_SCOPES, AgentInfo
 from trading.agents.stats import agent_decisions, agent_summary
 from trading.agents.suggestions import suggest
 from trading.api.auth import AuthPrincipal, require_operator, require_viewer
-from trading.api.deps import get_clock, get_config, get_session
+from trading.api.deps import get_clock, get_session
 from trading.api.idempotency import run_idempotent
 from trading.api.problems import ApiProblem
 from trading.core.clock import Clock
-from trading.core.config import AgentsConfig, AppConfig
+from trading.core.config import AgentsConfig
 from trading.core.time import UtcDatetime
 from trading.db.models.research import AgentConfigProposal
 
@@ -183,9 +183,19 @@ def _proposal_out(row: AgentConfigProposal) -> ProposalOut:
     )
 
 
-def _projected(config: AppConfig, session: Session) -> AgentsConfig:
+def get_base(request: Request) -> AgentsConfig:
+    base: AgentsConfig = request.app.state.yaml_agents
+    return base
+
+
+def _running(base: AgentsConfig, session: Session) -> AgentsConfig:
+    """What the services run with: the YAML defaults plus applied edits."""
+    return overlay_agents(base, session, ("APPLIED",))
+
+
+def _projected(base: AgentsConfig, session: Session) -> AgentsConfig:
     """What will run after the next session boundary: applied plus approved edits."""
-    return overlay_agents(config.agents, session, ("APPLIED", APPROVED))
+    return overlay_agents(base, session, ("APPLIED", APPROVED))
 
 
 def _since(clock: Clock) -> datetime:
@@ -196,9 +206,10 @@ def _since(clock: Clock) -> datetime:
 def list_agents(
     _: AuthPrincipal = Depends(require_viewer),
     session: Session = Depends(get_session),
-    config: AppConfig = Depends(get_config),
+    base: AgentsConfig = Depends(get_base),
     clock: Clock = Depends(get_clock),
 ) -> AgentList:
+    running = _running(base, session)
     items = []
     for name, info in AGENT_REGISTRY.items():
         summary = agent_summary(session, name, since=_since(clock))
@@ -207,7 +218,7 @@ def list_agents(
                 name=name,
                 health=summary.health,
                 last_run_at=summary.last_run_at,
-                enabled=bool(getattr(config.agents, name).enabled),
+                enabled=bool(getattr(running, name).enabled),
                 uses_llm=info.uses_llm,
             )
         )
@@ -219,13 +230,13 @@ def get_agent(
     name: str,
     _: AuthPrincipal = Depends(require_viewer),
     session: Session = Depends(get_session),
-    config: AppConfig = Depends(get_config),
+    base: AgentsConfig = Depends(get_base),
     clock: Clock = Depends(get_clock),
 ) -> AgentDetail:
     info = _info(name)
     summary = agent_summary(session, name, since=_since(clock))
-    running = getattr(config.agents, name).model_dump()
-    projected = getattr(_projected(config, session), name).model_dump()
+    running = getattr(_running(base, session), name).model_dump()
+    projected = getattr(_projected(base, session), name).model_dump()
     fields = [
         ConfigField(
             name=f,
@@ -255,10 +266,10 @@ def get_decisions(
     limit: int = Query(default=30, ge=1, le=200),
     _: AuthPrincipal = Depends(require_viewer),
     session: Session = Depends(get_session),
-    config: AppConfig = Depends(get_config),
+    base: AgentsConfig = Depends(get_base),
 ) -> DecisionList:
     _info(name)
-    macro_strategies = config.agents.macro.dependent_strategies
+    macro_strategies = _running(base, session).macro.dependent_strategies
     decisions = agent_decisions(session, name, limit=limit, macro_strategies=macro_strategies)
     return DecisionList(
         items=[
@@ -284,11 +295,11 @@ def get_suggestions(
     name: str,
     _: AuthPrincipal = Depends(require_viewer),
     session: Session = Depends(get_session),
-    config: AppConfig = Depends(get_config),
+    base: AgentsConfig = Depends(get_base),
     clock: Clock = Depends(get_clock),
 ) -> SuggestionList:
     _info(name)
-    found = suggest(session, name, config=_projected(config, session), now=clock.now())
+    found = suggest(session, name, config=_projected(base, session), now=clock.now())
     return SuggestionList(items=[SuggestionOut(**asdict(s)) for s in found])
 
 
@@ -323,12 +334,12 @@ def propose(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     principal: AuthPrincipal = Depends(require_operator),
     session: Session = Depends(get_session),
-    config: AppConfig = Depends(get_config),
+    base: AgentsConfig = Depends(get_base),
     clock: Clock = Depends(get_clock),
 ) -> JSONResponse:
     def action() -> tuple[int, dict[str, Any]]:
         _info(name)
-        projected = _projected(config, session)
+        projected = _projected(base, session)
         evidence: dict[str, Any] | None = None
         if body.source == "SUGGESTION":
             # Never trust client-supplied evidence: it must match a suggestion proposable now.
@@ -386,7 +397,7 @@ def review(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     principal: AuthPrincipal = Depends(require_operator),
     session: Session = Depends(get_session),
-    config: AppConfig = Depends(get_config),
+    base: AgentsConfig = Depends(get_base),
     clock: Clock = Depends(get_clock),
 ) -> JSONResponse:
     def action() -> tuple[int, dict[str, Any]]:
@@ -397,7 +408,7 @@ def review(
                 approve=body.approve,
                 reviewer=principal.name,
                 now=clock.now(),
-                effective=_projected(config, session),
+                effective=_projected(base, session),
             )
         except (ProposalInvalid, ProposalNotFound, ProposalConflict) as exc:
             raise _problem(exc) from exc
