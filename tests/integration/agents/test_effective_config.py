@@ -83,8 +83,32 @@ def test_apply_when_idle_waits_for_the_session_to_end(
     assert apply_when_idle(db, clock, calendar) == 0
     clock.set(open_at + timedelta(hours=6, minutes=35))  # 5 min after the close: still settling
     assert apply_when_idle(db, clock, calendar) == 0
-    clock.set(open_at + timedelta(hours=6, minutes=45))  # 10+ min after the close
+    clock.set(open_at + timedelta(hours=6, minutes=45))  # 20:15Z: the evaluator job just ran
+    assert apply_when_idle(db, clock, calendar) == 0
+    clock.set(open_at + timedelta(hours=7, minutes=11))  # 20:41Z: 40+ min after the close
     assert apply_when_idle(db, clock, calendar) == 1
+
+
+def test_apply_when_idle_never_lands_just_before_the_open(
+    db: Session, clock: ManualClock, calendar: MarketCalendar
+) -> None:
+    open_at = datetime(2026, 10, 19, 13, 30, tzinfo=UTC)
+    _proposal(db, "APPROVED")
+    clock.set(open_at - timedelta(minutes=1))  # 13:29Z: session start and fundamental jobs ran
+    assert apply_when_idle(db, clock, calendar) == 0
+    clock.set(open_at - timedelta(minutes=59))  # 12:31Z: inside the 60 min guard
+    assert apply_when_idle(db, clock, calendar) == 0
+    clock.set(open_at - timedelta(minutes=61))  # 12:29Z
+    assert apply_when_idle(db, clock, calendar) == 1
+
+
+def test_overlay_ignores_rows_that_name_locked_scopes_or_non_editable_fields(db: Session) -> None:
+    row = _proposal(db, "APPLIED")
+    row.agent_name, row.changes_json = "llm", {"base_url": "https://evil.example/v1"}
+    other = _proposal(db, "APPLIED")
+    other.changes_json = {"made_up_field": 1}
+    db.flush()
+    assert overlay_agents(BASE, db) == BASE
 
 
 def test_load_effective_config_reads_applied_overrides(

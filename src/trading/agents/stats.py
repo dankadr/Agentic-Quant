@@ -67,12 +67,14 @@ def _strings(value: object) -> tuple[str, ...]:
 
 
 def _decimal(value: object) -> Decimal | None:
-    if isinstance(value, bool) or not isinstance(value, str | int):
+    """Model output stores numbers as JSON numbers or strings; NaN, infinity and bools are not."""
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
         return None
     try:
-        return Decimal(str(value))
+        out = Decimal(str(value))
     except InvalidOperation:
         return None
+    return out if out.is_finite() else None
 
 
 def _when(value: object) -> datetime | None:

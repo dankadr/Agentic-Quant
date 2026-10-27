@@ -134,3 +134,16 @@ def test_stale_base_refused_on_approval(db: Session) -> None:
     assert row.status == "PENDING_REVIEW"
     # rejecting a stale proposal is always allowed
     review_agent_config(db, row.id, approve=False, reviewer="op", now=T0, effective=changed)
+
+
+def test_approval_revalidates_the_combined_settings(db: Session) -> None:
+    ttl = propose(db, {"ttl_minutes": 40}, who="a")  # alone: 40 > 30, fine
+    run = propose(db, {"run_every_minutes": 45}, who="b")  # alone: 45 < 60, fine
+    review_agent_config(db, ttl.id, approve=True, reviewer="op", now=T0, effective=EFFECTIVE)
+    approved = AgentsConfig.model_validate(  # what the API passes: projected incl. the approval
+        {**EFFECTIVE.model_dump(), "macro": {**EFFECTIVE.macro.model_dump(), "ttl_minutes": 40}}
+    )
+    with pytest.raises(ProposalConflict, match="combined"):
+        review_agent_config(db, run.id, approve=True, reviewer="op", now=T0, effective=approved)
+    db.refresh(run)
+    assert run.status == "PENDING_REVIEW"

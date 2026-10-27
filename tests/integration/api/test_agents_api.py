@@ -152,3 +152,15 @@ def test_idempotent_replay_does_not_create_a_second_proposal(
     assert first.json() == second.json()
     db.rollback()
     assert db.execute(text("select count(*) from agent_config_proposals")).scalar_one() == 1
+
+
+def test_same_idempotency_key_for_a_different_agent_creates_its_own_proposal(
+    client: TestClient, db: Session, operator_key: str
+) -> None:
+    a = post(client, "/v1/agents/macro/config-proposals", operator_key, NEW)
+    b = post(client, "/v1/agents/fundamental/config-proposals", operator_key,
+             {"changes": {"max_headlines": 40}, "rationale": "fewer headlines"})  # fmt: skip
+    assert (a.status_code, b.status_code) == (201, 201)
+    assert (a.json()["agent_name"], b.json()["agent_name"]) == ("macro", "fundamental")
+    db.rollback()
+    assert db.execute(text("select count(*) from agent_config_proposals")).scalar_one() == 2

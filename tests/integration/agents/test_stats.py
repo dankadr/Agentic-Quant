@@ -79,7 +79,7 @@ def test_macro_decision_lists_entry_orders_inside_validity_window(db: Session) -
     started = T0 + timedelta(minutes=10)
     result = {
         "regime": "RANGING",
-        "confidence": "0.55",
+        "confidence": 0.55,
         "risk_multiplier": "0.7",
         "conclusion": "RANGING: new-entry size x0.7",
         "evidence": ["breadth weak"],

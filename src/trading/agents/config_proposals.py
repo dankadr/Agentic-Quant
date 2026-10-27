@@ -162,6 +162,12 @@ def review_agent_config(
         current = _current(effective, row.agent_name)
         if any(current.get(f) != v for f, v in row.base_json.items()):
             raise ProposalConflict("stale: the setting changed since this proposal was written")
+        try:  # two proposals can each be valid alone and invalid together
+            AgentsConfig.model_validate(
+                {**effective.model_dump(), row.agent_name: {**current, **row.changes_json}}
+            )
+        except ValidationError as exc:
+            raise ProposalConflict(f"combined settings would be invalid: {exc}") from exc
     row.status = APPROVED if approve else REJECTED
     row.reviewed_by = reviewer
     row.reviewed_at = now

@@ -368,7 +368,7 @@ def propose(
     return run_idempotent(
         session,
         principal=principal,
-        route="POST /v1/agents/{name}/config-proposals",
+        route=f"POST /v1/agents/{name}/config-proposals",
         key=idempotency_key,
         body=body,
         action=action,

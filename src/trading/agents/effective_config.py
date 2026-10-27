@@ -15,16 +15,22 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.agents.config_proposals import APPLIED, APPROVED
+from trading.agents.registry import AGENT_REGISTRY
 from trading.core.clock import Clock
 from trading.core.config import AgentsConfig, AppConfig, load_config
-from trading.data.calendar import MarketCalendar
+from trading.data.calendar import NEW_YORK, MarketCalendar
 from trading.db.models.research import AgentConfigProposal
+from trading.jobs.schedule import CONSENSUS_DELAY, EVALUATOR_DELAY, SESSION_START_LEAD
 from trading.monitoring.audit import record_audit
 from trading.monitoring.logging import get_logger
 
 _log = get_logger(__name__)
-# Orders and end-of-session jobs settle after the close; apply only once they have.
-SETTLE = timedelta(minutes=10)
+# Apply only well clear of the jobs that straddle a session: session start (open - 30 min) and
+# fundamental (open - 15 min) before it; evaluator (close + 10) and consensus (close + 12, plus an
+# LLM call of up to a couple of minutes) after it. A change landing between them would run one
+# session's jobs under mixed settings.
+BEFORE_OPEN = SESSION_START_LEAD + timedelta(minutes=30)
+AFTER_CLOSE = max(EVALUATOR_DELAY, CONSENSUS_DELAY) + timedelta(minutes=28)
 
 
 def overlay_agents(
@@ -41,6 +47,12 @@ def overlay_agents(
         .order_by(AgentConfigProposal.created_at, AgentConfigProposal.id)
     )
     for row in rows:
+        info = AGENT_REGISTRY.get(row.agent_name)
+        if info is None or not set(row.changes_json) <= set(info.editable):
+            # Only the API writes these rows, but the table is the trust boundary: never let a
+            # row name a locked scope or a field the panel does not expose.
+            _log.warning("agent_config_override_rejected", proposal_id=str(row.id))
+            continue
         dump = current.model_dump()
         dump[row.agent_name] = {**dump[row.agent_name], **row.changes_json}
         try:
@@ -90,9 +102,10 @@ def apply_approved_agent_config(session: Session, *, now: datetime) -> int:
 
 
 def apply_when_idle(session: Session, clock: Clock, calendar: MarketCalendar) -> int:
-    """Apply approved edits unless a session is open or only just closed."""
+    """Apply approved edits only outside [open - BEFORE_OPEN, close + AFTER_CLOSE] of a session."""
     now = clock.now()
-    if calendar.session_at(now - SETTLE) is not None:
+    info = calendar.session_on(now.astimezone(NEW_YORK).date())
+    if info is not None and info.open_at - BEFORE_OPEN <= now <= info.close_at + AFTER_CLOSE:
         return 0
     return apply_approved_agent_config(session, now=now)
 
