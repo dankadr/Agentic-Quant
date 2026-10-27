@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent panel mockup</title>
+<style>
+:root{--bg:#0f1318;--panel:#171d25;--line:#2a3340;--text:#e6ebf2;--mute:#8b97a8;--acc:#4da3ff;--good:#3ecf8e;--warn:#f5b84d;--bad:#ef6a6a}
+@media (prefers-color-scheme: light){:root{--bg:#f4f6f9;--panel:#fff;--line:#d9dfe8;--text:#17202c;--mute:#5d6b7e;--acc:#1769d1;--good:#0f9d63;--warn:#b7791f;--bad:#c53030}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,system-ui,sans-serif;padding:20px}
+h1{font-size:18px;margin:0 0 4px}h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin:0 0 10px}
+.sub{color:var(--mute);margin-bottom:16px}.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.tab{padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--mute)}
+.tab.on{color:var(--text);border-color:var(--acc)}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.wide{grid-column:1/-1}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:6px 10px}.kv div:nth-child(odd){color:var(--mute)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat b{display:block;font-size:20px}.stat span{color:var(--mute);font-size:12px}
+.pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--mute)}
+.ok{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);font-size:13px}th{color:var(--mute);font-weight:500}
+.field{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+.field small{display:block;color:var(--mute)}.inp{border:1px solid var(--line);border-radius:6px;padding:4px 10px;min-width:70px;text-align:right;background:var(--bg)}
+.inp.changed{border-color:var(--warn)}.lock{color:var(--mute);font-size:12px}
+.btn{display:inline-block;padding:6px 12px;border-radius:6px;border:1px solid var(--line);background:var(--bg);margin-right:6px}.btn.p{background:var(--acc);color:#fff;border-color:var(--acc)}
+.sug{border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:6px;padding:10px;margin-bottom:10px}
+.why{border-left:3px solid var(--line);padding-left:10px;color:var(--mute);margin:6px 0}
+.note{margin-top:18px;color:var(--mute);font-size:12px}
+</style></head><body>
+<h1>Agents</h1>
+<div class="sub">Mockup, populated with Monday's real numbers. Not wired to anything yet.</div>
+<div class="tabs">
+ <div class="tab on"><span class="dot" style="background:var(--good)"></span>Macro</div>
+ <div class="tab"><span class="dot" style="background:var(--good)"></span>Fundamental</div>
+ <div class="tab"><span class="dot" style="background:var(--bad)"></span>Evaluator</div>
+ <div class="tab"><span class="dot" style="background:var(--good)"></span>Consensus</div>
+ <div class="tab"><span class="dot" style="background:var(--mute)"></span>Technical</div>
+</div>
+
+<div class="grid">
+
+<div class="card wide"><h2>Numbers · last 24 h</h2>
+ <div class="stats">
+  <div class="stat"><b>12</b><span>runs (every 30 min)</span></div>
+  <div class="stat"><b class="ok">12 / 12</b><span>valid replies</span></div>
+  <div class="stat"><b>0.45–0.75</b><span>size multiplier range</span></div>
+  <div class="stat"><b>10.8k / 9.0k</b><span>prompt / completion tokens</span></div>
+ </div></div>
+
+<div class="card"><h2>Rules this agent follows</h2>
+ <div class="kv">
+  <div>Job</div><div>Reads index bars (SPY, QQQ, IWM) and breadth, labels the market regime, outputs a size multiplier for new entries.</div>
+  <div>Can affect</div><div><span class="pill">orb_v1</span> <span class="pill">vwap_v1</span> new-entry size only</div>
+  <div>Cannot</div><div>place orders, touch exits, change risk limits, switch mode</div>
+  <div>Model</div><div>Qwen3.8-27B · prompt <span class="pill">macro-v1</span> <a style="color:var(--acc)">view prompt</a></div>
+  <div>Valid output</div><div>regime ∈ {TRENDING, RANGING, VOLATILE, UNKNOWN}, multiplier 0–1, evidence list</div>
+  <div>When it fails</div><div>missing/stale view is ignored (<code>required: false</code>), but recorded</div>
+ </div></div>
+
+<div class="card"><h2>Config</h2>
+ <div class="field"><div>Enabled<small>agent runs at all</small></div><div class="inp">on</div></div>
+ <div class="field"><div>Run every<small>minutes</small></div><div class="inp changed">30 → 15</div></div>
+ <div class="field"><div>Result valid for<small>minutes, must exceed run interval</small></div><div class="inp">60</div></div>
+ <div class="field"><div>Required<small>true = a missing view blocks new entries</small></div><div class="inp">false</div></div>
+ <div class="field"><div>Depends on<small>strategies it scales</small></div><div class="inp">orb_v1, vwap_v1</div></div>
+ <div class="field"><div>Risk limits, mode, live trading<small>not editable from here</small></div><div class="lock">🔒 locked</div></div>
+ <div style="margin-top:12px"><span class="btn p">Review change (1)</span><span class="btn">Reset</span></div>
+ <div class="note">Changes are saved as a proposal with a before/after diff. They apply only after you approve, and every change is logged.</div></div>
+
+<div class="card wide"><h2>Recent decisions · why</h2>
+ <table><tr><th>Time</th><th>Regime</th><th>Conf.</th><th>Size ×</th><th>What it affected</th></tr>
+  <tr><td>19:16</td><td>RANGING</td><td>0.75</td><td>0.60</td><td>no new entries</td></tr>
+  <tr><td>17:46</td><td>RANGING</td><td>0.72</td><td>0.60</td><td>MSFT buy sized ×0.60 &rarr; 0.0902 sh</td></tr>
+  <tr><td>14:16</td><td class="warn">UNKNOWN</td><td>0.42</td><td>0.45</td><td>SPY buy sized ×0.45 &rarr; 0.0469 sh</td></tr></table>
+ <div class="why"><b style="color:var(--text)">14:16, expanded.</b> “Breadth is strongly positive (0.91 above VWAP), all indices up (IWM +0.77%, SPY +0.35%)… efficiency is low (IWM 0.26, SPY 0.15, QQQ 0.08), indicating chop.”<br>
+ Limits it stated: only 46 minutes of data · no baseline for volatility · breadth and efficiency disagree.<br>
+ Input snapshot <code>42d1c385…</code> · raw reply · replay this run</div></div>
+
+<div class="card wide"><h2>AI suggestions · from past trades</h2>
+ <div class="sug"><b>Lower the first-run delay to 11 min?</b> <span class="pill">weak evidence · 1 day, 6 trades</span>
+  <div class="why">The first two macro views (13:46, 14:16) were UNKNOWN-leaning with 46 min of data, which cut entry size to 0.45. A shorter first run would not fix that; more data would. <b>Suggest: wait. No change proposed.</b></div></div>
+ <div class="sug"><b>Treat UNKNOWN as ×0.7 instead of ×0.45?</b> <span class="pill">needs 10+ days</span>
+  <div class="why">UNKNOWN runs coincided with 2 of 4 losing trades. Not enough to conclude anything yet. Will re-evaluate as data accumulates.</div>
+  <span class="btn">Dismiss</span><span class="btn">Save as proposal</span></div>
+ <div class="note">Suggestions always show how much evidence stands behind them. Below the evidence threshold they appear as “watching”, not as a change.</div></div>
+
+</div></body></html>
