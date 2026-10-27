@@ -165,8 +165,16 @@ class TechnicalAgentConfig(_Frozen):
     enabled: bool = False
 
 
+class SuggestionsConfig(_Frozen):
+    """Evidence a settings suggestion needs before it may be proposed (below it: "watching")."""
+
+    min_days: int = Field(default=10, gt=0)
+    min_decisions: int = Field(default=30, gt=0)
+
+
 class AgentsConfig(_Frozen):
     llm: LlmConfig = LlmConfig()
+    suggestions: SuggestionsConfig = SuggestionsConfig()
     macro: MacroAgentConfig = MacroAgentConfig()
     evaluator: EvaluatorAgentConfig = EvaluatorAgentConfig()
     fundamental: FundamentalAgentConfig = FundamentalAgentConfig()

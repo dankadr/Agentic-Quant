@@ -29,3 +29,7 @@ agents:
     enabled: true           # shadow only: agreement/veto counterfactual, no model, no authority
   technical:
     enabled: false          # manual (`trading technical`); proposes strategy parameter changes from recorded experiments
+  suggestions:
+    # Evidence a settings suggestion needs before it can be proposed; below this it only 'watches'.
+    min_days: 10
+    min_decisions: 30
