@@ -79,6 +79,23 @@ class StrategyConfigProposal(Base):
     applied_version: Mapped[str | None]
 
 
+class AgentConfigProposal(Base):
+    __tablename__ = "agent_config_proposals"
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    agent_name: Mapped[str]
+    changes_json: Mapped[dict[str, Any]]
+    base_json: Mapped[dict[str, Any]]
+    rationale: Mapped[str]
+    status: Mapped[str]
+    source: Mapped[str]
+    evidence_json: Mapped[dict[str, Any] | None]
+    proposed_by: Mapped[str]
+    created_at: Mapped[datetime]
+    reviewed_by: Mapped[str | None]
+    reviewed_at: Mapped[datetime | None]
+    applied_at: Mapped[datetime | None]
+
+
 class Experiment(Base):
     __tablename__ = "experiments"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
