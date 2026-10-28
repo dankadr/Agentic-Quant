@@ -5,13 +5,14 @@ by hand, and each target gets the same checks: it must be https, on the allowlis
 to public addresses. Responses are streamed and capped, so a large or endless body cannot exhaust
 memory.
 
-Known limit: the connection is made by hostname after the address check, so a DNS answer that
-changes between the two lookups is not pinned. Egress filtering at the network layer is the
-backstop for that case; this module does not replace it.
+Each hop is dialled at the address that was checked (pinned), with the original host name kept for
+the Host header and for TLS. A DNS answer that changes later cannot redirect the connection, and a
+different server at the checked address cannot pass the certificate check for the host name.
 """
 
 import ipaddress
 import socket
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit
@@ -23,6 +24,7 @@ from trading.core.errors import TradingError
 
 MAX_REDIRECTS = 3
 _TIMEOUT_SECONDS = 20.0
+_OVERALL_SECONDS = 60.0  # the whole fetch, across every redirect
 
 Resolver = Callable[[str], list[str]]
 
@@ -69,6 +71,26 @@ def check_addresses(addresses: list[str]) -> None:
             raise FetchRefused("PRIVATE_ADDRESS")
 
 
+@dataclass(frozen=True)
+class _Pinned:
+    url: httpx.URL
+    headers: dict[str, str]
+    extensions: dict[str, str]
+
+
+def _pin(url: str, address: str, host: str) -> _Pinned:
+    """Dial the address that was checked, while keeping the host name for Host and for TLS.
+
+    The certificate is still verified against ``host``, so a different server at the checked address
+    cannot answer for it.
+    """
+    return _Pinned(
+        url=httpx.URL(url).copy_with(host=address),
+        headers={"Host": host},
+        extensions={"sni_hostname": host},
+    )
+
+
 def fetch(
     url: str,
     cfg: DocumentsConfig,
@@ -77,10 +99,20 @@ def fetch(
     resolver: Resolver = system_resolver,
 ) -> Fetched:
     current = url
+    started = time.monotonic()
     for _hop in range(MAX_REDIRECTS + 1):
         host = check_url(current, cfg)
-        check_addresses(resolver(host))
-        with client.stream("GET", current, follow_redirects=False, timeout=_TIMEOUT_SECONDS) as r:
+        addresses = resolver(host)
+        check_addresses(addresses)
+        pinned = _pin(current, addresses[0], host)
+        with client.stream(
+            "GET",
+            pinned.url,
+            headers=pinned.headers,
+            extensions=pinned.extensions,
+            follow_redirects=False,
+            timeout=_TIMEOUT_SECONDS,
+        ) as r:
             if r.status_code in (301, 302, 303, 307, 308):
                 location = r.headers.get("location")
                 if not location:
@@ -94,6 +126,8 @@ def fetch(
                 raise FetchRefused("TOO_LARGE")
             body = bytearray()
             for chunk in r.iter_bytes():
+                if time.monotonic() - started > _OVERALL_SECONDS:
+                    raise FetchRefused("TIMEOUT")  # an overall deadline, not a per-read one
                 body.extend(chunk)
                 if len(body) > cfg.max_bytes:
                     raise FetchRefused("TOO_LARGE")

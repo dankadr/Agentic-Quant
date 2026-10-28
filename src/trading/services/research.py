@@ -7,6 +7,7 @@ model call therefore delays research output, never a tick, an exit, or an operat
 import threading
 from dataclasses import dataclass
 from datetime import datetime
+from uuid import UUID
 
 import httpx
 from sqlalchemy.exc import SQLAlchemyError
@@ -22,10 +23,12 @@ from trading.data.news import NewsSource
 from trading.documents.blobs import BlobStore
 from trading.documents.fetch import Resolver, fetch, system_resolver
 from trading.documents.ingest import DocumentInput, ingest
+from trading.documents.sec import discover
 from trading.jobs.kinds import RESEARCH_KINDS
-from trading.jobs.queue import Job
+from trading.jobs.queue import Job, enqueue
 from trading.jobs.runner import Handler, JobRunner
 from trading.monitoring.logging import get_logger
+from trading.reports.analyze import analyze_version, enqueue_analysis
 from trading.services.exit_codes import EXIT_LEASE_LOST, EXIT_OK
 
 _log = get_logger(__name__)
@@ -74,6 +77,40 @@ def build_research_handlers(ctx: ResearchContext) -> dict[str, Handler]:
             payload=job.payload,
         )
 
+    def research_analyze(job: Job) -> None:
+        if ctx.llm is None:
+            raise RuntimeError("no model key is configured; analysis cannot run")
+        analyze_version(
+            ctx.session_factory,
+            ctx.llm,
+            config=ctx.config,
+            version_id=UUID(str(job.payload["version_id"])),
+            clock=ctx.clock,
+        )
+
+    def sec_discover(job: Job) -> None:
+        cik = int(str(job.payload["cik"]))
+        company = str(job.payload["company"])
+        client = ctx.http or httpx.Client()
+        for filing in discover(client, cik, ctx.config.documents):
+            category = "ANALYST_REPORT" if filing.form == "8-K" else "FINANCIAL_STATEMENT"
+            with ctx.session_factory.begin() as session:
+                enqueue(
+                    session,
+                    kind="document_import",
+                    payload={
+                        "url": filing.url,
+                        "title": f"{filing.form} filed {filing.filing_date}",
+                        "category": category,
+                        "company": company,
+                        "source": "sec-edgar",
+                        "published_at": f"{filing.filing_date}T00:00:00+00:00",
+                        "reporting_period": None,
+                    },
+                    scheduled_at=ctx.clock.now(),
+                    dedupe_key=f"document_import:sec:{filing.accession}:{filing.primary_document}",
+                )
+
     def document_import(job: Job) -> None:
         if ctx.blobs is None:
             raise RuntimeError("no document store is configured")
@@ -88,7 +125,7 @@ def build_research_handlers(ctx: ResearchContext) -> dict[str, Handler]:
         published = payload.get("published_at")
         company = payload.get("company")
         reporting_period = payload.get("reporting_period")
-        ingest(
+        result = ingest(
             ctx.session_factory,
             ctx.blobs,
             ctx.config.documents,
@@ -108,9 +145,19 @@ def build_research_handlers(ctx: ResearchContext) -> dict[str, Handler]:
             ),
             now=ctx.clock.now(),
         )
+        if result.extraction_status == "EXTRACTED":
+            with ctx.session_factory.begin() as session:
+                enqueue_analysis(
+                    session,
+                    version_id=result.version_id,
+                    model=ctx.config.agents.llm.model,
+                    now=ctx.clock.now(),
+                )
 
     return {
         "document_import": document_import,
+        "research_analyze": research_analyze,
+        "sec_discover": sec_discover,
         "agent_fundamental": agent_fundamental,
         "agent_consensus": agent_consensus,
         "agent_macro": agent_macro,

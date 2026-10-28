@@ -10,6 +10,7 @@ import json
 import sys
 from html.parser import HTMLParser
 
+MAX_TEXT_CHARS = 2_000_000
 _SKIPPED_TAGS = frozenset({"script", "style", "noscript", "template", "iframe", "object", "embed"})
 
 
@@ -64,6 +65,9 @@ def main(argv: list[str]) -> int:
             result = {"status": "EXTRACTED", "pages": [data.decode("utf-8")]}
     except Exception as exc:
         result = {"error": f"PARSE_FAILED:{type(exc).__name__}"}
+    pages = result.get("pages")
+    if isinstance(pages, list) and sum(len(str(p)) for p in pages) > MAX_TEXT_CHARS:
+        result = {"error": "TEXT_TOO_LARGE"}
     sys.stdout.write(json.dumps(result))
     return 0
 

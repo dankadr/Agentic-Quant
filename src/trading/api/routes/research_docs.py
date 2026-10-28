@@ -8,7 +8,8 @@ import base64
 import binascii
 import hashlib
 import json
-from typing import Any
+from datetime import timedelta
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -21,12 +22,18 @@ from trading.api.deps import get_clock, get_session
 from trading.api.problems import ApiProblem
 from trading.core.clock import Clock
 from trading.core.time import UtcDatetime
-from trading.db.models.documents import DocumentVersionRow, ResearchDocumentRow
+from trading.db.models.documents import (
+    DocumentVersionRow,
+    ResearchDocumentRow,
+    ResearchFactRow,
+    ResearchReportRow,
+)
 from trading.documents.blobs import BlobStore
 from trading.documents.fetch import FetchRefused, check_url
 from trading.documents.ingest import CATEGORIES, DocumentInput, DocumentRejected, ingest
 from trading.documents.search import CitationNotFound, resolve_citation, search
 from trading.jobs.queue import enqueue
+from trading.reports.analyze import enqueue_analysis
 
 router = APIRouter(prefix="/v1/research", tags=["research"])
 
@@ -102,6 +109,14 @@ def upload_document(
         )
     except DocumentRejected as exc:
         raise _rejected(exc.reason) from exc
+    if result.extraction_status == "EXTRACTED":
+        with request.app.state.session_factory.begin() as session:
+            enqueue_analysis(
+                session,
+                version_id=result.version_id,
+                model=request.app.state.config.agents.llm.model,
+                now=clock.now(),
+            )
     return {
         "document_id": str(result.document_id),
         "version_id": str(result.version_id),
@@ -266,3 +281,107 @@ def citation(
         "end": quote.end,
         "text": quote.text,
     }
+
+
+@router.get("/reports")
+def list_reports(
+    request: Request,
+    company: str | None = Query(default=None, max_length=12),
+    category: str | None = Query(default=None, max_length=40),
+    status: str | None = Query(default=None, max_length=24),
+    limit: int = Query(default=50, ge=1, le=200),
+    _: AuthPrincipal = Depends(require_viewer),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Analysis outcomes, including refusals and deferrals, newest first."""
+    stmt = select(ResearchReportRow).order_by(ResearchReportRow.created_at.desc()).limit(limit)
+    if company is not None:
+        stmt = stmt.where(ResearchReportRow.company == company.upper())
+    if category is not None:
+        stmt = stmt.where(ResearchReportRow.category == category)
+    if status is not None:
+        stmt = stmt.where(ResearchReportRow.status == status)
+    return {
+        "items": [
+            {
+                "report_id": str(r.id),
+                "version_id": str(r.version_id),
+                "category": r.category,
+                "company": r.company,
+                "status": r.status,
+                "reason": r.reason,
+                "model": r.model,
+                "prompt_version": r.prompt_version,
+                "created_at": r.created_at,
+                # Usable for a decision only from this moment on.
+                "available_at": r.available_at,
+            }
+            for r in session.scalars(stmt)
+        ]
+    }
+
+
+@router.get("/reports/{report_id}")
+def report_detail(
+    report_id: UUID,
+    _: AuthPrincipal = Depends(require_viewer),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """The findings with their evidence. Every fact and sourced claim carries a citation."""
+    report = session.get(ResearchReportRow, report_id)
+    if report is None:
+        raise ApiProblem(404, "NOT_FOUND", "No such report")
+    facts = session.scalars(
+        select(ResearchFactRow).where(ResearchFactRow.report_id == report_id)
+    ).all()
+    return {
+        "report_id": str(report.id),
+        "version_id": str(report.version_id),
+        "status": report.status,
+        "reason": report.reason,
+        "available_at": report.available_at,
+        "findings": report.findings_json,
+        "facts": [
+            {
+                "key": f.fact_key,
+                "value": format(f.value.normalize(), "f"),  # 4.200000 -> 4.2
+                "unit": f.unit,
+                "period": f.period,
+                "basis": f.basis,
+                "citation": {"page": f.page, "start": f.span_start, "end": f.span_end},
+            }
+            for f in facts
+        ],
+    }
+
+
+@router.get("/digest")
+def digest(
+    request: Request,
+    as_of: UtcDatetime,
+    kind: Literal["PREMARKET", "EOD"] = Query(default="PREMARKET"),
+    _: AuthPrincipal = Depends(require_viewer),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Completed research that was AVAILABLE by ``as_of``, grouped by category, with its limits."""
+    window_start = as_of - timedelta(hours=24)
+    rows = session.scalars(
+        select(ResearchReportRow).where(
+            ResearchReportRow.status == "COMPLETED",
+            ResearchReportRow.available_at <= as_of,
+            ResearchReportRow.available_at > window_start,
+        )
+    ).all()
+    by_category: dict[str, list[dict[str, Any]]] = {}
+    for report in rows:
+        findings: dict[str, Any] = report.findings_json or {}
+        by_category.setdefault(report.category, []).append(
+            {
+                "report_id": str(report.id),
+                "company": report.company,
+                "fact_count": len(findings.get("facts", [])),
+                "limitations": findings.get("limitations", []),
+                "missing": findings.get("missing", []),
+            }
+        )
+    return {"kind": kind, "as_of": as_of, "categories": by_category}

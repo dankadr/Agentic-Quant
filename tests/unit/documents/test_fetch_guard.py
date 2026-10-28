@@ -80,3 +80,19 @@ def test_a_redirect_loop_is_bounded() -> None:
     client = httpx.Client(transport=httpx.MockTransport(handler))
     with _refused("TOO_MANY_REDIRECTS"):
         fetch("https://filings.example/a.pdf", CFG, client=client, resolver=PUBLIC)
+
+
+def test_each_hop_is_dialled_at_the_checked_address_with_the_host_name_kept() -> None:
+    """Pinning: the connection goes to the validated IP; Host and TLS still name the origin."""
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        return httpx.Response(200, content=b"ok", headers={"content-type": "text/plain"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    fetch("https://filings.example/a.txt", CFG, client=client, resolver=PUBLIC)
+    (request,) = seen
+    assert request.url.host == "93.184.216.34"
+    assert request.headers["host"] == "filings.example"
+    assert request.extensions["sni_hostname"] == "filings.example"

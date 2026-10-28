@@ -31,8 +31,8 @@ def test_every_planned_kind_is_assigned_to_a_role() -> None:
     planned = {j.kind for j in plan_session_jobs(session, agents=agents)}
     planned |= {j.kind for j in plan_jobs(datetime(2026, 10, 19, 13, 31, tzinfo=UTC), None)}
     assert planned <= ALL_KINDS
-    # document_import is enqueued on demand by the API, not by the schedule.
-    scheduled_research = RESEARCH_KINDS - {"document_import"}
+    # Document kinds are enqueued on demand by the API or by discovery, not by the schedule.
+    scheduled_research = RESEARCH_KINDS - {"document_import", "research_analyze", "sec_discover"}
     assert planned >= scheduled_research | {
         "session_start",
         "paper_tick",
@@ -42,4 +42,5 @@ def test_every_planned_kind_is_assigned_to_a_role() -> None:
 
 
 def test_research_kinds_are_exactly_the_agent_kinds() -> None:
-    assert {k for k in ALL_KINDS if k.startswith("agent_")} == RESEARCH_KINDS - {"document_import"}
+    document_kinds = {"document_import", "research_analyze", "sec_discover"}
+    assert {k for k in ALL_KINDS if k.startswith("agent_")} == RESEARCH_KINDS - document_kinds

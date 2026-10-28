@@ -185,6 +185,12 @@ class DocumentsConfig(_Frozen):
     max_bytes: int = Field(default=10 * 1024 * 1024, gt=0, le=50 * 1024 * 1024)
     max_pages: int = Field(default=200, gt=0, le=2000)
     extract_timeout_seconds: int = Field(default=20, gt=0, le=120)
+    # Analysis budgets. An exhausted daily budget defers research visibly, never trading.
+    daily_token_budget: int = Field(default=200_000, gt=0)
+    max_input_chars: int = Field(default=40_000, gt=0, le=400_000)
+    # SEC requires a declared identity (name and contact) on every request.
+    # Absent means no EDGAR access at all.
+    sec_user_agent: str | None = Field(default=None, min_length=5, max_length=200)
 
 
 class _DocumentsFile(_Frozen):

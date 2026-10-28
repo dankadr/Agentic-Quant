@@ -1,6 +1,7 @@
 """Research documents: a logical document, its immutable versions, and their extracted pages."""
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -50,3 +51,36 @@ class DocumentPageRow(Base):
     tsv: Mapped[Any] = mapped_column(
         TSVECTOR, Computed("to_tsvector('english', text)", persisted=True), nullable=True
     )
+
+
+class ResearchReportRow(Base):
+    __tablename__ = "research_reports"
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    version_id: Mapped[UUID] = mapped_column(ForeignKey("document_versions.id"))
+    category: Mapped[str]
+    company: Mapped[str | None]
+    model: Mapped[str]
+    prompt_version: Mapped[str]
+    status: Mapped[str]
+    reason: Mapped[str | None]
+    created_at: Mapped[datetime]
+    available_at: Mapped[datetime | None]
+    prompt_tokens: Mapped[int | None]
+    completion_tokens: Mapped[int | None]
+    findings_json: Mapped[dict[str, Any] | None]
+
+
+class ResearchFactRow(Base):
+    __tablename__ = "research_facts"
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    report_id: Mapped[UUID] = mapped_column(ForeignKey("research_reports.id"))
+    version_id: Mapped[UUID] = mapped_column(ForeignKey("document_versions.id"))
+    company: Mapped[str | None]
+    fact_key: Mapped[str]
+    value: Mapped[Decimal]
+    unit: Mapped[str]
+    period: Mapped[str]
+    basis: Mapped[str]
+    page: Mapped[int]
+    span_start: Mapped[int]
+    span_end: Mapped[int]

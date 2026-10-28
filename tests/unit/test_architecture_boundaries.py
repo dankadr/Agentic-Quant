@@ -142,3 +142,18 @@ def app() -> FastAPI:
         ),
         clock=ManualClock(datetime(2026, 10, 19, tzinfo=UTC)),
     )
+
+
+def test_research_intake_and_analysis_never_reach_trading_decisions() -> None:
+    """A research report, however it reads, cannot change an order, a risk limit or a trading state.
+
+    Execution, risk, portfolio and the broker see none of the research packages.
+    """
+    offenders = [
+        f"{path.relative_to(ROOT)}: {name}"
+        for pkg in ("execution", "risk", "portfolio", "brokers", "quant")
+        for path in (ROOT / "src" / "trading" / pkg).rglob("*.py")
+        for name in _imports(path)
+        if name.startswith(("trading.reports", "trading.documents", "trading.api.routes.research"))
+    ]
+    assert offenders == []
