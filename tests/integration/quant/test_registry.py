@@ -28,7 +28,7 @@ def test_seed_strategies_is_idempotent_and_budgeted(db: Session) -> None:
         "fundamental_watchlist",
         "consensus_shadow",
     } == set(rows)
-    assert rows["orb_v1"].capital_budget == 200  # 20% of the $1,000 starting cash
+    assert rows["orb_v1"].capital_budget == 350  # 35% of the $1,000 starting cash
     assert rows["orb_v1"].params_json["opening_range_minutes"] == 15
     assert rows["orb_v1"].version == "1.0.0"
 

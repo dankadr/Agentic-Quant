@@ -13,6 +13,9 @@ from trading.quant.models import Holding, SignalProposal
 
 CFG = load_config(Path("configs"))
 D = Decimal
+# Allocator tests use worked numbers (orb sleeve 200 of 1000); pinned so that changing the operating
+# sleeves in configs/strategies.yaml (asserted in test_config.py) does not rewrite the examples.
+PINNED_SLEEVES = {"orb_v1": Decimal("0.20"), "vwap_v1": Decimal("0.15")}
 NOW = datetime(2026, 10, 19, 15, 0, tzinfo=UTC)
 
 
@@ -38,7 +41,8 @@ def ctx(**over) -> AllocationContext:  # type: ignore[no-untyped-def]
     base = dict(
         equity=D("1000"), now=NOW, marks={"SPY": D("100"), "QQQ": D("100")}, holdings=(), held_qty={}, open_buy_notional={},
         open_sell_qty={}, in_flight=frozenset(), instruments=instruments(),
-        sleeves={s: c.allocation_pct for s, c in CFG.strategies.items()}, max_symbol_pct=D("0.10"), paper_cfg=CFG.paper_broker,
+        sleeves={**{s: c.allocation_pct for s, c in CFG.strategies.items()}, **PINNED_SLEEVES},
+        max_symbol_pct=D("0.10"), paper_cfg=CFG.paper_broker,
     )  # fmt: skip
     base.update(over)
     return AllocationContext(**base)

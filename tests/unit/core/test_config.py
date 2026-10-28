@@ -29,9 +29,10 @@ def test_loads_repo_configs() -> None:
     cfg = load_config(Path("configs"))
     assert cfg.system.mode == "PAPER_ONLY"
     assert cfg.system.starting_cash_usd == Decimal("1000.00")
-    assert cfg.risk.max_symbol_exposure_pct == Decimal("0.10")
+    assert cfg.risk.max_symbol_exposure_pct == Decimal("0.15")  # raised from 10% on 2026-10-28
+    assert cfg.risk.max_daily_loss_pct == Decimal("0.025")  # raised from 1% on 2026-10-28
     assert cfg.risk.max_new_entries_per_day == 10
-    assert cfg.risk.max_open_symbols == 3
+    assert cfg.risk.max_open_symbols == 6  # raised from 3 on 2026-10-28
     assert len(cfg.limits_version) == 16
     assert {u.symbol for u in cfg.universe} == {
         "SPY",
@@ -46,7 +47,7 @@ def test_loads_repo_configs() -> None:
         "META",
         "AMZN",
     }
-    assert cfg.strategies["orb_v1"].allocation_pct == Decimal("0.20")
+    assert cfg.strategies["orb_v1"].allocation_pct == Decimal("0.35")
     assert cfg.strategies["consensus_shadow"].shadow_only is True
 
 
@@ -126,14 +127,16 @@ def test_strategy_params_and_sleeves_in_repo_config() -> None:
     cfg = load_config(Path("configs"))
     orb, vwap = cfg.strategies["orb_v1"], cfg.strategies["vwap_v1"]
     assert (orb.allocation_pct, vwap.allocation_pct) == (
-        Decimal("0.20"),
-        Decimal("0.15"),
-    )  # technical sleeve 35%
+        Decimal("0.35"),
+        Decimal("0.30"),
+    )  # technical sleeve 65% (was 20% + 15%) so 12%-of-equity trades can fill several symbols
     assert orb.params["opening_range_minutes"] == 15
     assert vwap.params["lookback_bars"] == 30
     assert cfg.strategies["eod_flatten"].params["flatten_minutes_before_close"] == 10
     assert cfg.strategies["eod_flatten"].enabled and not cfg.strategies["eod_flatten"].shadow_only
     assert sum(s.allocation_pct for s in cfg.strategies.values()) == Decimal(1)  # spec sleeves
-    assert cfg.strategies["consensus_shadow"].allocation_pct == Decimal("0.20")
+    assert cfg.strategies["consensus_shadow"].allocation_pct == Decimal(
+        "0.10"
+    )  # shadow: no capital
     assert cfg.strategies["cash_reserve"].allocation_pct == Decimal("0.10")
     assert cfg.strategies["fundamental_watchlist"].params == {}

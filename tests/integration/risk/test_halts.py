@@ -23,7 +23,9 @@ from trading.risk.halts import NotInHaltError, clear_drawdown_halt, evaluate_hal
 from trading.risk.models import ProposedOrder
 from trading.risk.service import build_account_view
 
-POLICY = CONFIG.risk
+# The halt tests use worked numbers around a 1% daily loss; pinned so that the operating stop in
+# configs/risk.yaml (asserted in test_config.py) can change without rewriting every example.
+POLICY = CONFIG.risk.model_copy(update={"max_daily_loss_pct": D("0.01")})
 
 
 def _halts(db: Session, account_id, equity: str, day=DAY, now=T0):  # type: ignore[no-untyped-def]

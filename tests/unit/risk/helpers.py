@@ -20,6 +20,14 @@ from trading.risk.models import AccountView, ProposedOrder, RiskEvaluation
 
 D = Decimal
 CONFIG = load_config(Path("configs"))
+# The engine tests check mechanics with worked numbers (10% of 1000 = 100, three open symbols).
+# They are pinned here so that changing the operating limits in configs/risk.yaml, which
+# test_config.py asserts, does not rewrite every example.
+ENGINE_BASELINE: dict[str, Any] = {
+    "max_symbol_exposure_pct": Decimal("0.10"),
+    "max_open_symbols": 3,
+    "max_daily_loss_pct": Decimal("0.01"),
+}
 NOW = datetime(2026, 10, 19, 15, 0, tzinfo=UTC)
 ACCOUNT_ID = uuid4()
 
@@ -120,7 +128,7 @@ def evaluate(
         open_sell_qty_by_symbol=open_sell_qty or {}, new_entries_today=new_entries,
         consumed_dedupe_keys=consumed, enabled_strategies=enabled,
     )  # fmt: skip
-    risk = CONFIG.risk.model_copy(update=policy or {})
+    risk = CONFIG.risk.model_copy(update={**ENGINE_BASELINE, **(policy or {})})
     engine = DeterministicRiskEngine(risk, calendar=calendar, paper_cfg=CONFIG.paper_broker,
                                      limits_version="lv1")  # fmt: skip
     return engine.evaluate(proposal, account, market, now=now)

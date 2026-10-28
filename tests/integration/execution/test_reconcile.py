@@ -310,7 +310,7 @@ def test_daily_loss_halt_survives_a_reconciliation_failure_until_the_next_sessio
 
     from trading.risk.halts import start_session
 
-    assert _evaluate_halts(env, "985") is RiskState.HALTED_DAILY_LOSS
+    assert _evaluate_halts(env, "970") is RiskState.HALTED_DAILY_LOSS  # -3% vs the 2.5% daily stop
     assert run(env, _failing_broker(env)).status == "ERROR"
     assert run(env).status == "OK"
     assert (

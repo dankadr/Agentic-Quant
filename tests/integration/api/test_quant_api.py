@@ -64,7 +64,7 @@ def test_strategies_are_listed_with_parameters_and_require_auth(
     orb = next(s for s in body["items"] if s["id"] == "orb_v1")
     assert orb["version"] == "1.0.0"
     assert orb["params"]["target_r"] == "1.5"
-    assert orb["capital_budget"] == "200.0000"
+    assert orb["capital_budget"] == "350.0000"
     assert orb["enabled"] is True
 
 
