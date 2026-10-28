@@ -156,3 +156,36 @@ def test_a_model_failure_is_recorded_not_raised(
         clock=ManualClock(NOW),
     )
     assert (out.status, out.reason) == ("FAILED", "endpoint down")
+
+
+def test_a_failed_call_still_charges_its_token_bound(
+    db: Session, session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """Review finding: refused and failed calls spend tokens; the spend must still be recorded."""
+    version = _version(session_factory, BlobStore(tmp_path / "b"))
+    out = analyze_version(
+        session_factory,
+        ScriptedLlm(LlmError("endpoint down")),
+        config=CFG,
+        version_id=version,
+        clock=ManualClock(NOW),
+    )
+    db.rollback()
+    tokens = db.execute(
+        text("select prompt_tokens + completion_tokens from research_reports where id = :i"),
+        {"i": str(out.report_id)},
+    ).scalar_one()
+    assert tokens >= CFG.agents.llm.max_tokens
+
+
+def test_the_budget_reserves_the_worst_case_before_calling_the_model(
+    db: Session, session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    version = _version(session_factory, BlobStore(tmp_path / "b"))
+    # Enough for a short document's real answer, but not for its worst-case completion.
+    tight = CFG.model_copy(
+        update={"documents": CFG.documents.model_copy(update={"daily_token_budget": 500})}
+    )
+    llm = ScriptedLlm(_reply())
+    out = analyze_version(session_factory, llm, config=tight, version_id=version, clock=ManualClock(NOW))
+    assert (out.status, llm.calls) == ("DEFERRED", 0)

@@ -11,6 +11,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.agents.llm import LlmError, LlmInvalidOutput
@@ -161,8 +162,11 @@ def analyze_version(
     def refused(status: str, reason: str) -> Analysis:
         return _record(session_factory, src, model=model, status=status, reason=reason, now=now)
 
-    # Visible deferral: an exhausted budget defers research; it never delays execution.
-    if spent >= config.documents.daily_token_budget:
+    # Worst case for ONE call: the page text (about 4 characters per token) plus a full completion.
+    # Reserved before the call, so a single call can never take the day over budget.
+    prompt_bound = sum(len(p) for p in src.pages) // 4 + 1
+    completion_bound = config.agents.llm.max_tokens
+    if spent + prompt_bound + completion_bound > config.documents.daily_token_budget:
         return refused("DEFERRED", "BUDGET_EXHAUSTED")
     # Refuse rather than truncate: a silently shortened document would be analysed incompletely.
     if sum(len(p) for p in src.pages) > config.documents.max_input_chars:
@@ -176,12 +180,16 @@ def analyze_version(
         },
         sort_keys=True,
     )
+    # Failed or refused calls still spent tokens we cannot read back. Charge the bound instead:
+    # a rejected answer is followed by one repair call, so it is charged twice.
     try:
         result = llm.complete_json(system_prompt(src.category), user, ReportOutput)
     except LlmInvalidOutput as exc:
-        return refused("REJECTED_INVALID", str(exc))
+        return _charged(session_factory, src, model, "REJECTED_INVALID", str(exc), now,
+                        prompt_bound, 2 * completion_bound)  # fmt: skip
     except LlmError as exc:
-        return refused("FAILED", str(exc))
+        return _charged(session_factory, src, model, "FAILED", str(exc), now,
+                        prompt_bound, completion_bound)  # fmt: skip
 
     tokens = (result.prompt_tokens, result.completion_tokens)
     problems = verify(result.value, src.pages)
@@ -215,15 +223,50 @@ def analyze_version(
         )
         for fact in output.facts
     ]
+    try:
+        return _record(
+            session_factory,
+            src,
+            model=model,
+            status="COMPLETED",
+            reason=None,
+            now=now,
+            available_at=clock.now(),
+            tokens=tokens,
+            findings=output.model_dump(mode="json"),
+            facts=facts,
+        )
+    except SQLAlchemyError as exc:
+        # The model was paid for, so the spend must still be on the record, as a failure.
+        return _record(
+            session_factory,
+            src,
+            model=model,
+            status="FAILED",
+            reason=f"RECORD_FAILED:{type(exc).__name__}",
+            now=now,
+            tokens=tokens,
+        )
+
+
+def _charged(
+    session_factory: sessionmaker[Session],
+    src: _Source,
+    model: str,
+    status: str,
+    reason: str,
+    now: datetime,
+    prompt_bound: int,
+    completion_bound: int,
+) -> Analysis:
+    """A refused or failed call: record the conservative token bound it may have used."""
     return _record(
         session_factory,
         src,
         model=model,
-        status="COMPLETED",
-        reason=None,
+        status=status,
+        reason=reason,
         now=now,
-        available_at=clock.now(),
-        tokens=tokens,
-        findings=output.model_dump(mode="json"),
-        facts=facts,
+        tokens=(prompt_bound, completion_bound),
+        findings={"token_usage": "UPPER_BOUND_ESTIMATE"},
     )

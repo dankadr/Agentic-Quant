@@ -102,3 +102,11 @@ def test_a_zero_prior_has_a_change_but_no_meaningless_percentage() -> None:
     result = compare(_point(value=Decimal("5")), _point(value=Decimal("0"), period="2025Q3"))
     assert result is not None
     assert (result.change, result.change_pct) == (Decimal("5"), None)
+
+
+def test_a_value_the_database_cannot_store_is_rejected_before_any_write() -> None:
+    for bad in ("1e20", "123456789012345678901", "0.0000001", "NaN", "Infinity"):
+        data = _valid()
+        data["facts"][0]["value"] = bad  # type: ignore[index]
+        problems = verify(ReportOutput.model_validate(data), PAGES)
+        assert any("storable range" in p for p in problems), bad

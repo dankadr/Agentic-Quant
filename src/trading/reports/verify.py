@@ -22,6 +22,21 @@ def _numbers(text: str) -> set[Decimal]:
     return found
 
 
+_MAX_MAGNITUDE = Decimal("1e18")  # numeric(24,6): 18 integer digits, 6 decimal places
+
+
+def _fits_storage(raw: str) -> bool:
+    """Finite, within numeric(24,6), at most six decimal places. Checked BEFORE any storage write,
+    so a value the database would reject never fails a write after the model has been paid for."""
+    try:
+        value = Decimal(raw.replace(",", ""))
+    except InvalidOperation:
+        return False
+    if not value.is_finite() or abs(value) >= _MAX_MAGNITUDE:
+        return False
+    return value.as_tuple().exponent >= -6  # type: ignore[operator]
+
+
 def verify(output: ReportOutput, pages: list[str]) -> list[str]:
     """Violations, one per problem. An empty list means every claim is supported by the source."""
     problems: list[str] = []
@@ -41,6 +56,9 @@ def verify(output: ReportOutput, pages: list[str]) -> list[str]:
 
     for index, fact in enumerate(output.facts):
         label = f"fact {index} ({fact.key})"
+        if not _fits_storage(fact.value):
+            problems.append(f"{label}: value {fact.value!r} is outside the storable range")
+            continue
         cite = fact.citation
         if not check_span(label, cite.page, cite.start, cite.end, cite.quote):
             continue

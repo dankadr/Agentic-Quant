@@ -18,6 +18,7 @@ dependencies = [
   "typer>=0.15",
   "pyyaml>=6.0",
   "pypdf>=6.21.4",
+  "jinja2>=3.1.6",
 ]
 
 [project.scripts]
