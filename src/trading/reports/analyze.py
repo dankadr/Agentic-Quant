@@ -256,7 +256,7 @@ def _charged(
     status: str,
     reason: str,
     now: datetime,
-    prompt_bound: int,
+    prompt_tokens_bound: int,
     completion_bound: int,
 ) -> Analysis:
     """A refused or failed call: record the conservative token bound it may have used."""
@@ -267,6 +267,6 @@ def _charged(
         status=status,
         reason=reason,
         now=now,
-        tokens=(prompt_bound, completion_bound),
+        tokens=(prompt_tokens_bound, completion_bound),
         findings={"token_usage": "UPPER_BOUND_ESTIMATE"},
     )

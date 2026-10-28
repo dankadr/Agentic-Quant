@@ -42,5 +42,11 @@ def test_every_planned_kind_is_assigned_to_a_role() -> None:
 
 
 def test_research_kinds_are_exactly_the_agent_kinds() -> None:
-    document_kinds = {"document_import", "research_analyze", "sec_discover"}
+    document_kinds = {
+        "document_import",
+        "research_analyze",
+        "sec_discover",
+        "watchdog_check",
+        "alert_dispatch",
+    }
     assert {k for k in ALL_KINDS if k.startswith("agent_")} == RESEARCH_KINDS - document_kinds

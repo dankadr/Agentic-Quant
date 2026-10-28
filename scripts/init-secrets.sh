@@ -19,7 +19,8 @@ for name in db_superuser_password db_owner_password db_app_password; do
 done
 # Alpaca MARKET DATA keys (data-only; never put trading keys here) and the research-agent LLM key. Empty placeholders keep Compose
 # happy; an empty file means "not configured" and the worker then runs without a data provider.
-for name in alpaca_key_id alpaca_secret llm_api_key; do
+# The private Telegram bot token for incident alerts. Empty = alerts are queued, not sent.
+for name in alpaca_key_id alpaca_secret llm_api_key telegram_bot_token; do
   file="secrets/$name"
   if [ -e "$file" ]; then
     echo "keeping existing $file"

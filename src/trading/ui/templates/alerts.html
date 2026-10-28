@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Alerts</h1>
+{% if incidents %}
+<table><tr><th>State</th><th>Severity</th><th>Incident</th><th>Opened</th><th>Acknowledged</th><th></th></tr>
+{% for i in incidents %}
+<tr>
+  <td>{{ i.state }}</td>
+  <td class="{{ 'bad' if i.severity == 'CRITICAL' and i.state == 'OPEN' }}">{{ i.severity }}</td>
+  <td>{{ i.title }}<br><span class="muted">{{ i.detail }}</span></td>
+  <td>{{ i.opened_at.isoformat() }}</td>
+  <td>{{ i.acknowledged_by or '' }}</td>
+  <td>{% if i.state == 'OPEN' and not i.acknowledged_at and user.principal.role.value == 'operator' %}
+    <form class="inline" method="post" action="/ui/alerts/{{ i.id }}/ack">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Acknowledge</button>
+    </form>{% endif %}</td>
+</tr>
+{% endfor %}
+</table>
+{% else %}<p class="muted">No incidents.</p>{% endif %}
+{% endblock %}

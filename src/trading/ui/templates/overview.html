@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Overview</h1>
+<div class="card">
+  <strong>Trading:</strong> {{ state.trading_state.value }} &middot;
+  <strong>Risk:</strong> {{ state.risk_state.value }}{% if state.risk_reason %} <span class="muted">({{ state.risk_reason }})</span>{% endif %}<br>
+  <strong>New entries:</strong>
+  {% if readiness.entries_permitted %}<span class="ok">permitted</span>{% else %}<span class="bad">refused</span>{% endif %}
+  &middot; <strong>Exits:</strong>
+  {% if readiness.exits_permitted %}<span class="ok">permitted</span>{% else %}<span class="bad">refused</span>{% endif %}
+  {% if readiness.reasons %}<br><span class="muted">Why: {{ readiness.reasons|join(', ') }}</span>{% endif %}
+</div>
+<div class="card">
+  <strong>Release</strong><br>
+  revision <code>{{ release.revision }}</code> &middot; config <code>{{ release.config_sha256[:12] }}</code><br>
+  schema shipped <code>{{ release.schema_head or 'none' }}</code> &middot; applied <code>{{ release.schema_applied or 'none' }}</code>
+</div>
+<h2>Open incidents</h2>
+{% if incidents %}
+<table><tr><th>Severity</th><th>Incident</th><th>Opened</th></tr>
+{% for i in incidents %}<tr><td class="{{ 'bad' if i.severity == 'CRITICAL' }}">{{ i.severity }}</td><td>{{ i.title }}<br><span class="muted">{{ i.detail }}</span></td><td>{{ i.opened_at.isoformat() }}</td></tr>{% endfor %}
+</table>
+{% else %}<p class="ok">No open incidents.</p>{% endif %}
+{% endblock %}

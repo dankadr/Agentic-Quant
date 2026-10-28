@@ -187,5 +187,7 @@ def test_the_budget_reserves_the_worst_case_before_calling_the_model(
         update={"documents": CFG.documents.model_copy(update={"daily_token_budget": 500})}
     )
     llm = ScriptedLlm(_reply())
-    out = analyze_version(session_factory, llm, config=tight, version_id=version, clock=ManualClock(NOW))
+    out = analyze_version(
+        session_factory, llm, config=tight, version_id=version, clock=ManualClock(NOW)
+    )
     assert (out.status, llm.calls) == ("DEFERRED", 0)

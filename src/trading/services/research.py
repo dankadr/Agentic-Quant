@@ -15,8 +15,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from trading.agents.jobs import consensus_job, evaluator_job, fundamental_job, macro_job
 from trading.agents.macro import JsonLlm
+from trading.alerts.telegram import dispatch_due
+from trading.alerts.watchdog import run_watchdog
+from trading.api.routes.health import compute_readiness
 from trading.core.clock import Clock
-from trading.core.config import AppConfig, Settings
+from trading.core.config import AppConfig, Settings, read_secret
 from trading.core.time import ensure_utc
 from trading.data.calendar import MarketCalendar
 from trading.data.news import NewsSource
@@ -75,6 +78,29 @@ def build_research_handlers(ctx: ResearchContext) -> dict[str, Handler]:
             provider_name=ctx.provider_name,
             clock=ctx.clock,
             payload=job.payload,
+        )
+
+    def watchdog_check(job: Job) -> None:
+        market = compute_readiness(ctx.session_factory, ctx.clock, ctx.calendar).market_data
+        run_watchdog(
+            ctx.session_factory, clock=ctx.clock, calendar=ctx.calendar, market_data_state=market
+        )
+
+    def alert_dispatch(job: Job) -> None:
+        token_file = ctx.settings.telegram_token_file
+        chat_id = ctx.settings.telegram_chat_id
+        if token_file is None or not token_file.exists() or not chat_id:
+            return  # not configured: notices stay queued and visible, nothing is sent
+        token = read_secret(token_file).strip()
+        if not token:
+            return
+        client = ctx.http or httpx.Client()
+        dispatch_due(
+            ctx.session_factory,
+            client,
+            bot_token=token,
+            chat_id=chat_id,
+            now=ctx.clock.now(),
         )
 
     def research_analyze(job: Job) -> None:
@@ -157,6 +183,8 @@ def build_research_handlers(ctx: ResearchContext) -> dict[str, Handler]:
     return {
         "document_import": document_import,
         "research_analyze": research_analyze,
+        "watchdog_check": watchdog_check,
+        "alert_dispatch": alert_dispatch,
         "sec_discover": sec_discover,
         "agent_fundamental": agent_fundamental,
         "agent_consensus": agent_consensus,

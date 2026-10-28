@@ -8,6 +8,10 @@ def _utc(text: str) -> datetime:
     return datetime.fromisoformat(text).replace(tzinfo=UTC)
 
 
+# Every minute the scheduler plans these, whatever the market is doing.
+MINUTE_JOBS = ["heartbeat", "watchdog_check", "alert_dispatch"]
+
+
 def _kinds(jobs: list[JobSpec], kind: str) -> list[JobSpec]:
     return [j for j in jobs if j.kind == kind]
 
@@ -55,7 +59,7 @@ def test_dedupe_keys_are_unique_and_stable(calendar: MarketCalendar) -> None:
 
 def test_holiday_and_weekend_plan_only_a_heartbeat(calendar: MarketCalendar) -> None:
     for day in ("2026-11-26T15:00:30", "2026-10-24T15:00:30"):
-        assert [j.kind for j in plan_jobs(_utc(day), calendar)] == ["heartbeat"]
+        assert [j.kind for j in plan_jobs(_utc(day), calendar)] == MINUTE_JOBS
 
 
 def test_only_recent_jobs_are_planned_and_missed_ticks_are_not_backfilled(
@@ -80,8 +84,8 @@ def test_session_end_planned_after_close(calendar: MarketCalendar) -> None:
 
 
 def test_calendar_out_of_range_fails_closed_to_heartbeat_only(calendar: MarketCalendar) -> None:
-    assert [j.kind for j in plan_jobs(_utc("2035-03-01T15:00:00"), calendar)] == ["heartbeat"]
+    assert [j.kind for j in plan_jobs(_utc("2035-03-01T15:00:00"), calendar)] == MINUTE_JOBS
 
 
 def test_no_calendar_is_heartbeat_only() -> None:
-    assert [j.kind for j in plan_jobs(_utc("2026-10-19T15:00:00"), None)] == ["heartbeat"]
+    assert [j.kind for j in plan_jobs(_utc("2026-10-19T15:00:00"), None)] == MINUTE_JOBS

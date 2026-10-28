@@ -16,6 +16,9 @@ RESEARCH_KINDS = frozenset(
         "document_import",
         "research_analyze",
         "sec_discover",
+        # Operations work that performs no trading: it runs off the executor by design.
+        "watchdog_check",
+        "alert_dispatch",
     }
 )
 ALL_KINDS = EXECUTION_KINDS | OPERATIONS_KINDS | RESEARCH_KINDS

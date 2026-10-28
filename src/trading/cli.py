@@ -766,3 +766,77 @@ def openapi() -> None:
         clock=SystemClock(),
     )
     typer.echo(json.dumps(application.openapi(), indent=2, sort_keys=True))
+
+
+@admin_app.command("raise-incident")
+def raise_incident_command(
+    key: str = typer.Option(..., help="Stable incident key, e.g. backup_failed."),
+    severity: str = typer.Option("WARNING", help="CRITICAL or WARNING."),
+    title: str = typer.Option(..., help="One line for the operator."),
+    detail: str = typer.Option("", help="Context. Never paste secrets or report text here."),
+) -> None:
+    """Open an incident by hand (used by backup and restore scripts). Repeats are deduplicated."""
+    from trading.alerts.store import raise_incident  # noqa: PLC0415
+
+    engine = make_engine(Settings().resolved_database_url())
+    try:
+        with make_session_factory(engine).begin() as session:
+            opened = raise_incident(
+                session, key=key, severity=severity, title=title, detail=detail,
+                now=SystemClock().now(),
+            )  # fmt: skip
+    finally:
+        engine.dispose()
+    typer.echo("opened" if opened else "already open")
+
+
+@admin_app.command("resolve-incident")
+def resolve_incident_command(key: str = typer.Option(..., help="Incident key to clear.")) -> None:
+    """Close an incident and queue its recovery notice."""
+    from trading.alerts.store import resolve_incident  # noqa: PLC0415
+
+    engine = make_engine(Settings().resolved_database_url())
+    try:
+        with make_session_factory(engine).begin() as session:
+            resolved = resolve_incident(session, key=key, now=SystemClock().now())
+    finally:
+        engine.dispose()
+    typer.echo("resolved" if resolved else "not open")
+
+
+@admin_app.command("mark-restored")
+def mark_restored_command(
+    reason: str = typer.Option(..., help="Restore reference (drill id or ticket). Audited."),
+) -> None:
+    """After a restore: keep trading paused and require reconciliation before re-arming."""
+    from trading.control.state import mark_restored  # noqa: PLC0415
+
+    engine = make_engine(Settings().resolved_database_url())
+    try:
+        with make_session_factory(engine).begin() as session:
+            mark_restored(session, reference=reason, now=SystemClock().now())
+    finally:
+        engine.dispose()
+    typer.echo("restore recorded: paused, reconciliation required")
+
+
+@admin_app.command("write-manifest")
+def write_manifest_command(root: Path = typer.Option(..., help="Backup directory.")) -> None:
+    """Write MANIFEST.json (sizes and SHA-256 of every file) beside a backup."""
+    from trading.ops.backup import write_manifest  # noqa: PLC0415
+
+    typer.echo(str(write_manifest(root)))
+
+
+@admin_app.command("verify-manifest")
+def verify_manifest_command(root: Path = typer.Option(..., help="Backup directory.")) -> None:
+    """Refuse a backup that differs from its manifest in any way. Exit 1 on any difference."""
+    from trading.ops.backup import MANIFEST_NAME, verify_manifest  # noqa: PLC0415
+
+    manifest = json.loads((root / MANIFEST_NAME).read_text())
+    problems = verify_manifest(root, manifest)
+    for problem in problems:
+        typer.echo(problem, err=True)
+    if problems:
+        raise typer.Exit(1)
+    typer.echo("backup verified")

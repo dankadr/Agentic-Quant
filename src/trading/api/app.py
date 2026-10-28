@@ -15,6 +15,7 @@ from trading.api.routes import (
     quant,
     research_docs,
     system,
+    ui,
 )
 from trading.core.clock import Clock
 from trading.core.config import AppConfig, Settings
@@ -56,4 +57,5 @@ def create_app(
     app.include_router(quant.router)
     app.include_router(agents.router)
     app.include_router(research_docs.router)
+    app.include_router(ui.router)
     return app

@@ -108,7 +108,9 @@ services:
       TRADING_ALPACA_KEY_ID_FILE: /run/secrets/alpaca_key_id
       TRADING_ALPACA_SECRET_FILE: /run/secrets/alpaca_secret
       TRADING_LLM_API_KEY_FILE: /run/secrets/llm_api_key
-    secrets: [db_app_password, alpaca_key_id, alpaca_secret, llm_api_key]
+      TRADING_TELEGRAM_TOKEN_FILE: /run/secrets/telegram_bot_token
+      TRADING_TELEGRAM_CHAT_ID: ${TRADING_TELEGRAM_CHAT_ID:-}
+    secrets: [db_app_password, alpaca_key_id, alpaca_secret, llm_api_key, telegram_bot_token]
     healthcheck:
       test: ["CMD", "trading", "healthcheck", "research"]
       interval: 10s
@@ -144,3 +146,5 @@ secrets:
     file: ./secrets/alpaca_secret
   llm_api_key:
     file: ./secrets/llm_api_key
+  telegram_bot_token:
+    file: ./secrets/telegram_bot_token
