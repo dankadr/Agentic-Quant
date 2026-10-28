@@ -271,6 +271,9 @@ class Settings(BaseSettings):
     scratch_database_url: str | None = None  # backtests/research only; WIPED between runs
     llm_api_key_file: Path | None = None  # research agents; absent = agents do not run
     document_store_dir: Path = Path("data/documents")  # immutable blobs; back this up
+    telegram_token_file: Path | None = None  # private bot token; absent = alerts stay queued
+    telegram_chat_id: str | None = None  # the one private chat alerts may reach
+    ui_cookie_secure: bool = True  # dashboard cookies are Secure; off only for plain-http tests
     release_revision: str = "unknown"  # git commit; injected at image build
     release_image: str = "unknown"  # image reference or digest; injected at deploy
 

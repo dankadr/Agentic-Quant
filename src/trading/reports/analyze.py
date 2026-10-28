@@ -162,16 +162,6 @@ def analyze_version(
     def refused(status: str, reason: str) -> Analysis:
         return _record(session_factory, src, model=model, status=status, reason=reason, now=now)
 
-    # Worst case for ONE call: the page text (about 4 characters per token) plus a full completion.
-    # Reserved before the call, so a single call can never take the day over budget.
-    prompt_bound = sum(len(p) for p in src.pages) // 4 + 1
-    completion_bound = config.agents.llm.max_tokens
-    if spent + prompt_bound + completion_bound > config.documents.daily_token_budget:
-        return refused("DEFERRED", "BUDGET_EXHAUSTED")
-    # Refuse rather than truncate: a silently shortened document would be analysed incompletely.
-    if sum(len(p) for p in src.pages) > config.documents.max_input_chars:
-        return refused("REJECTED_INVALID", "CONTEXT_TOO_LARGE")
-
     user = json.dumps(
         {
             "company": src.company,
@@ -180,16 +170,26 @@ def analyze_version(
         },
         sort_keys=True,
     )
+    # Reserve the worst case for ONE call before making it: the exact serialized prompt (one token
+    # per character is far above any real tokenizer's count) plus a full completion.
+    prompt_chars = len(system_prompt(src.category)) + len(user)
+    completion_bound = config.agents.llm.max_tokens
+    if spent + prompt_chars + completion_bound > config.documents.daily_token_budget:
+        return refused("DEFERRED", "BUDGET_EXHAUSTED")
+    # Refuse rather than truncate: a silently shortened document would be analysed incompletely.
+    if sum(len(p) for p in src.pages) > config.documents.max_input_chars:
+        return refused("REJECTED_INVALID", "CONTEXT_TOO_LARGE")
+
     # Failed or refused calls still spent tokens we cannot read back. Charge the bound instead:
     # a rejected answer is followed by one repair call, so it is charged twice.
     try:
         result = llm.complete_json(system_prompt(src.category), user, ReportOutput)
     except LlmInvalidOutput as exc:
         return _charged(session_factory, src, model, "REJECTED_INVALID", str(exc), now,
-                        prompt_bound, 2 * completion_bound)  # fmt: skip
+                        2 * prompt_chars + completion_bound, 2 * completion_bound)  # fmt: skip
     except LlmError as exc:
         return _charged(session_factory, src, model, "FAILED", str(exc), now,
-                        prompt_bound, completion_bound)  # fmt: skip
+                        prompt_chars, completion_bound)  # fmt: skip
 
     tokens = (result.prompt_tokens, result.completion_tokens)
     problems = verify(result.value, src.pages)
