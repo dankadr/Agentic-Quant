@@ -17,6 +17,7 @@ dependencies = [
   "exchange-calendars>=4.6",
   "typer>=0.15",
   "pyyaml>=6.0",
+  "pypdf>=6.21.4",
 ]
 
 [project.scripts]

@@ -1,0 +1,8 @@
+# Research document intake. URL import may fetch ONLY these hosts, over https, after every
+# redirect and resolved address has been checked against private and loopback networks.
+# Empty by default: nothing can be fetched until an operator approves a source here.
+documents:
+  allowed_hosts: []
+  max_bytes: 10485760
+  max_pages: 200
+  extract_timeout_seconds: 20

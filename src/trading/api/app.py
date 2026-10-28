@@ -6,12 +6,22 @@ from sqlalchemy.orm import Session, sessionmaker
 import trading
 from trading.api.middleware import MetricsMiddleware, RequestIdMiddleware
 from trading.api.problems import register_handlers
-from trading.api.routes import agents, audit, control, health, portfolio, quant, system
+from trading.api.routes import (
+    agents,
+    audit,
+    control,
+    health,
+    portfolio,
+    quant,
+    research_docs,
+    system,
+)
 from trading.core.clock import Clock
 from trading.core.config import AppConfig, Settings
 from trading.core.release import release_info
 from trading.data.calendar import MarketCalendar
 from trading.db.migrate import schema_head
+from trading.documents.blobs import BlobStore
 
 
 def create_app(
@@ -28,6 +38,7 @@ def create_app(
     app.state.session_factory = session_factory
     app.state.clock = clock
     app.state.calendar = calendar
+    app.state.blobs = BlobStore(settings.document_store_dir)
     app.state.release = release_info(
         revision=settings.release_revision,
         image=settings.release_image,
@@ -44,4 +55,5 @@ def create_app(
     app.include_router(portfolio.router)
     app.include_router(quant.router)
     app.include_router(agents.router)
+    app.include_router(research_docs.router)
     return app

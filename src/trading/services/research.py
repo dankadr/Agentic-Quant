@@ -6,7 +6,9 @@ model call therefore delays research output, never a tick, an exit, or an operat
 
 import threading
 from dataclasses import dataclass
+from datetime import datetime
 
+import httpx
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -14,8 +16,12 @@ from trading.agents.jobs import consensus_job, evaluator_job, fundamental_job, m
 from trading.agents.macro import JsonLlm
 from trading.core.clock import Clock
 from trading.core.config import AppConfig, Settings
+from trading.core.time import ensure_utc
 from trading.data.calendar import MarketCalendar
 from trading.data.news import NewsSource
+from trading.documents.blobs import BlobStore
+from trading.documents.fetch import Resolver, fetch, system_resolver
+from trading.documents.ingest import DocumentInput, ingest
 from trading.jobs.kinds import RESEARCH_KINDS
 from trading.jobs.queue import Job
 from trading.jobs.runner import Handler, JobRunner
@@ -35,6 +41,9 @@ class ResearchContext:
     provider_name: str
     llm: JsonLlm | None = None
     news: NewsSource | None = None
+    blobs: BlobStore | None = None
+    http: httpx.Client | None = None
+    resolver: Resolver | None = None
 
 
 def build_research_handlers(ctx: ResearchContext) -> dict[str, Handler]:
@@ -65,7 +74,43 @@ def build_research_handlers(ctx: ResearchContext) -> dict[str, Handler]:
             payload=job.payload,
         )
 
+    def document_import(job: Job) -> None:
+        if ctx.blobs is None:
+            raise RuntimeError("no document store is configured")
+        payload = job.payload
+        client = ctx.http or httpx.Client()
+        fetched = fetch(
+            str(payload["url"]),
+            ctx.config.documents,
+            client=client,
+            resolver=ctx.resolver or system_resolver,
+        )
+        published = payload.get("published_at")
+        company = payload.get("company")
+        reporting_period = payload.get("reporting_period")
+        ingest(
+            ctx.session_factory,
+            ctx.blobs,
+            ctx.config.documents,
+            DocumentInput(
+                title=str(payload["title"]),
+                category=str(payload["category"]),
+                company=None if company is None else str(company),
+                source=str(payload["source"]),
+                content_type=fetched.content_type,
+                data=fetched.data,
+                origin="URL",
+                source_url=fetched.final_url,
+                published_at=ensure_utc(datetime.fromisoformat(str(published)))
+                if published
+                else None,
+                reporting_period=None if reporting_period is None else str(reporting_period),
+            ),
+            now=ctx.clock.now(),
+        )
+
     return {
+        "document_import": document_import,
         "agent_fundamental": agent_fundamental,
         "agent_consensus": agent_consensus,
         "agent_macro": agent_macro,

@@ -28,6 +28,7 @@ from trading.data.provider import MarketDataProvider
 from trading.data.replay_provider import CsvReplayProvider
 from trading.db.engine import make_engine, make_session_factory
 from trading.db.migrate import upgrade
+from trading.documents.blobs import BlobStore
 from trading.jobs.lease import Lease
 from trading.monitoring.logging import configure_logging
 from trading.monitoring.metrics import start_metrics_server
@@ -253,6 +254,7 @@ def research_worker() -> None:
         provider_name=_market_data_provider_name(settings),
         llm=_llm_client(settings, config),
         news=_news_source(settings, config),
+        blobs=BlobStore(settings.document_store_dir),
     )
     code = run_research_worker(
         session_factory=session_factory,

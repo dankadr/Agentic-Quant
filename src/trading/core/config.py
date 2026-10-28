@@ -178,6 +178,19 @@ class _AgentsFile(_Frozen):
     agents: AgentsConfig
 
 
+class DocumentsConfig(_Frozen):
+    """Research document intake. An empty allowlist means no URL import is possible at all."""
+
+    allowed_hosts: tuple[str, ...] = ()
+    max_bytes: int = Field(default=10 * 1024 * 1024, gt=0, le=50 * 1024 * 1024)
+    max_pages: int = Field(default=200, gt=0, le=2000)
+    extract_timeout_seconds: int = Field(default=20, gt=0, le=120)
+
+
+class _DocumentsFile(_Frozen):
+    documents: DocumentsConfig
+
+
 class AppConfig(_Frozen):
     system: SystemConfig
     universe: tuple[UniverseEntry, ...]
@@ -185,6 +198,7 @@ class AppConfig(_Frozen):
     paper_broker: PaperBrokerConfig
     strategies: Mapping[str, StrategyConfig]
     agents: AgentsConfig = AgentsConfig()
+    documents: DocumentsConfig = DocumentsConfig()
 
     @property
     def limits_version(self) -> str:
@@ -220,6 +234,11 @@ def load_config(config_dir: Path) -> AppConfig:
         paper_broker=broker.paper_broker,
         strategies=strategies.strategies,
         agents=agents,
+        documents=(
+            _load(config_dir, "documents.yaml", _DocumentsFile).documents
+            if (config_dir / "documents.yaml").exists()
+            else DocumentsConfig()
+        ),
     )
 
 
@@ -245,6 +264,7 @@ class Settings(BaseSettings):
     alpaca_secret_file: Path | None = None
     scratch_database_url: str | None = None  # backtests/research only; WIPED between runs
     llm_api_key_file: Path | None = None  # research agents; absent = agents do not run
+    document_store_dir: Path = Path("data/documents")  # immutable blobs; back this up
     release_revision: str = "unknown"  # git commit; injected at image build
     release_image: str = "unknown"  # image reference or digest; injected at deploy
 

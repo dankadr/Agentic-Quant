@@ -109,6 +109,10 @@ def test_only_sanctioned_routes_mutate_state_through_the_api(app: FastAPI) -> No
         ("POST", "/v1/control/stop-entries"),
         ("POST", "/v1/control/cancel-open-orders"),
         ("POST", "/v1/control/flatten"),
+        # Research intake stores evidence (immutable documents) and queues a fetch. Neither affects
+        # orders, risk limits or trading state.
+        ("POST", "/v1/research/documents"),
+        ("POST", "/v1/research/import-url"),
         # Parameter proposals: stored PENDING_REVIEW, reviewed by another principal, applied by the
         # executor at the next session start. They cannot place orders or touch risk limits.
         ("POST", "/v1/strategies/{strategy_id}/propose-config"),

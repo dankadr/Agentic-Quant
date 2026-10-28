@@ -8,6 +8,6 @@ Every kind the scheduler enqueues must appear in exactly one set; the unit test 
 EXECUTION_KINDS = frozenset({"session_start", "paper_tick", "session_end", "reconcile"})
 OPERATIONS_KINDS = frozenset({"heartbeat", "outbox_dispatch"})
 RESEARCH_KINDS = frozenset(
-    {"agent_fundamental", "agent_consensus", "agent_macro", "agent_evaluator"}
+    {"agent_fundamental", "agent_consensus", "agent_macro", "agent_evaluator", "document_import"}
 )
 ALL_KINDS = EXECUTION_KINDS | OPERATIONS_KINDS | RESEARCH_KINDS

@@ -61,6 +61,8 @@ services:
   api:
     <<: *app
     command: ["api"]
+    volumes:
+      - docstore:/app/data/documents
     ports:
       - "127.0.0.1:8000:8000"  # loopback only; expose to the tailnet with `tailscale serve`
     healthcheck:
@@ -99,6 +101,8 @@ services:
   research:
     <<: *app
     command: ["research-worker"]
+    volumes:
+      - docstore:/app/data/documents
     environment:
       <<: *app-env
       TRADING_ALPACA_KEY_ID_FILE: /run/secrets/alpaca_key_id
@@ -125,6 +129,7 @@ services:
 volumes:
   pgdata:
   promdata:
+  docstore:  # immutable original documents; included in every backup
 
 secrets:
   db_superuser_password:
