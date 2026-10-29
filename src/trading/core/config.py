@@ -274,6 +274,12 @@ class Settings(BaseSettings):
     telegram_token_file: Path | None = None  # private bot token; absent = alerts stay queued
     telegram_chat_id: str | None = None  # the one private chat alerts may reach
     ui_cookie_secure: bool = True  # dashboard cookies are Secure; off only for plain-http tests
+    # Alpaca PAPER trading (execution service only). Disabled until the read-only gate passes.
+    alpaca_paper_key_id_file: Path | None = None
+    alpaca_paper_secret_file: Path | None = None
+    alpaca_paper_account: str | None = None  # the account number this deployment is bound to
+    alpaca_paper_enabled: bool = False
+    alpaca_fractional_limit_verified: bool = False  # flip only after paper acceptance verifies it
     release_revision: str = "unknown"  # git commit; injected at image build
     release_image: str = "unknown"  # image reference or digest; injected at deploy
 

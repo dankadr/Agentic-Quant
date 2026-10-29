@@ -5,6 +5,7 @@ import signal
 import threading
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,7 +20,8 @@ import trading
 from trading.api.app import create_app
 from trading.api.auth import Role, create_principal
 from trading.core.clock import Clock, SystemClock
-from trading.core.config import AppConfig, Settings, load_config
+from trading.core.config import AppConfig, Settings, load_config, read_secret
+from trading.core.enums import OrderType, Side, TimeInForce
 from trading.core.time import ensure_utc
 from trading.data.calendar import XnysCalendar
 from trading.data.ingest import ingest_bars, ingest_corporate_actions, ingest_quotes
@@ -840,3 +842,56 @@ def verify_manifest_command(root: Path = typer.Option(..., help="Backup director
     if problems:
         raise typer.Exit(1)
     typer.echo("backup verified")
+
+
+@admin_app.command("alpaca-readonly-check")
+def alpaca_readonly_check(
+    require_flat: bool = typer.Option(True, help="Require no positions and no open orders."),
+) -> None:
+    """Read-only Alpaca PAPER check: account binding, flatness, and per-symbol capability.
+
+    Places, cancels and changes nothing. Exit 1 unless every gate passes.
+    """
+    from trading.brokers.alpaca.adapter import AlpacaPaperAdapter  # noqa: PLC0415
+    from trading.brokers.alpaca.gate import read_only_gate  # noqa: PLC0415
+    from trading.brokers.base import BrokerOrderRequest  # noqa: PLC0415
+
+    settings = Settings()  # no metrics server: this command must not contend with the worker
+    config = load_config(settings.config_dir)
+    if settings.alpaca_paper_key_id_file is None or settings.alpaca_paper_secret_file is None:
+        typer.echo("alpaca paper credentials are not configured", err=True)
+        raise typer.Exit(1)
+    key_id = read_secret(settings.alpaca_paper_key_id_file).strip()
+    secret = read_secret(settings.alpaca_paper_secret_file).strip()
+    adapter = AlpacaPaperAdapter(key_id=key_id, secret=secret)
+    try:
+        gate = read_only_gate(
+            adapter,
+            enabled=settings.alpaca_paper_enabled,
+            expected_account=settings.alpaca_paper_account,
+            require_flat=require_flat,
+        )
+        typer.echo(f"gate: {'PASS' if gate.allowed else 'FAIL'} {', '.join(gate.reasons)}")
+        blocked = 0
+        from trading.brokers.alpaca.gate import capability_problems  # noqa: PLC0415
+
+        for entry in config.universe:
+            asset = adapter.asset(entry.symbol)
+            probe = BrokerOrderRequest(
+                client_order_id="probe",
+                symbol=entry.symbol,
+                side=Side.BUY,
+                order_type=OrderType.MARKET,
+                qty=Decimal("0.5") if entry.fractional_eligible else Decimal(1),
+                limit_price=None,
+                time_in_force=TimeInForce.DAY,
+            )
+            problems = capability_problems(
+                probe, asset, fractional_limit_verified=settings.alpaca_fractional_limit_verified
+            )
+            blocked += bool(problems)
+            typer.echo(f"{entry.symbol}: {'ok' if not problems else ', '.join(problems)}")
+    finally:
+        adapter.close()
+    if not gate.allowed or blocked:
+        raise typer.Exit(1)
