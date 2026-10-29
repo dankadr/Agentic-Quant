@@ -895,3 +895,58 @@ def alpaca_readonly_check(
         adapter.close()
     if not gate.allowed or blocked:
         raise typer.Exit(1)
+
+
+@admin_app.command("eval-research")
+def eval_research(
+    dataset: Path = typer.Option(..., help="Evaluation set (JSON)."),
+    supported_claim_rate: float | None = typer.Option(
+        None, help="Fraction of sampled claims a human reviewer found supported."
+    ),
+) -> None:
+    """Score a research evaluation set. Exit 0 only on PASS: INCONCLUSIVE is not a release."""
+    from trading.evaluation.research_eval import evaluate, load, release_criteria  # noqa: PLC0415
+
+    result = evaluate(load(dataset))
+    release = release_criteria(result, supported_claim_rate=supported_claim_rate)
+    typer.echo(
+        f"cases={result.cases} real={result.real_cases} accepted={result.accepted} "
+        f"refused={result.refused} fabricated_citations={result.fabricated_citations} "
+        f"malicious_accepted={result.malicious_accepted}"
+    )
+    typer.echo(f"release: {release.verdict}")
+    for reason in release.reasons:
+        typer.echo(f"  - {reason}")
+    if release.verdict != "PASS":
+        raise typer.Exit(1)
+
+
+@admin_app.command("eval-rollout")
+def eval_rollout(
+    records: Path = typer.Option(..., help="JSON list of session records."),
+    acceptance_passed: bool = typer.Option(
+        False, "--acceptance-passed", help="Deliberate paper acceptance scenarios all passed."
+    ),
+) -> None:
+    """The operational gate for controlled paper rollout. Exit 0 only on PASS."""
+    from datetime import date as _date  # noqa: PLC0415
+
+    from trading.evaluation.rollout import SessionRecord, gate  # noqa: PLC0415
+
+    rows = [
+        SessionRecord(
+            day=_date.fromisoformat(r["day"]),
+            open_positions_at_close=int(r["open_positions_at_close"]),
+            unexplained_discrepancies=int(r["unexplained_discrepancies"]),
+            duplicate_executions=int(r["duplicate_executions"]),
+            uncontrolled_orders=int(r["uncontrolled_orders"]),
+            trades=int(r["trades"]),
+        )
+        for r in json.loads(records.read_text())
+    ]
+    result = gate(rows, acceptance_scenarios_passed=acceptance_passed)
+    typer.echo(f"gate: {result.verdict} (consecutive clean sessions: {result.consecutive_clean})")
+    for reason in result.reasons:
+        typer.echo(f"  - {reason}")
+    if result.verdict != "PASS":
+        raise typer.Exit(1)
