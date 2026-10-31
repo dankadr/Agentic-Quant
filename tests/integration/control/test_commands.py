@@ -1,6 +1,8 @@
 """Operator commands end to end against the paper environment: entries stop, orders cancel, and a
 flatten completes only once the broker shows no open orders and no held shares."""
 
+from datetime import timedelta
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -11,8 +13,9 @@ from trading.control.commands import (
     CommandStatus,
     get_command,
     request_command,
+    resume_refusal,
 )
-from trading.control.state import RiskState, TradingState, get_system_state
+from trading.control.state import RiskState, TradingState, get_system_state, set_trading_state
 from trading.core.clock import ManualClock
 from trading.core.enums import Side
 from trading.data.calendar import MarketCalendar
@@ -158,3 +161,110 @@ def test_flatten_is_refused_while_the_risk_state_is_unknown(
         raise AssertionError("flatten must be refused while the risk state is UNKNOWN")
     with session_factory() as s:
         assert get_system_state(s).trading_state is not TradingState.FLATTENING
+
+
+def _hold_a_position(env) -> None:  # type: ignore[no-untyped-def]
+    bought = env.place()
+    env.manager.submit(bought)
+    env.tick()
+    env.manager.sync_fills()
+
+
+def _pause(session_factory: sessionmaker[Session], clock: ManualClock) -> None:
+    with session_factory.begin() as s:
+        set_trading_state(
+            s,
+            target=TradingState.PAUSED,
+            expected_version=get_system_state(s).version,
+            actor="operator",
+            reason="test",
+            request_id=None,
+            now=clock.now(),
+        )
+
+
+def test_cancel_open_orders_spares_an_exit_placed_after_the_request(
+    db: Session,
+    session_factory: sessionmaker[Session],
+    clock: ManualClock,
+    calendar: MarketCalendar,
+) -> None:
+    """Review finding: the command re-read open orders each cycle and cancelled later exits."""
+    env = build_env(db, session_factory, clock, calendar)
+    _hold_a_position(env)
+    older = env.place(symbol="SPY", side=Side.BUY, qty="0.5", limit="1.00")
+    env.manager.submit(older)
+
+    command, _ = _request(session_factory, clock, CommandKind.CANCEL_OPEN_ORDERS)
+    clock.advance(timedelta(seconds=30))
+    later_exit = env.place(side=Side.SELL, limit="101.00")
+    env.manager.submit(later_exit)
+
+    _supervise(env)
+
+    assert _order_status(db, older) == "CANCELED"
+    assert _order_status(db, later_exit) == "ACKNOWLEDGED"
+    with session_factory() as s:
+        assert get_command(s, command.id).status is CommandStatus.COMPLETED
+
+
+def test_cancel_open_orders_cancels_an_exit_already_working(
+    db: Session,
+    session_factory: sessionmaker[Session],
+    clock: ManualClock,
+    calendar: MarketCalendar,
+) -> None:
+    env = build_env(db, session_factory, clock, calendar)
+    _hold_a_position(env)
+    working_exit = env.place(side=Side.SELL, limit="101.00")
+    env.manager.submit(working_exit)
+
+    _request(session_factory, clock, CommandKind.CANCEL_OPEN_ORDERS)
+    clock.advance(timedelta(seconds=30))
+    _supervise(env)
+
+    assert _order_status(db, working_exit) == "CANCELED"
+
+
+def test_a_pause_abandons_a_flatten_and_resume_works_afterwards(
+    db: Session,
+    session_factory: sessionmaker[Session],
+    clock: ManualClock,
+    calendar: MarketCalendar,
+) -> None:
+    """Sells cannot run while paused, so an open flatten would otherwise block resume forever."""
+    env = build_env(db, session_factory, clock, calendar)
+    _hold_a_position(env)
+    command, _ = _request(session_factory, clock, CommandKind.FLATTEN)
+    _pause(session_factory, clock)
+    with session_factory() as s:
+        assert resume_refusal(s, get_system_state(s)) is not None  # not closed yet
+
+    _supervise(env)
+
+    with session_factory() as s:
+        view = get_command(s, command.id)
+        assert view.status is CommandStatus.FAILED
+        assert view.progress["superseded_by"] == "PAUSED"
+        state = get_system_state(s)
+        assert state.trading_state is TradingState.PAUSED
+        assert resume_refusal(s, state) is None
+
+
+def test_two_flatten_requests_both_complete(
+    db: Session,
+    session_factory: sessionmaker[Session],
+    clock: ManualClock,
+    calendar: MarketCalendar,
+) -> None:
+    """The first completion moves to EXIT_ONLY; that must not read as the second being replaced."""
+    env = build_env(db, session_factory, clock, calendar)
+    first, _ = _request(session_factory, clock, CommandKind.FLATTEN)
+    second, _ = _request(session_factory, clock, CommandKind.FLATTEN)
+
+    _supervise(env)
+
+    with session_factory() as s:
+        assert get_command(s, first.id).status is CommandStatus.COMPLETED
+        assert get_command(s, second.id).status is CommandStatus.COMPLETED
+        assert get_system_state(s).trading_state is TradingState.EXIT_ONLY

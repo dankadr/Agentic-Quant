@@ -52,3 +52,15 @@
   monitor on a **second** host, pointed at `/v1/health/live`. This is not yet provisioned.
 - The backup script depends on `age`, `docker` and `pg_dump` on the host, and has been reviewed but
   not yet run against a live deployment.
+
+## Operator commands and resume
+
+`resume-paper` answers `409 COMMAND_IN_PROGRESS` while a flatten or any other operator command is
+still running, and lists the open commands. Wait for them to finish; they advance every 5 seconds.
+
+- **To abandon a flatten:** pause. Sells cannot run while paused, so the executor marks the flatten
+  `FAILED` with `superseded_by: PAUSED` on its next cycle, and resume is allowed after that. Any
+  positions it had not sold are still held.
+- **To restart a flatten from a pause:** call `flatten` again.
+- **`cancel-open-orders`** cancels the orders open when it was requested. Exits placed afterwards keep
+  running, so it cannot cancel the sells of a flatten requested later.

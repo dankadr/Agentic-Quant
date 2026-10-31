@@ -140,6 +140,35 @@ def request_command(
     return _view(row), state
 
 
+@dataclass(frozen=True)
+class ResumeRefusal:
+    reason: str
+    open_commands: tuple[CommandView, ...]
+
+
+def resume_refusal(session: Session, state: SystemState) -> ResumeRefusal | None:
+    """Why trading may not resume now, or None. New entries must not start under an operator command
+    that is still stopping them. Pausing abandons a flatten, which is the way out of a stalled one.
+
+    The caller holds the system-state lock, so no new command can start. Commands are read without a
+    lock: the executor locks a command and then the state, and the opposite order could deadlock.
+    """
+    commands = tuple(
+        _view(row)
+        for row in session.scalars(
+            select(OperationalCommandRow)
+            .where(OperationalCommandRow.status.in_(OPEN_STATUSES))
+            .order_by(OperationalCommandRow.requested_at, OperationalCommandRow.id)
+        )
+    )
+    if state.trading_state is TradingState.FLATTENING:
+        reason = "a flatten is in progress: wait for it to finish, or pause to abandon it"
+        return ResumeRefusal(reason, commands)
+    if commands:
+        return ResumeRefusal("operator commands are still running: wait for them", commands)
+    return None
+
+
 def get_command(session: Session, command_id: UUID) -> CommandView:
     row = session.get(OperationalCommandRow, command_id)
     if row is None:

@@ -20,6 +20,7 @@ from trading.control.commands import (
     CommandView,
     get_command,
     request_command,
+    resume_refusal,
 )
 from trading.control.state import RiskState, TradingState, get_system_state, set_trading_state
 from trading.core.clock import Clock
@@ -72,7 +73,7 @@ def pause(
     session: Session = Depends(get_session),
     clock: Clock = Depends(get_clock),
 ) -> JSONResponse:
-    """Always allowed: pausing is the safe direction."""
+    """Always allowed: pausing is the safe direction. It abandons an in-progress flatten."""
     return run_idempotent(
         session,
         principal=principal,
@@ -93,13 +94,15 @@ def resume_paper(
     session: Session = Depends(get_session),
     clock: Clock = Depends(get_clock),
 ) -> JSONResponse:
-    """Only after readiness checks pass: DB reachable, executor lease held, risk state NORMAL."""
+    """Only after readiness checks pass (DB reachable, executor lease held, risk state NORMAL) and
+    no operator command is still running."""
 
     def action() -> tuple[int, dict[str, Any]]:
+        state = get_system_state(session, for_update=True)  # no command can start from here on
         readiness = compute_readiness(
             request.app.state.session_factory, clock, request.app.state.calendar
         )
-        risk_state = get_system_state(session).risk_state
+        risk_state = state.risk_state
         checks = {
             "database": readiness.database,
             "executor_lease": readiness.executor_lease,
@@ -110,6 +113,19 @@ def resume_paper(
         if not (readiness.ready and risk_state is RiskState.NORMAL and data_usable):
             raise ApiProblem(
                 503, "NOT_READY", "System is not ready to resume", extra={"checks": checks}
+            )
+        refusal = resume_refusal(session, state)
+        if refusal is not None:
+            raise ApiProblem(
+                409,
+                "COMMAND_IN_PROGRESS",
+                refusal.reason,
+                extra={
+                    "open_commands": [
+                        {"command_id": str(c.id), "kind": c.kind.value, "status": c.status.value}
+                        for c in refusal.open_commands
+                    ]
+                },
             )
         return _apply(session, request, principal, clock, body, TradingState.PAPER_RUNNING)
 
@@ -215,7 +231,8 @@ def cancel_open_orders(
     session: Session = Depends(get_session),
     clock: Clock = Depends(get_clock),
 ) -> JSONResponse:
-    """No new entries, and every outstanding order is cancelled. Positions are left alone."""
+    """No new entries, and every order open at this moment is cancelled. Exits placed afterwards
+    keep running. Positions are left alone."""
     return _run_command(
         CommandKind.CANCEL_OPEN_ORDERS,
         "POST /v1/control/cancel-open-orders",
