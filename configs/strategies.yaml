@@ -8,7 +8,7 @@ strategies:
     enabled: true
     allocation_pct: '0.35'
     params:
-      symbols: [SPY, QQQ, IWM, DIA, AAPL, MSFT, NVDA]
+      symbols: [SPY, QQQ, IWM, DIA, AAPL, MSFT, NVDA, GOOGL, META, AMZN]
       opening_range_minutes: 15
       volume_confirm_ratio: '1.2'      # breakout bar volume vs the opening-range average
       breakout_buffer_bps: '1'
@@ -16,7 +16,7 @@ strategies:
       max_hold_minutes: 120             # time stop
       max_spread_bps: '10'
       min_avg_volume: '1000'
-      trade_notional: '80'
+      trade_notional: '120'             # 12% of the $1,000 account (owner decision 2026-10-28)
       signal_ttl_seconds: 60
   vwap_v1:
     enabled: true
@@ -30,7 +30,7 @@ strategies:
       max_slope_bps: '8'                # reject strongly trending tape
       max_hold_minutes: 60
       max_spread_bps: '10'
-      trade_notional: '60'
+      trade_notional: '120'             # 12% of the $1,000 account (owner decision 2026-10-28)
       signal_ttl_seconds: 60
   eod_flatten:
     enabled: true

@@ -31,6 +31,15 @@ def propose(
     )  # fmt: skip
 
 
+def test_macro_floor_is_editable_within_zero_and_one(db: Session) -> None:
+    row = propose(db, {"min_multiplier": 0.8})
+    assert row.changes_json == {"min_multiplier": 0.8}
+    assert propose(db, {"min_multiplier": 1}).changes_json == {"min_multiplier": 1}
+    for bad in (1.5, -0.1, "0.8", True):
+        with pytest.raises(ProposalInvalid):
+            propose(db, {"min_multiplier": bad})
+
+
 def test_valid_edit_stores_diff(db: Session) -> None:
     row = propose(db, {"run_every_minutes": 15})
     assert (row.status, row.source, row.agent_name) == ("PENDING_REVIEW", "OPERATOR", "macro")

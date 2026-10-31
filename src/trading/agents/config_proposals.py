@@ -62,6 +62,8 @@ def _check_type(field: str, current: object, value: object) -> None:
         if isinstance(current, bool)
         else isinstance(value, int) and not isinstance(value, bool)
         if isinstance(current, int)
+        else isinstance(value, int | float) and not isinstance(value, bool)
+        if isinstance(current, float)
         else isinstance(value, list) and all(isinstance(v, str) for v in value)
         if isinstance(current, list)
         else False

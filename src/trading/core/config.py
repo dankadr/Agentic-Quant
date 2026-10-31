@@ -138,6 +138,7 @@ class MacroAgentConfig(_Frozen):
     run_every_minutes: int = Field(default=30, gt=0, le=240)
     first_run_after_open_minutes: int = Field(default=16, ge=1, le=120)
     dependent_strategies: tuple[str, ...] = ("orb_v1", "vwap_v1")
+    min_multiplier: float = Field(default=0.0, ge=0, le=1)  # 0 = no floor; a view of 0 still blocks
 
     @model_validator(mode="after")
     def _ttl_outlives_interval(self) -> "MacroAgentConfig":

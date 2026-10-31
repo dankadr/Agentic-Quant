@@ -91,6 +91,13 @@ class MacroView:
     valid_until: datetime
 
 
+def floored_multiplier(multiplier: Decimal, floor: float) -> Decimal:
+    """How far caution may shrink an entry. A view of 0 means no new entries and is never raised."""
+    if multiplier == 0:
+        return multiplier
+    return max(multiplier, Decimal(str(floor)))
+
+
 def latest_macro_view(session: Session, now: datetime) -> MacroView | None:
     """The newest macro view that had been AVAILABLE at ``now`` and has not expired by then.
 

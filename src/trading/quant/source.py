@@ -15,7 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
-from trading.agents.macro import latest_macro_view
+from trading.agents.macro import floored_multiplier, latest_macro_view
 from trading.control.state import RiskState, TradingState, get_system_state
 from trading.core.config import AppConfig
 from trading.core.hashing import canonical_json
@@ -183,7 +183,8 @@ class StrategyIntentSource:
             return {}
         view = latest_macro_view(session, now)
         if view is not None:
-            return dict.fromkeys(macro.dependent_strategies, view.risk_multiplier)
+            scale = floored_multiplier(view.risk_multiplier, macro.min_multiplier)
+            return dict.fromkeys(macro.dependent_strategies, scale)
         if macro.required:
             return dict.fromkeys(macro.dependent_strategies, Decimal(0))
         return {}

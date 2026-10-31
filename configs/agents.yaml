@@ -17,6 +17,9 @@ agents:
     run_every_minutes: 30
     first_run_after_open_minutes: 16     # after the 15-minute opening range
     dependent_strategies: [orb_v1, vwap_v1]
+    # Owner decision 2026-10-31: caution may shrink an entry to 70% at most. A view of 0 still means
+    # no new entries, and exits are never touched.
+    min_multiplier: 0.7
   evaluator:
     enabled: true
   # Tried on real data (Alpaca news, Friday's backtest) before enabling.

@@ -102,7 +102,7 @@ def test_a_breakout_becomes_a_sized_buy_proposal_and_is_recorded(world: World) -
     (req,) = world.propose()
     assert (req.symbol, req.side, req.strategy_id) == ("SPY", Side.BUY, "orb_v1")
     assert req.limit_price == D("100.42")  # ask 100.31 + 10 bp, ceiled to the cent
-    assert req.quantity == D("0.7966")  # floor(80 / 100.42, 0.0001)
+    assert req.quantity == D("1.1949")  # floor(120 / 100.42, 0.0001)
     row = world.db.execute(
         text("select strategy_id, side, status, reason_codes, target_notional from signals")
     ).one()
@@ -297,10 +297,12 @@ def test_one_failing_strategy_does_not_stop_the_others_or_the_flatten(world: Wor
     assert (req.side, req.symbol, req.quantity) == (Side.SELL, "SPY", D("0.8"))
 
 
-def _macro_world(world: World, *, required: bool = True) -> None:
+def _macro_world(world: World, *, required: bool = True, min_multiplier: float = 0.0) -> None:
     from trading.core.config import AgentsConfig
 
-    agents = AgentsConfig.model_validate({"macro": {"enabled": True, "required": required}})
+    agents = AgentsConfig.model_validate(
+        {"macro": {"enabled": True, "required": required, "min_multiplier": min_multiplier}}
+    )
     cfg = CFG.model_copy(update={"agents": agents})
     world.source = StrategyIntentSource(
         world.source._sf,
@@ -349,7 +351,46 @@ def test_a_fresh_macro_view_scales_entries_down(world: World) -> None:
     _macro_run(world, "0.5")
     (half,) = world.propose()
     assert half.quantity < full.quantity
-    assert half.quantity * D("100.31") <= D("40")
+    assert half.quantity * D("100.31") <= D("60")
+
+
+def _full_quantity(world: World) -> D:
+    world.orb_day()
+    (full,) = world.propose()
+    world.db.execute(text("delete from allocation_decisions"))
+    world.db.execute(text("delete from signals"))
+    world.db.commit()
+    return full.quantity
+
+
+def test_the_macro_floor_limits_how_far_caution_shrinks_an_entry(world: World) -> None:
+    full = _full_quantity(world)
+    _macro_world(world, min_multiplier=0.7)
+    _macro_run(world, "0.5")
+    (floored,) = world.propose()
+    assert full * D("0.69") < floored.quantity <= full * D("0.70")
+
+
+def test_a_view_above_the_macro_floor_is_used_as_is(world: World) -> None:
+    full = _full_quantity(world)
+    _macro_world(world, min_multiplier=0.7)
+    _macro_run(world, "0.9")
+    (scaled,) = world.propose()
+    assert full * D("0.89") < scaled.quantity <= full * D("0.90")
+
+
+def test_the_macro_floor_never_overrides_a_block(world: World) -> None:
+    world.orb_day()
+    _macro_world(world, min_multiplier=0.7)
+    _macro_run(world, "0")
+    assert world.propose() == ()
+    assert "MACRO_BLOCK" in world.count("select rationale_json::text from allocation_decisions")
+
+
+def test_a_required_macro_view_missing_still_blocks_with_a_floor(world: World) -> None:
+    world.orb_day()
+    _macro_world(world, min_multiplier=0.7)
+    assert world.propose() == ()
 
 
 def test_an_expired_macro_view_blocks_when_required_and_is_ignored_when_not(world: World) -> None:

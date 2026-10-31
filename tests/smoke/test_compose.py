@@ -25,6 +25,14 @@ def _run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     )
 
 
+@pytest.fixture(autouse=True)
+def refuse_over_a_running_stack() -> None:
+    """Every worktree shares one compose project, so these tests would stop whatever is trading."""
+    running = _run("docker", "compose", "ps", "-q", check=False).stdout.strip()
+    if running:
+        pytest.fail("a robinhood-trading stack is running; stop it first with `make down`")
+
+
 @pytest.mark.smoke
 def test_compose_up_healthy() -> None:
     _run("./scripts/init-secrets.sh")

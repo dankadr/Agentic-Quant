@@ -117,7 +117,8 @@ OpenAI-compatible (your Unsloth server); put its key in `secrets/llm_api_key` (e
 
 - **Macro** (`agents.macro.enabled`): from numeric index/breadth features it classifies the regime
   and proposes a `risk_multiplier` in [0, 1] with a TTL. It can only shrink new-entry size of
-  `dependent_strategies`; with `required: true` a missing/expired view blocks their new entries
+  `dependent_strategies`, down to `min_multiplier` at most (0.7 by default here; a view of exactly 0
+  still blocks); with `required: true` a missing/expired view blocks their new entries
   (exits are never blocked). Runs every 30 minutes after the opening range.
 - **Evaluator** (`agents.evaluator.enabled`): a daily narrative over `trading report`, stored in
   `agent_runs`.

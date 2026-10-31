@@ -57,7 +57,10 @@ AGENT_REGISTRY: Mapping[str, AgentInfo] = {
         name="macro",
         job="Reads index bars (SPY, QQQ, IWM) and breadth, labels the market regime and outputs "
         "a size multiplier for new entries.",
-        can_affect=("new-entry size of the dependent strategies (orb_v1, vwap_v1)",),
+        can_affect=(
+            "new-entry size of the dependent strategies (orb_v1, vwap_v1), down to "
+            "`min_multiplier` at most, or no new entries at all when it outputs 0",
+        ),
         cannot=("touch exits", *_NEVER),
         uses_llm=True,
         prompt_version=macro.PROMPT_VERSION,
