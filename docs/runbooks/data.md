@@ -19,6 +19,13 @@ Set `TRADING_DATA_DIR` to put them on another disk. `scripts/init-secrets.sh` cr
 - Stop the stack with `docker compose down` (or `make down`). Start it with `make up`.
 - Deleting a folder is a restore, not a cleanup. Take a verified backup first (`scripts/backup.sh`).
 
+## Preflight (`make up` runs it)
+
+`scripts/check-data.sh` refuses to start over missing data: an initialised folder that has gone
+empty, or an empty folder while the old `robinhood-trading_pgdata` volume still exists. A fresh
+install is allowed. The refusal prints the copy command. `TRADING_ALLOW_FRESH_DATABASE=1` is the
+deliberate override for a genuinely new database beside the old volume.
+
 ## Linux only: Postgres ownership
 
 The database container runs as uid 70. On Linux, once, after `init-secrets.sh`:

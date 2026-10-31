@@ -9,6 +9,6 @@ smoke:
 	uv run pytest -m smoke tests/smoke
 REVISION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 up:
-	./scripts/init-secrets.sh && TRADING_RELEASE_REVISION=$(REVISION) docker compose up -d --build
+	./scripts/init-secrets.sh && ./scripts/check-data.sh && TRADING_RELEASE_REVISION=$(REVISION) docker compose up -d --build
 down:
 	docker compose down
