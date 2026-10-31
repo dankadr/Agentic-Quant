@@ -35,8 +35,7 @@ _STATEMENTS = [
     DO $$
     BEGIN
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'trading_app') THEN
-            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO trading_app;
-            REVOKE ALL ON alembic_version FROM trading_app;
+            GRANT SELECT, INSERT, UPDATE, DELETE ON agent_config_proposals TO trading_app;
         END IF;
     END
     $$
