@@ -27,8 +27,7 @@ AGENT_NAME = "consensus"
 PROMPT_VERSION = "consensus-v1"
 DEFENSIVE_REGIMES = frozenset({"HIGH_VOLATILITY", "UNKNOWN"})
 MIN_MULTIPLIER = Decimal("0.5")
-CONFLICT_BEFORE = timedelta(seconds=120)
-CONFLICT_AFTER = timedelta(seconds=60)
+CONFLICT_BEFORE = timedelta(seconds=120)  # look back only: nothing after the entry is usable
 _ZERO = Decimal(0)
 
 
@@ -58,9 +57,10 @@ def _conflict(session: Session, strategy: str, symbol: str, at: datetime) -> boo
                 "SELECT 1 FROM signals g JOIN instruments i ON i.id = g.instrument_id"
                 " WHERE i.symbol = :sym AND g.strategy_id <> :strat AND g.side = 'SELL'"
                 " AND g.strategy_id <> 'eod_flatten'"
-                " AND g.generated_at >= :a AND g.generated_at <= :b LIMIT 1"
+                # Causal: a signal counts only if it existed at the entry decision time.
+                " AND g.generated_at >= :a AND g.generated_at <= :at LIMIT 1"
             ),
-            {"sym": symbol, "strat": strategy, "a": at - CONFLICT_BEFORE, "b": at + CONFLICT_AFTER},
+            {"sym": symbol, "strat": strategy, "a": at - CONFLICT_BEFORE, "at": at},
         ).first()
     )
 

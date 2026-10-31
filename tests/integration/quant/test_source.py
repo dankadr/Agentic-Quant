@@ -323,8 +323,8 @@ def _macro_run(world: World, multiplier: str, *, valid_minutes: int = 60) -> Non
     world.db.execute(
         text(
             "insert into agent_runs (id, agent_name, model, prompt_version, started_at, completed_at,"
-            " result_json, status) values (gen_random_uuid(), 'macro', 'm', 'macro-v1', :t, :t,"
-            " CAST(:r AS jsonb), 'COMPLETED')"
+            " available_at, result_json, status) values (gen_random_uuid(), 'macro', 'm', 'macro-v1',"
+            " :t, :t, :t, CAST(:r AS jsonb), 'COMPLETED')"
         ),
         {"t": NOW - timedelta(minutes=1), "r": json.dumps(result)},
     )

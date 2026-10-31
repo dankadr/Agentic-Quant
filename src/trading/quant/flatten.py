@@ -34,11 +34,10 @@ class FlattenStrategy:
 
     def evaluate(self, data: StrategyInput) -> Sequence[SignalProposal]:
         close_at = data.session.close_at
-        if (
-            not close_at - timedelta(minutes=self.p.flatten_minutes_before_close)
-            <= data.now
-            < close_at
-        ):
+        in_window = (
+            close_at - timedelta(minutes=self.p.flatten_minutes_before_close) <= data.now < close_at
+        )
+        if not (data.flatten_now or in_window) or data.now >= close_at:
             return []
         signals: list[SignalProposal] = []
         for symbol, qty in sorted(data.positions.items()):

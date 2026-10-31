@@ -1,7 +1,9 @@
 """Acceptance test 1: a clean `docker compose up --build` is healthy without broker credentials."""
 
 import http.client
+import os
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -11,10 +13,16 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 READY_URL = "http://127.0.0.1:8000/v1/health/ready"
+# The smoke stack writes to a throwaway folder, never to the operator's ./data: a test run must not
+# be able to reach real database or document files. Teardown never removes volumes or host folders.
+SMOKE_DATA_DIR = tempfile.mkdtemp(prefix="trading-smoke-data-")
 
 
 def _run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, cwd=ROOT, capture_output=True, text=True, check=check, timeout=900)  # noqa: S603
+    env = {**os.environ, "TRADING_DATA_DIR": SMOKE_DATA_DIR}
+    return subprocess.run(  # noqa: S603
+        args, cwd=ROOT, capture_output=True, text=True, check=check, timeout=900, env=env
+    )
 
 
 @pytest.mark.smoke
@@ -48,7 +56,7 @@ def test_compose_up_healthy() -> None:
         assert '"executor_lease":"held"' in body.replace(" ", "")
         assert '"database":"ok"' in body.replace(" ", "")
     finally:
-        _run("docker", "compose", "down", "-v", check=False)
+        _run("docker", "compose", "down", check=False)  # keeps volumes and host folders
 
 
 def _call(
@@ -111,4 +119,4 @@ def test_compose_operator_flow() -> None:
         assert (status, paused["state"]) == (200, "PAUSED")
         assert _call("GET", "/v1/audit", key)[1]["items"], "control actions must be audited"
     finally:
-        _run("docker", "compose", "down", "-v", check=False)
+        _run("docker", "compose", "down", check=False)  # keeps volumes and host folders

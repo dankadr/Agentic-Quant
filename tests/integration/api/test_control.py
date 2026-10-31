@@ -35,6 +35,11 @@ def _audit_count(db: Session, action: str) -> int:
 
 def test_status_initial(client: TestClient, viewer_key: str) -> None:
     body = client.get("/v1/system/status", headers=bearer(viewer_key)).json()
+    release = body.pop("release")
+    # The schema is fully migrated, and the config fingerprint is a real digest.
+    assert release["schema_applied"] is not None
+    assert release["schema_applied"] == release["schema_head"]
+    assert len(release["config_sha256"]) == 64
     assert body == {
         "mode": "PAPER_ONLY",
         "trading_enabled": False,

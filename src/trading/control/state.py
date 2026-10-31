@@ -16,8 +16,18 @@ from trading.monitoring.audit import record_audit
 
 
 class TradingState(StrEnum):
-    PAUSED = "PAUSED"
+    PAUSED = "PAUSED"  # freezes all new order submission
     PAPER_RUNNING = "PAPER_RUNNING"
+    EXIT_ONLY = "EXIT_ONLY"  # no new entries; protective sells continue
+    FLATTENING = "FLATTENING"  # EXIT_ONLY, and actively liquidating every position
+
+
+def blocks_order(trading_state: TradingState, *, is_entry: bool) -> bool:
+    """True when this trading state forbids submitting an order of this kind. The single rule
+    shared by the risk engine and the execution gate, so the two cannot disagree."""
+    if trading_state is TradingState.PAUSED:
+        return True
+    return is_entry and trading_state is not TradingState.PAPER_RUNNING
 
 
 class RiskState(StrEnum):
@@ -178,3 +188,31 @@ def set_risk_state(
 def mark_reconciled(session: Session, *, now: datetime) -> None:
     _row(session, for_update=True).last_reconciled_at = now
     session.flush()
+
+
+def mark_restored(session: Session, *, reference: str, now: datetime) -> SystemState:
+    """After a restore: stay paused and require reconciliation before any entry can be placed.
+
+    A restored database may predate broker fills and activities. Trading stays off until an
+    operator has reconciled orders, fills, activities and positions against the broker.
+    """
+    actor = "admin:mark-restored"
+    set_risk_state(
+        session,
+        risk_state=RiskState.RECONCILIATION_REQUIRED,
+        reason=f"restored: {reference}",
+        actor=actor,
+        now=now,
+    )
+    state = get_system_state(session, for_update=True)
+    if state.trading_state is not TradingState.PAUSED:
+        set_trading_state(
+            session,
+            target=TradingState.PAUSED,
+            expected_version=state.version,
+            actor=actor,
+            reason=f"restored: {reference}",
+            request_id=None,
+            now=now,
+        )
+    return get_system_state(session)

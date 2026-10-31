@@ -27,7 +27,13 @@ from trading.brokers.base import (
     BrokerTimeout,
     BrokerUnavailable,
 )
-from trading.control.state import RiskState, SystemState, TradingState, get_system_state
+from trading.control.state import (
+    RiskState,
+    SystemState,
+    TradingState,
+    blocks_order,
+    get_system_state,
+)
 from trading.core.clock import Clock
 from trading.core.config import AppConfig
 from trading.core.enums import OrderType, Side, TimeInForce
@@ -79,8 +85,10 @@ class _Outcome:
 
 def _gate_reason(state: SystemState, is_entry: bool) -> str | None:
     """Why the CURRENT system state forbids submitting now (re-checked at submit time)."""
-    if state.trading_state is not TradingState.PAPER_RUNNING:
-        return "TRADING_PAUSED"
+    if blocks_order(state.trading_state, is_entry=is_entry):
+        if state.trading_state is TradingState.PAUSED:
+            return "TRADING_PAUSED"
+        return "ENTRIES_DISABLED"
     if state.risk_state is RiskState.UNKNOWN:
         return "RISK_STATE_UNKNOWN"
     if state.risk_state is RiskState.RECONCILIATION_REQUIRED:

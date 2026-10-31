@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Research</h1>
+<form method="get" action="/ui/research">
+  <input name="q" value="{{ q }}" minlength="2" maxlength="200" placeholder="Search filings and releases">
+  <button type="submit">Search</button>
+</form>
+{% if q and hits %}
+<table><tr><th>Document</th><th>Category</th><th>Company</th><th>Published</th><th>Retrieved</th><th>Pages</th></tr>
+{% for h in hits %}<tr><td>{{ h.title }} <span class="muted">v{{ h.version_no }}</span></td><td>{{ h.category }}</td><td>{{ h.company or '' }}</td><td>{{ h.published_at or 'not stated' }}</td><td>{{ h.retrieved_at.isoformat() }}</td><td>{{ h.pages|join(', ') }}</td></tr>{% endfor %}
+</table>
+{% elif q %}<p class="muted">No matches.</p>{% endif %}
+<h2>Recent analyses</h2>
+<table><tr><th>Status</th><th>Category</th><th>Company</th><th>Reason</th><th>Available</th></tr>
+{% for r in reports %}<tr><td>{{ r.status }}</td><td>{{ r.category }}</td><td>{{ r.company or '' }}</td><td>{{ r.reason or '' }}</td><td>{{ r.available_at.isoformat() if r.available_at else 'not available' }}</td></tr>{% endfor %}
+</table>
+{% endblock %}

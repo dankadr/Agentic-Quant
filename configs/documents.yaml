@@ -1,0 +1,13 @@
+# Research document intake. URL import may fetch ONLY these hosts, over https, after every
+# redirect and resolved address has been checked against private and loopback networks.
+# Empty by default: nothing can be fetched until an operator approves a source here.
+documents:
+  allowed_hosts: []
+  max_bytes: 10485760
+  max_pages: 200
+  extract_timeout_seconds: 20
+  # Analysis budgets: tokens per UTC day across all reports; characters of one document's text.
+  daily_token_budget: 200000
+  max_input_chars: 40000
+  # SEC asks every automated client to declare who it is. Set to a real name and contact.
+  sec_user_agent: null

@@ -5,6 +5,7 @@ import signal
 import threading
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,8 +20,9 @@ import trading
 from trading.agents.effective_config import load_effective_config
 from trading.api.app import create_app
 from trading.api.auth import Role, create_principal
-from trading.core.clock import SystemClock
-from trading.core.config import AppConfig, Settings, load_config
+from trading.core.clock import Clock, SystemClock
+from trading.core.config import AppConfig, Settings, load_config, read_secret
+from trading.core.enums import OrderType, Side, TimeInForce
 from trading.core.time import ensure_utc
 from trading.data.calendar import XnysCalendar
 from trading.data.ingest import ingest_bars, ingest_corporate_actions, ingest_quotes
@@ -29,6 +31,7 @@ from trading.data.provider import MarketDataProvider
 from trading.data.replay_provider import CsvReplayProvider
 from trading.db.engine import make_engine, make_session_factory
 from trading.db.migrate import upgrade
+from trading.documents.blobs import BlobStore
 from trading.jobs.lease import Lease
 from trading.monitoring.logging import configure_logging
 from trading.monitoring.metrics import start_metrics_server
@@ -36,12 +39,14 @@ from trading.risk.halts import NotInHaltError, clear_drawdown_halt
 from trading.services.health import check_health, new_holder_id
 
 API_PORT = 8000
-METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102}
+METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102, "research": 9103}
 
 if TYPE_CHECKING:
     from trading.agents.llm import LlmClient
     from trading.data.alpaca_news import AlpacaNewsSource
     from trading.data.alpaca_provider import AlpacaDataProvider
+    from trading.execution.controls import ControlSupervisor
+    from trading.services.handlers import WorkerContext
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 admin_app = typer.Typer(no_args_is_help=True, help="Administrative commands.")
@@ -51,6 +56,7 @@ app.add_typer(admin_app, name="admin")
 class ServiceRole(StrEnum):
     WORKER = "worker"
     SCHEDULER = "scheduler"
+    RESEARCH = "research"
 
 
 def _bootstrap(service: str) -> tuple[Settings, AppConfig, sessionmaker[Session], str | None]:
@@ -104,7 +110,11 @@ def api() -> None:
     """Run the FastAPI control API (no broker access)."""
     settings, config, session_factory, _ = _bootstrap("api")
     application = create_app(
-        settings=settings, config=config, session_factory=session_factory, clock=SystemClock()
+        settings=settings,
+        config=config,
+        session_factory=session_factory,
+        clock=SystemClock(),
+        calendar=_calendar(),  # without it readiness can never see the market is open
     )
     # Binds all interfaces inside the container; Compose publishes the port on 127.0.0.1 only.
     uvicorn.run(application, host="0.0.0.0", port=API_PORT, log_config=None)  # noqa: S104
@@ -159,8 +169,7 @@ def worker() -> None:
     clock = SystemClock()
     calendar = _calendar()
     provider = _alpaca_provider(settings)
-    llm = _llm_client(settings, config)
-    news = _news_source(settings, config)
+    provider_name = _market_data_provider_name(settings)
 
     def ctx_factory(lease: Lease) -> WorkerContext:
         # Without Alpaca data keys ticks are no-ops (fail closed); with them the worker trades
@@ -172,7 +181,7 @@ def worker() -> None:
             lease=lease,
             calendar=calendar,
             provider=provider,
-            provider_name=provider.name if provider is not None else "replay",
+            provider_name=provider_name,
         )
         return WorkerContext(
             settings=settings,
@@ -181,8 +190,6 @@ def worker() -> None:
             clock=clock,
             lease=lease,
             runtime=runtime,
-            llm=llm,
-            news=news,
         )
 
     code = run_worker(
@@ -193,8 +200,26 @@ def worker() -> None:
         stop=_stop_on_signals(),
         startup_hooks=[reconcile_on_start],
         config_version=config_version,
+        supervisor_factory=lambda ctx: _control_supervisor(ctx, session_factory, clock).run_cycle,
     )
     raise typer.Exit(code)
+
+
+def _control_supervisor(
+    ctx: "WorkerContext", session_factory: sessionmaker[Session], clock: Clock
+) -> "ControlSupervisor":
+    """Operator commands and exits are advanced by the worker that holds the executor lease."""
+    from trading.execution.controls import ControlSupervisor  # noqa: PLC0415
+
+    if ctx.runtime is None:  # the worker always builds a runtime; refuse to guess otherwise
+        raise RuntimeError("control supervisor requires a trading runtime")
+    return ControlSupervisor(
+        session_factory,
+        ctx.runtime.manager,
+        clock=clock,
+        lease=ctx.lease,
+        account_id=ctx.runtime.account_id,
+    )
 
 
 @app.command()
@@ -210,6 +235,40 @@ def scheduler() -> None:
         calendar=_calendar(),
         stop=_stop_on_signals(),
         agents=_config.agents,
+        config_version=config_version,
+    )
+    raise typer.Exit(code)
+
+
+@app.command("research-worker")
+def research_worker() -> None:
+    """Run the research worker: model-driven agent jobs, with no executor lease and no broker."""
+    # Same isolation rule as the worker: this process never loads broker code.
+    from trading.services.research import (  # noqa: PLC0415
+        ResearchContext,
+        build_research_handlers,
+        run_research_worker,
+    )
+
+    settings, config, session_factory, config_version = _bootstrap("research")
+    clock = SystemClock()
+    ctx = ResearchContext(
+        settings=settings,
+        config=config,
+        session_factory=session_factory,
+        clock=clock,
+        calendar=_calendar(),
+        provider_name=_market_data_provider_name(settings),
+        llm=_llm_client(settings, config),
+        news=_news_source(settings, config),
+        blobs=BlobStore(settings.document_store_dir),
+    )
+    code = run_research_worker(
+        session_factory=session_factory,
+        clock=clock,
+        worker_id=new_holder_id(settings.worker_id),
+        handlers=build_research_handlers(ctx),
+        stop=_stop_on_signals(),
         config_version=config_version,
     )
     raise typer.Exit(code)
@@ -257,6 +316,16 @@ def _alpaca_key_files(settings: Settings) -> tuple[Path, Path] | None:
     if not (key.read_text().strip() and secret.read_text().strip()):
         return None
     return key, secret
+
+
+def _market_data_provider_name(settings: Settings) -> str:
+    """The provider name execution writes under and research reads by. Both roles derive it from
+    the same key files, so they cannot disagree; without keys, execution ticks are no-ops."""
+    if _alpaca_key_files(settings) is None:
+        return "replay"
+    from trading.data.alpaca_provider import PROVIDER_NAME  # noqa: PLC0415
+
+    return PROVIDER_NAME
 
 
 def _alpaca_provider(settings: Settings, *, workers: int = 1) -> "AlpacaDataProvider | None":
@@ -723,3 +792,185 @@ def openapi() -> None:
         clock=SystemClock(),
     )
     typer.echo(json.dumps(application.openapi(), indent=2, sort_keys=True))
+
+
+@admin_app.command("raise-incident")
+def raise_incident_command(
+    key: str = typer.Option(..., help="Stable incident key, e.g. backup_failed."),
+    severity: str = typer.Option("WARNING", help="CRITICAL or WARNING."),
+    title: str = typer.Option(..., help="One line for the operator."),
+    detail: str = typer.Option("", help="Context. Never paste secrets or report text here."),
+) -> None:
+    """Open an incident by hand (used by backup and restore scripts). Repeats are deduplicated."""
+    from trading.alerts.store import raise_incident  # noqa: PLC0415
+
+    engine = make_engine(Settings().resolved_database_url())
+    try:
+        with make_session_factory(engine).begin() as session:
+            opened = raise_incident(
+                session, key=key, severity=severity, title=title, detail=detail,
+                now=SystemClock().now(),
+            )  # fmt: skip
+    finally:
+        engine.dispose()
+    typer.echo("opened" if opened else "already open")
+
+
+@admin_app.command("resolve-incident")
+def resolve_incident_command(key: str = typer.Option(..., help="Incident key to clear.")) -> None:
+    """Close an incident and queue its recovery notice."""
+    from trading.alerts.store import resolve_incident  # noqa: PLC0415
+
+    engine = make_engine(Settings().resolved_database_url())
+    try:
+        with make_session_factory(engine).begin() as session:
+            resolved = resolve_incident(session, key=key, now=SystemClock().now())
+    finally:
+        engine.dispose()
+    typer.echo("resolved" if resolved else "not open")
+
+
+@admin_app.command("mark-restored")
+def mark_restored_command(
+    reason: str = typer.Option(..., help="Restore reference (drill id or ticket). Audited."),
+) -> None:
+    """After a restore: keep trading paused and require reconciliation before re-arming."""
+    from trading.control.state import mark_restored  # noqa: PLC0415
+
+    engine = make_engine(Settings().resolved_database_url())
+    try:
+        with make_session_factory(engine).begin() as session:
+            mark_restored(session, reference=reason, now=SystemClock().now())
+    finally:
+        engine.dispose()
+    typer.echo("restore recorded: paused, reconciliation required")
+
+
+@admin_app.command("write-manifest")
+def write_manifest_command(root: Path = typer.Option(..., help="Backup directory.")) -> None:
+    """Write MANIFEST.json (sizes and SHA-256 of every file) beside a backup."""
+    from trading.ops.backup import write_manifest  # noqa: PLC0415
+
+    typer.echo(str(write_manifest(root)))
+
+
+@admin_app.command("verify-manifest")
+def verify_manifest_command(root: Path = typer.Option(..., help="Backup directory.")) -> None:
+    """Refuse a backup that differs from its manifest in any way. Exit 1 on any difference."""
+    from trading.ops.backup import MANIFEST_NAME, verify_manifest  # noqa: PLC0415
+
+    manifest = json.loads((root / MANIFEST_NAME).read_text())
+    problems = verify_manifest(root, manifest)
+    for problem in problems:
+        typer.echo(problem, err=True)
+    if problems:
+        raise typer.Exit(1)
+    typer.echo("backup verified")
+
+
+@admin_app.command("alpaca-readonly-check")
+def alpaca_readonly_check(
+    require_flat: bool = typer.Option(True, help="Require no positions and no open orders."),
+) -> None:
+    """Read-only Alpaca PAPER check: account binding, flatness, and per-symbol capability.
+
+    Places, cancels and changes nothing. Exit 1 unless every gate passes.
+    """
+    from trading.brokers.alpaca.adapter import AlpacaPaperAdapter  # noqa: PLC0415
+    from trading.brokers.alpaca.gate import read_only_gate  # noqa: PLC0415
+    from trading.brokers.base import BrokerOrderRequest  # noqa: PLC0415
+
+    settings = Settings()  # no metrics server: this command must not contend with the worker
+    config = load_config(settings.config_dir)
+    if settings.alpaca_paper_key_id_file is None or settings.alpaca_paper_secret_file is None:
+        typer.echo("alpaca paper credentials are not configured", err=True)
+        raise typer.Exit(1)
+    key_id = read_secret(settings.alpaca_paper_key_id_file).strip()
+    secret = read_secret(settings.alpaca_paper_secret_file).strip()
+    adapter = AlpacaPaperAdapter(key_id=key_id, secret=secret)
+    try:
+        gate = read_only_gate(
+            adapter,
+            enabled=settings.alpaca_paper_enabled,
+            expected_account=settings.alpaca_paper_account,
+            require_flat=require_flat,
+        )
+        typer.echo(f"gate: {'PASS' if gate.allowed else 'FAIL'} {', '.join(gate.reasons)}")
+        blocked = 0
+        from trading.brokers.alpaca.gate import capability_problems  # noqa: PLC0415
+
+        for entry in config.universe:
+            asset = adapter.asset(entry.symbol)
+            probe = BrokerOrderRequest(
+                client_order_id="probe",
+                symbol=entry.symbol,
+                side=Side.BUY,
+                order_type=OrderType.MARKET,
+                qty=Decimal("0.5") if entry.fractional_eligible else Decimal(1),
+                limit_price=None,
+                time_in_force=TimeInForce.DAY,
+            )
+            problems = capability_problems(
+                probe, asset, fractional_limit_verified=settings.alpaca_fractional_limit_verified
+            )
+            blocked += bool(problems)
+            typer.echo(f"{entry.symbol}: {'ok' if not problems else ', '.join(problems)}")
+    finally:
+        adapter.close()
+    if not gate.allowed or blocked:
+        raise typer.Exit(1)
+
+
+@admin_app.command("eval-research")
+def eval_research(
+    dataset: Path = typer.Option(..., help="Evaluation set (JSON)."),
+    supported_claim_rate: float | None = typer.Option(
+        None, help="Fraction of sampled claims a human reviewer found supported."
+    ),
+) -> None:
+    """Score a research evaluation set. Exit 0 only on PASS: INCONCLUSIVE is not a release."""
+    from trading.evaluation.research_eval import evaluate, load, release_criteria  # noqa: PLC0415
+
+    result = evaluate(load(dataset))
+    release = release_criteria(result, supported_claim_rate=supported_claim_rate)
+    typer.echo(
+        f"cases={result.cases} real={result.real_cases} accepted={result.accepted} "
+        f"refused={result.refused} fabricated_citations={result.fabricated_citations} "
+        f"malicious_accepted={result.malicious_accepted}"
+    )
+    typer.echo(f"release: {release.verdict}")
+    for reason in release.reasons:
+        typer.echo(f"  - {reason}")
+    if release.verdict != "PASS":
+        raise typer.Exit(1)
+
+
+@admin_app.command("eval-rollout")
+def eval_rollout(
+    records: Path = typer.Option(..., help="JSON list of session records."),
+    acceptance_passed: bool = typer.Option(
+        False, "--acceptance-passed", help="Deliberate paper acceptance scenarios all passed."
+    ),
+) -> None:
+    """The operational gate for controlled paper rollout. Exit 0 only on PASS."""
+    from datetime import date as _date  # noqa: PLC0415
+
+    from trading.evaluation.rollout import SessionRecord, gate  # noqa: PLC0415
+
+    rows = [
+        SessionRecord(
+            day=_date.fromisoformat(r["day"]),
+            open_positions_at_close=int(r["open_positions_at_close"]),
+            unexplained_discrepancies=int(r["unexplained_discrepancies"]),
+            duplicate_executions=int(r["duplicate_executions"]),
+            uncontrolled_orders=int(r["uncontrolled_orders"]),
+            trades=int(r["trades"]),
+        )
+        for r in json.loads(records.read_text())
+    ]
+    result = gate(rows, acceptance_scenarios_passed=acceptance_passed)
+    typer.echo(f"gate: {result.verdict} (consecutive clean sessions: {result.consecutive_clean})")
+    for reason in result.reasons:
+        typer.echo(f"  - {reason}")
+    if result.verdict != "PASS":
+        raise typer.Exit(1)

@@ -51,7 +51,8 @@ def test_importing_the_api_never_loads_broker_code() -> None:
 
 
 @pytest.mark.parametrize(
-    "entrypoint", ["trading.cli", "trading.services.scheduler", "trading.api.app"]
+    "entrypoint",
+    ["trading.cli", "trading.services.scheduler", "trading.api.app", "trading.services.research"],
 )
 def test_non_worker_entrypoints_never_load_broker_code(entrypoint: str) -> None:
     """Review I4: the API/scheduler containers run `trading.cli`, so it must not pull in brokers."""
@@ -103,6 +104,15 @@ def test_only_sanctioned_routes_mutate_state_through_the_api(app: FastAPI) -> No
     assert mutating == {
         ("POST", "/v1/control/pause"),
         ("POST", "/v1/control/resume-paper"),
+        # Operator commands change what the system MAY do (no new entries, cancel, liquidate). The
+        # executor carries them out through its own fenced cancel path; none submits an order.
+        ("POST", "/v1/control/stop-entries"),
+        ("POST", "/v1/control/cancel-open-orders"),
+        ("POST", "/v1/control/flatten"),
+        # Research intake stores evidence (immutable documents) and queues a fetch. Neither affects
+        # orders, risk limits or trading state.
+        ("POST", "/v1/research/documents"),
+        ("POST", "/v1/research/import-url"),
         # Parameter proposals: stored PENDING_REVIEW, reviewed by another principal, applied by the
         # executor at the next session start. They cannot place orders or touch risk limits.
         ("POST", "/v1/strategies/{strategy_id}/propose-config"),
@@ -113,7 +123,9 @@ def test_only_sanctioned_routes_mutate_state_through_the_api(app: FastAPI) -> No
         ("POST", "/v1/agents/{name}/config-proposals"),
         ("POST", "/v1/agent-config-proposals/{proposal_id}/review"),
     }
-    assert not [p for _, p in mutating if "order" in p or "risk" in p or "mode" in p]
+    # "cancel-open-orders" is the one sanctioned path that names orders: it cancels, never places.
+    placing = [p for _, p in mutating if p != "/v1/control/cancel-open-orders"]
+    assert not [p for p in placing if "order" in p or "risk" in p or "mode" in p]
     assert len(paths) >= 9  # guard against the check passing because the schema came back empty
 
 
@@ -134,3 +146,18 @@ def app() -> FastAPI:
         ),
         clock=ManualClock(datetime(2026, 10, 19, tzinfo=UTC)),
     )
+
+
+def test_research_intake_and_analysis_never_reach_trading_decisions() -> None:
+    """A research report, however it reads, cannot change an order, a risk limit or a trading state.
+
+    Execution, risk, portfolio and the broker see none of the research packages.
+    """
+    offenders = [
+        f"{path.relative_to(ROOT)}: {name}"
+        for pkg in ("execution", "risk", "portfolio", "brokers", "quant")
+        for path in (ROOT / "src" / "trading" / pkg).rglob("*.py")
+        for name in _imports(path)
+        if name.startswith(("trading.reports", "trading.documents", "trading.api.routes.research"))
+    ]
+    assert offenders == []

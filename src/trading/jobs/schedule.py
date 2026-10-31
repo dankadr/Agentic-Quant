@@ -118,7 +118,19 @@ def plan_jobs(
             dedupe_key=f"heartbeat:{minute:%Y-%m-%dT%H:%MZ}",
             scheduled_at=minute,
             payload={},
-        )
+        ),
+        JobSpec(
+            kind="watchdog_check",
+            dedupe_key=f"watchdog_check:{minute:%Y-%m-%dT%H:%MZ}",
+            scheduled_at=minute,
+            payload={},
+        ),
+        JobSpec(
+            kind="alert_dispatch",
+            dedupe_key=f"alert_dispatch:{minute:%Y-%m-%dT%H:%MZ}",
+            scheduled_at=minute,
+            payload={},
+        ),
     ]
     if calendar is None:
         return jobs

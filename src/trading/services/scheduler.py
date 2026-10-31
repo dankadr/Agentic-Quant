@@ -11,7 +11,8 @@ from trading.agents.effective_config import apply_when_idle, config_changed
 from trading.core.clock import Clock
 from trading.core.config import AgentsConfig
 from trading.data.calendar import MarketCalendar
-from trading.jobs.lease import SCHEDULER_LEASE, acquire_lease, release_lease, renew_lease
+from trading.jobs.keepalive import Keepalive
+from trading.jobs.lease import SCHEDULER_LEASE, Lease, acquire_lease, release_lease, renew_lease
 from trading.jobs.queue import enqueue
 from trading.jobs.schedule import plan_jobs
 from trading.monitoring.logging import get_logger
@@ -37,6 +38,13 @@ def tick(
                 scheduled_at=spec.scheduled_at,
                 dedupe_key=spec.dedupe_key,
             )
+
+
+def _renew(
+    session_factory: sessionmaker[Session], clock: Clock, lease: Lease, ttl: timedelta
+) -> bool:
+    with session_factory.begin() as session:
+        return renew_lease(session, lease, now=clock.now(), ttl=ttl) is not None
 
 
 def run_scheduler(
@@ -68,19 +76,15 @@ def run_scheduler(
         return EXIT_OK
     LEASE_HELD.labels(SCHEDULER_LEASE).set(1)
     _log.info("scheduler_started", holder=holder, fencing_token=lease.fencing_token)
-    last_renew = clock.now()
     last_config_check = time.monotonic()
+    keeper = Keepalive(
+        "scheduler-lease",
+        lambda: _renew(session_factory, clock, lease, lease_ttl),
+        interval=min(5.0, lease_ttl.total_seconds() / 3),
+        ttl=lease_ttl.total_seconds(),
+    ).start()
     try:
-        while not stop.is_set():
-            now = clock.now()
-            if now - last_renew >= lease_ttl / 3:
-                with session_factory.begin() as session:
-                    renewed = renew_lease(session, lease, now=now, ttl=lease_ttl)
-                if renewed is None:
-                    _log.critical("scheduler_lease_lost", holder=holder)
-                    LEASE_HELD.labels(SCHEDULER_LEASE).set(0)
-                    return EXIT_LEASE_LOST
-                last_renew = now
+        while not stop.is_set() and not keeper.lost.is_set():
             tick(session_factory, clock, calendar, agents)
             if time.monotonic() - last_config_check >= config_check_interval:
                 last_config_check = time.monotonic()
@@ -98,6 +102,12 @@ def run_scheduler(
             stop.wait(interval)
     except SQLAlchemyError:
         _log.critical("scheduler_database_failure", exc_info=True)
+        LEASE_HELD.labels(SCHEDULER_LEASE).set(0)
+        return EXIT_LEASE_LOST
+    finally:
+        keeper.stop()
+    if keeper.lost.is_set():
+        _log.critical("scheduler_lease_lost", holder=holder)
         LEASE_HELD.labels(SCHEDULER_LEASE).set(0)
         return EXIT_LEASE_LOST
     LEASE_HELD.labels(SCHEDULER_LEASE).set(0)

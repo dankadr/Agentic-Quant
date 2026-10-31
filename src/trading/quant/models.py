@@ -85,6 +85,8 @@ class StrategyInput:
     # (strategy_id, symbol) pairs already entered this session: one entry per symbol per session
     entered_today: frozenset[tuple[str, str]] = frozenset()
     positions: Mapping[str, Decimal] = field(default_factory=dict)  # symbol -> total shares held
+    # True while the system is FLATTENING: liquidate now, not only inside the pre-close window.
+    flatten_now: bool = False
 
 
 class SignalStrategy(Protocol):

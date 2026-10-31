@@ -10,7 +10,15 @@ def _t(minute: int, second: int) -> datetime:
 def test_plan_jobs_heartbeat_dedupe_per_minute() -> None:
     a = plan_jobs(_t(31, 5), None)
     b = plan_jobs(_t(31, 55), None)
-    assert [j.dedupe_key for j in a] == [j.dedupe_key for j in b] == ["heartbeat:2026-10-19T13:31Z"]
+    assert (
+        [j.dedupe_key for j in a]
+        == [j.dedupe_key for j in b]
+        == [
+            "heartbeat:2026-10-19T13:31Z",
+            "watchdog_check:2026-10-19T13:31Z",
+            "alert_dispatch:2026-10-19T13:31Z",
+        ]
+    )
     assert a[0].kind == "heartbeat"
     assert a[0].scheduled_at == _t(31, 0)
     assert a[0].payload == {}

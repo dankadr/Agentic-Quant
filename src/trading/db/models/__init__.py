@@ -1,5 +1,14 @@
 """Importing this package registers every table on ``Base.metadata``."""
 
-from trading.db.models import market, ops, portfolio, research, trading, venue
+from trading.db.models import (
+    documents,
+    market,
+    ops,
+    ops_alerts,
+    portfolio,
+    research,
+    trading,
+    venue,
+)
 
-__all__ = ["market", "ops", "portfolio", "research", "trading", "venue"]
+__all__ = ["documents", "market", "ops", "ops_alerts", "portfolio", "research", "trading", "venue"]

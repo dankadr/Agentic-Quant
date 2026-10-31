@@ -1,5 +1,11 @@
-# PAPER_ONLY stack. There are no broker or trading credentials anywhere in this file. The only
-# external credential is the Alpaca MARKET DATA key pair (data-only), mounted into the worker alone.
+# DATA LIVES ON THE HOST, NOT IN CONTAINERS. Every persistent path is a bind mount under
+# ${TRADING_DATA_DIR:-./data}: postgres/ (the database), documents/ (original research files) and
+# prometheus/ (metrics history). Removing containers, rebuilding images, or `docker compose down`
+# never touches these folders. Never delete them without a verified backup. Do not add named
+# volumes for application data: they are opaque, and a `down -v` removes them.
+# PAPER_ONLY stack. There are no broker or trading credentials anywhere in this file. The external
+# credentials are the Alpaca MARKET DATA key pair (data-only; worker and research) and the LLM key
+# (research only).
 name: robinhood-trading
 
 x-app-env: &app-env
@@ -12,8 +18,13 @@ x-app-env: &app-env
   TRADING_LOG_LEVEL: INFO
 
 x-app: &app
-  image: robinhood-trading:local
-  build: .
+  # Tagged by release revision, so a deployment names exactly the code it runs. `:local` is only
+  # the fallback for an unversioned build.
+  image: robinhood-trading:${TRADING_RELEASE_REVISION:-local}
+  build:
+    context: .
+    args:
+      TRADING_RELEASE_REVISION: ${TRADING_RELEASE_REVISION:-unknown}
   restart: unless-stopped
   environment: *app-env
   secrets: [db_app_password]
@@ -32,7 +43,7 @@ services:
     ports:
       - "127.0.0.1:5433:5432"  # loopback only: host-side research/CLI tools (never published wider)
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ${TRADING_DATA_DIR:-./data}/postgres:/var/lib/postgresql/data
       - ./deploy/postgres/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
@@ -57,6 +68,8 @@ services:
   api:
     <<: *app
     command: ["api"]
+    volumes:
+      - ${TRADING_DATA_DIR:-./data}/documents:/app/data/documents
     ports:
       - "127.0.0.1:8000:8000"  # loopback only; expose to the tailnet with `tailscale serve`
     healthcheck:
@@ -72,8 +85,7 @@ services:
       <<: *app-env
       TRADING_ALPACA_KEY_ID_FILE: /run/secrets/alpaca_key_id
       TRADING_ALPACA_SECRET_FILE: /run/secrets/alpaca_secret
-      TRADING_LLM_API_KEY_FILE: /run/secrets/llm_api_key
-    secrets: [db_app_password, alpaca_key_id, alpaca_secret, llm_api_key]
+    secrets: [db_app_password, alpaca_key_id, alpaca_secret]
     healthcheck:
       test: ["CMD", "trading", "healthcheck", "worker"]
       interval: 10s
@@ -91,19 +103,37 @@ services:
       retries: 6
       start_period: 20s
 
+  # Model-driven research. No executor lease and no broker code: a stalled model call delays
+  # research output only. It reads market-data and news keys (never trading keys) and the LLM key.
+  research:
+    <<: *app
+    command: ["research-worker"]
+    volumes:
+      - ${TRADING_DATA_DIR:-./data}/documents:/app/data/documents
+    environment:
+      <<: *app-env
+      TRADING_ALPACA_KEY_ID_FILE: /run/secrets/alpaca_key_id
+      TRADING_ALPACA_SECRET_FILE: /run/secrets/alpaca_secret
+      TRADING_LLM_API_KEY_FILE: /run/secrets/llm_api_key
+      TRADING_TELEGRAM_TOKEN_FILE: /run/secrets/telegram_bot_token
+      TRADING_TELEGRAM_CHAT_ID: ${TRADING_TELEGRAM_CHAT_ID:-}
+    secrets: [db_app_password, alpaca_key_id, alpaca_secret, llm_api_key, telegram_bot_token]
+    healthcheck:
+      test: ["CMD", "trading", "healthcheck", "research"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
   prometheus:
     image: prom/prometheus:v2.55.1
     restart: unless-stopped
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - promdata:/prometheus
+      - ${TRADING_DATA_DIR:-./data}/prometheus:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
-    depends_on: [api, worker, scheduler]
-
-volumes:
-  pgdata:
-  promdata:
+    depends_on: [api, worker, scheduler, research]
 
 secrets:
   db_superuser_password:
@@ -118,3 +148,5 @@ secrets:
     file: ./secrets/alpaca_secret
   llm_api_key:
     file: ./secrets/llm_api_key
+  telegram_bot_token:
+    file: ./secrets/telegram_bot_token

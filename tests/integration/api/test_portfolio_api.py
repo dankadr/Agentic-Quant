@@ -183,13 +183,19 @@ def test_market_data_readiness_states(
     def state() -> str:
         return compute_readiness(env.sf, clock, calendar).market_data
 
+    def bar_for(s, iid) -> None:  # type: ignore[no-untyped-def]
+        # A bar that opened 90 s ago (its ts is the bar START), so it closed 30 s ago: fresh.
+        s.execute(text("insert into market_bars(instrument_id, interval, ts, open, high, low, close, volume, provider, ingested_at)"
+                       " values (:i,'1m',:t,1,1,1,1,1,'p',:t)"), {"i": iid, "t": NOW - timedelta(seconds=90)})  # fmt: skip
+
     assert state() == "not_configured"  # no bars have ever been ingested
     with env.sf.begin() as s:
-        s.execute(text("insert into instruments(symbol, venue, asset_type, tick_size, lot_size, fractional_eligible, sector)"
-                       " values ('ZZZ','XNYS','ETF',0.01,1,true,'x')"))  # fmt: skip
-        iid = s.execute(text("select id from instruments where symbol='ZZZ'")).scalar_one()
-        s.execute(text("insert into market_bars(instrument_id, interval, ts, open, high, low, close, volume, provider, ingested_at)"
-                       " values (:i,'1m',:t,1,1,1,1,1,'p',:t)"), {"i": iid, "t": NOW - timedelta(seconds=30)})  # fmt: skip
+        ids = [r[0] for r in s.execute(text("select id from instruments order by symbol")).all()]
+        for iid in ids[:-1]:
+            bar_for(s, iid)
+    assert state() == "incomplete"  # one configured instrument has no bars at all
+    with env.sf.begin() as s:
+        bar_for(s, ids[-1])
     assert state() == "ok"
     clock.advance(timedelta(seconds=200))
     assert state() == "stale"

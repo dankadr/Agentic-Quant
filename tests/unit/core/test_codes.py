@@ -26,9 +26,15 @@ def test_spec_codes_present() -> None:
 def test_codes_equal_names_and_evaluation_order() -> None:
     names = [c.name for c in RejectionCode]
     assert all(c.value == c.name for c in RejectionCode)
-    assert names[:3] == ["TRADING_PAUSED", "RISK_STATE_UNKNOWN", "RECONCILIATION_REQUIRED"]
+    # The trading-state check (PAUSED, or entries disabled) runs first, then risk, then reconcile.
+    assert names[:4] == [
+        "TRADING_PAUSED",
+        "ENTRIES_DISABLED",
+        "RISK_STATE_UNKNOWN",
+        "RECONCILIATION_REQUIRED",
+    ]
     assert names[-1] == "MAX_OPEN_SYMBOLS"
-    assert len(names) == 20
+    assert len(names) == 21  # ENTRIES_DISABLED was added for the EXIT_ONLY / FLATTENING states
 
 
 def test_client_order_id_format() -> None:

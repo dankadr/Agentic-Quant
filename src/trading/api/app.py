@@ -7,6 +7,7 @@ import trading
 from trading.api.middleware import MetricsMiddleware, RequestIdMiddleware
 from trading.api.problems import register_handlers
 from trading.api.routes import (
+    agent_runs,
     agents,
     audit,
     control,
@@ -14,12 +15,17 @@ from trading.api.routes import (
     health,
     portfolio,
     quant,
+    research_docs,
     system,
     transactions,
+    ui,
 )
 from trading.core.clock import Clock
 from trading.core.config import AgentsConfig, AppConfig, ConfigError, Settings, load_config
+from trading.core.release import release_info
 from trading.data.calendar import MarketCalendar
+from trading.db.migrate import schema_head
+from trading.documents.blobs import BlobStore
 
 
 def _yaml_agents(settings: Settings, config: AppConfig) -> AgentsConfig:
@@ -46,6 +52,13 @@ def create_app(
     app.state.session_factory = session_factory
     app.state.clock = clock
     app.state.calendar = calendar
+    app.state.blobs = BlobStore(settings.document_store_dir)
+    app.state.release = release_info(
+        revision=settings.release_revision,
+        image=settings.release_image,
+        config_dir=settings.config_dir,
+        schema_head=schema_head(),
+    )
     register_handlers(app)
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(RequestIdMiddleware)  # added last = outermost
@@ -57,5 +70,8 @@ def create_app(
     app.include_router(quant.router)
     app.include_router(dashboard.router)
     app.include_router(agents.router)  # after dashboard: /v1/agents/runs must match first
+    app.include_router(agent_runs.router)
     app.include_router(transactions.router)
+    app.include_router(research_docs.router)
+    app.include_router(ui.router)
     return app
