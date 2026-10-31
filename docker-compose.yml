@@ -1,3 +1,8 @@
+# DATA LIVES ON THE HOST, NOT IN CONTAINERS. Every persistent path is a bind mount under
+# ${TRADING_DATA_DIR:-./data}: postgres/ (the database), documents/ (original research files) and
+# prometheus/ (metrics history). Removing containers, rebuilding images, or `docker compose down`
+# never touches these folders. Never delete them without a verified backup. Do not add named
+# volumes for application data: they are opaque, and a `down -v` removes them.
 # PAPER_ONLY stack. There are no broker or trading credentials anywhere in this file. The external
 # credentials are the Alpaca MARKET DATA key pair (data-only; worker and research) and the LLM key
 # (research only).
@@ -36,7 +41,7 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/db_superuser_password
     secrets: [db_superuser_password, db_owner_password, db_app_password]
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ${TRADING_DATA_DIR:-./data}/postgres:/var/lib/postgresql/data
       - ./deploy/postgres/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
@@ -62,7 +67,7 @@ services:
     <<: *app
     command: ["api"]
     volumes:
-      - docstore:/app/data/documents
+      - ${TRADING_DATA_DIR:-./data}/documents:/app/data/documents
     ports:
       - "127.0.0.1:8000:8000"  # loopback only; expose to the tailnet with `tailscale serve`
     healthcheck:
@@ -102,7 +107,7 @@ services:
     <<: *app
     command: ["research-worker"]
     volumes:
-      - docstore:/app/data/documents
+      - ${TRADING_DATA_DIR:-./data}/documents:/app/data/documents
     environment:
       <<: *app-env
       TRADING_ALPACA_KEY_ID_FILE: /run/secrets/alpaca_key_id
@@ -123,15 +128,10 @@ services:
     restart: unless-stopped
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - promdata:/prometheus
+      - ${TRADING_DATA_DIR:-./data}/prometheus:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
     depends_on: [api, worker, scheduler, research]
-
-volumes:
-  pgdata:
-  promdata:
-  docstore:  # immutable original documents; included in every backup
 
 secrets:
   db_superuser_password:

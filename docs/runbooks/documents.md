@@ -2,7 +2,7 @@
 
 ## What is stored
 
-- **Originals** are written once, under their SHA-256, in the `docstore` volume
+- **Originals** are written once, under their SHA-256, in `${TRADING_DATA_DIR:-./data}/documents` on the host
   (`/app/data/documents`). Identical bytes are stored once. A stored file is never rewritten, and a
   read verifies its checksum.
 - **Versions and pages** live in PostgreSQL. They are append-only: database triggers refuse any

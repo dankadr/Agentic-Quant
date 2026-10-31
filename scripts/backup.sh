@@ -24,7 +24,7 @@ mkdir -p "$bundle"
 # 1. Database: a custom-format dump taken from a consistent snapshot.
 docker compose exec -T postgres pg_dump -U postgres -Fc trading > "$bundle/database.dump"
 # 2. Documents: the immutable blob store, copied read-only.
-docker run --rm -v robinhood-trading_docstore:/src:ro -v "$bundle":/out alpine \
+docker run --rm -v "$(cd "${TRADING_DATA_DIR:-data}/documents" && pwd)":/src:ro -v "$bundle":/out alpine \
   tar -C /src -cf /out/documents.tar .
 # 3. Manifest over exactly what is in the bundle.
 docker compose run --rm -T -v "$bundle":/backup api admin write-manifest --root /backup >/dev/null
