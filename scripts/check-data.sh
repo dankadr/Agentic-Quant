@@ -31,8 +31,9 @@ if docker volume inspect robinhood-trading_pgdata >/dev/null 2>&1; then
   if [ "${TRADING_ALLOW_FRESH_DATABASE:-}" != "1" ]; then
     echo "REFUSING TO START: the old volume robinhood-trading_pgdata exists but $pg_dir is empty." >&2
     echo "Copy the old data first (stop the stack, then):" >&2
-    echo "  docker run --rm -v robinhood-trading_pgdata:/src:ro -v \"$(cd \"$pg_dir\" && pwd)\":/dst alpine cp -a /src/. /dst/" >&2
-    echo "Then: sudo chown -R 70:70 $pg_dir   (Linux only). Or, for a genuinely new database," >&2
+    abs_pg="$(cd "$pg_dir" && pwd)"
+    echo "  docker run --rm -v robinhood-trading_pgdata:/src:ro -v \"$abs_pg\":/dst alpine cp -a /src/. /dst/" >&2
+    echo "Then: sudo chown -R 70:70 $abs_pg   (Linux only). Or, for a genuinely new database," >&2
     echo "set TRADING_ALLOW_FRESH_DATABASE=1 once." >&2
     exit 1
   fi
