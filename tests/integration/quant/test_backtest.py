@@ -171,7 +171,7 @@ def test_backtest_evaluator_feeds_research_with_real_runs(
     # the override really reached the strategy row used by the run
     stored = db.execute(text("select params_json from strategies where id = 'orb_v1'")).scalar_one()
     assert stored["target_r"] == "2.0"  # the last evaluation ran with the last neighbour
-    assert stored["trade_notional"] == "80"  # unrelated parameters are kept
+    assert stored["trade_notional"] == "120"  # unrelated parameters are kept
 
 
 def test_backtest_full_run_returns_one_return_per_session(

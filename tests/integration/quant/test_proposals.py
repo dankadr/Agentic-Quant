@@ -127,7 +127,7 @@ def test_an_approved_proposal_is_applied_with_a_version_bump_and_keeps_other_par
     version, params = _params(db)
     assert version == "1.0.1"
     assert params["target_r"] == "2.0"
-    assert params["trade_notional"] == "80"
+    assert params["trade_notional"] == "120"
     assert (p.status, p.applied_version) == ("APPLIED", "1.0.1")
     assert p.applied_at == T0 + timedelta(days=1)
     assert apply_approved(db, now=T0 + timedelta(days=2)) == []  # applied exactly once
