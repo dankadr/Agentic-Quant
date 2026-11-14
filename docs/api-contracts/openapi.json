@@ -3180,6 +3180,33 @@
           },
           {
             "in": "query",
+            "name": "latest_per_agent",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Latest Per Agent",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {

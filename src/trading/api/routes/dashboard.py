@@ -77,13 +77,30 @@ class AgentRunList(BaseModel):
 @router.get("/v1/agents/runs", response_model=AgentRunList)
 def get_agent_runs(
     agent_name: str | None = None,
+    latest_per_agent: bool = False,
+    day: date | None = Query(default=None, alias="date"),
     limit: int = Query(default=30, ge=1, le=200),
     _: AuthPrincipal = Depends(require_viewer),
     session: Session = Depends(get_session),
 ) -> AgentRunList:
-    stmt = select(AgentRun).order_by(AgentRun.started_at.desc(), AgentRun.id.desc()).limit(limit)
+    stmt = select(AgentRun)
     if agent_name is not None:
         stmt = stmt.where(AgentRun.agent_name == agent_name)
+    if day is not None:
+        start = datetime.combine(day, time.min, tzinfo=UTC)
+        stmt = stmt.where(
+            AgentRun.started_at >= start, AgentRun.started_at < start + timedelta(days=1)
+        )
+    if latest_per_agent:
+        stmt = stmt.distinct(AgentRun.agent_name).order_by(
+            AgentRun.agent_name, AgentRun.started_at.desc(), AgentRun.id.desc()
+        )
+        rows = sorted(session.scalars(stmt), key=lambda r: (r.started_at, str(r.id)), reverse=True)[
+            :limit
+        ]
+    else:
+        stmt = stmt.order_by(AgentRun.started_at.desc(), AgentRun.id.desc()).limit(limit)
+        rows = list(session.scalars(stmt))
     return AgentRunList(
         items=[
             AgentRunOut(
@@ -95,7 +112,7 @@ def get_agent_runs(
                 started_at=r.started_at,
                 result=r.result_json,
             )
-            for r in session.scalars(stmt)
+            for r in rows
         ]
     )
 
