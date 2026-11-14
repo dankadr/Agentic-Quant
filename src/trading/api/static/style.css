@@ -219,3 +219,126 @@ dialog textarea { width: 100%; min-height: 70px; resize: vertical; margin-top: 8
 .label { color: var(--muted); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; margin: 6px 0 2px; }
 .wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
 input[type="number"], input[type="text"] { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; font: inherit; min-width: 90px; }
+
+
+/* Trading operations workspace. Layout and typography only; shared motion rules stay above. */
+:root { --font: "Avenir Next", "Segoe UI", system-ui, sans-serif; --radius: 12px; }
+:root[data-theme="dark"] {
+  --bg: #111b2b; --surface: #172337; --raised: #20314a; --border: #2b3b52; --border-strong: #4a6080;
+  --text: #edf3fc; --muted: #aebdd2; --accent: #9bbff2; --accent-bg: #253d60; --grid: #2b3b52;
+  --good: #83d5ba; --good-bg: #193c39; --bad: #f3a1a5; --bad-bg: #422b38; --warn: #ebc485; --warn-bg: #403a2e;
+  --shadow: none; --rail: #0c1523;
+}
+:root[data-theme="light"] {
+  --bg: #edf1f7; --surface: #ffffff; --raised: #e5ecf5; --border: #d0dbe8; --border-strong: #99abc1;
+  --text: #1b2d45; --muted: #52657e; --accent: #315e99; --accent-bg: #dce8f8; --grid: #e0e7f0;
+  --good: #216750; --good-bg: #e1f1eb; --bad: #a7374c; --bad-bg: #f7e5ea; --warn: #805918; --warn-bg: #f6eddb;
+  --shadow: none; --rail: #e0e7f1;
+}
+body { font-size: 15px; line-height: 1.55; }
+h2 { color: var(--text); font-size: 16px; font-weight: 600; text-transform: none; letter-spacing: -.015em; }
+h3 { font-size: 16px; }
+.logo { border-radius: 5px; background: var(--accent); width: 24px; height: 28px; box-shadow: inset -8px 0 0 color-mix(in srgb, var(--rail) 30%, transparent); }
+.brand-subtitle { display: block; font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 3px; }
+.topbar { background: var(--bg); backdrop-filter: none; padding: 18px 28px; gap: 12px; }
+.controls { flex-wrap: wrap; gap: 8px; }
+.badge { border: 0; background: var(--surface); padding: 4px 8px; }
+.btn, input, select, textarea { border-radius: 7px; }
+.btn.primary { color: var(--bg); }
+.card { padding: 22px; border-radius: 12px; }
+.card > h2 { margin-bottom: 18px; }
+.grid { gap: 20px; }
+main { padding: 28px 28px 64px; }
+.overview-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin: 2px 0 28px; }
+.overview-heading h1 { font-size: clamp(28px, 3vw, 38px); font-weight: 600; letter-spacing: -.045em; line-height: 1.15; }
+.overview-heading p { font-size: 14px; margin-top: 9px; max-width: 58ch; }
+.session-label { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; padding-top: 3px; }
+.session-label strong { font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600; }
+.attention-panel { background: transparent; border: 0; border-top: 1px solid var(--border-strong); border-bottom: 1px solid var(--border); border-radius: 0; padding: 18px 0; }
+.attention-panel > h2 { font-size: 14px; margin-bottom: 12px; }
+.attention-panel .alerts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.attention-panel .alert { background: none; border: 0; border-left: 2px solid currentColor; border-radius: 0; padding: 0 12px; gap: 8px; }
+.attention-panel .alert .dot { display: none; }
+.attention-panel .alert strong { font-size: 14px; line-height: 1.4; margin-bottom: 5px; }
+.attention-panel .alert span.small { line-height: 1.5; display: block; }
+.overview-grid .kpi { background: transparent; border: 0; border-radius: 0; border-bottom: 1px solid var(--border); padding: 10px 0 22px; }
+.kpi .label { font-size: 13px; text-transform: none; letter-spacing: 0; margin: 0 0 9px; }
+.kpi .value { font-size: 25px; letter-spacing: -.045em; font-weight: 600; }
+.kpi .sub { font-size: 12px; margin-top: 6px; line-height: 1.5; max-width: 23ch; }
+.overview-grid .kpi:first-of-type .value { font-size: 30px; }
+.overview-grid .agents-status { background: color-mix(in srgb, var(--surface) 60%, var(--bg)); }
+.agents-status .tablewrap { margin: 0 -8px; }
+.agents-status th, .agents-status td { padding: 10px 8px; font-size: 12px; }
+.agents-status td.wrap { min-width: 0; }
+.agents-status td:first-child { font-weight: 600; }
+.agents-status .small { font-size: 12px; }
+th { font-family: var(--font); font-size: 12px; }
+.empty { font-style: normal; font-size: 14px; }
+dl.kv { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 9px 18px; }
+dl.kv dd { min-width: 0; overflow-wrap: anywhere; }
+.run { border-radius: 8px; }
+.label { text-transform: none; letter-spacing: 0; }
+@media (min-width: 1000px) {
+  .topbar { margin-left: 220px; min-height: 116px; align-content: center; }
+  .topbar .brand { position: fixed; left: 0; top: 0; width: 220px; height: 116px; padding: 24px; background: var(--rail); border-right: 1px solid var(--border); font-size: 17px; }
+  .topbar .spacer { display: none; }
+  .topbar .badges { flex: 1 0 100%; }
+  .topbar .controls { width: 100%; }
+  #updated { margin-right: auto; }
+  .nav { position: fixed; top: 116px; left: 0; bottom: 0; width: 220px; flex-direction: column; gap: 5px; padding: 20px 14px; background: var(--rail); border-right: 1px solid var(--border); border-bottom: 0; overflow-y: auto; }
+  .nav a { padding: 12px 14px; min-height: 47px; border-radius: 7px; font-size: 14px; }
+  .nav a[aria-current="page"] { color: var(--accent); background: var(--accent-bg); box-shadow: inset 3px 0 0 var(--accent); }
+  .nav .count { margin-left: auto; }
+  .nav::after { content: "Paper environment / USD"; margin-top: auto; padding: 32px 14px 12px; color: var(--muted); font-size: 12px; }
+  main { margin-left: 220px; margin-right: 0; max-width: 1800px; }
+  .overview-grid > .col-8 { grid-column: span 7; }
+  .overview-grid > .agents-status { grid-column: span 5; }
+  .overview-grid > .col-4:not(.agents-status) { grid-column: span 6; }
+  .overview-grid > .kpi { grid-column: span 2; }
+}
+@media (max-width: 999px) {
+  .topbar { position: relative; padding: 18px 22px; }
+  .brand { flex: 1 0 100%; }
+  .nav { top: 0; padding: 8px 18px; background: var(--rail); }
+  .nav a { min-height: 44px; }
+  .overview-grid > .col-8, .overview-grid > .col-4, .overview-grid > .col-6 { grid-column: span 12; }
+}
+@media (max-width: 560px) {
+  main { padding: 24px 18px 64px; }
+  .topbar { padding: 18px; }
+  .overview-heading { flex-direction: column; gap: 12px; margin-bottom: 22px; }
+  .overview-heading h1 { font-size: 30px; }
+  .overview-heading p { font-size: 14px; }
+  .session-label { align-items: flex-start; flex-direction: row; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
+  .session-label strong { font-size: 16px; }
+  .grid { gap: 16px; }
+  .card { padding: 18px; }
+  .attention-panel { padding: 18px 0; }
+  .attention-panel .alerts { grid-template-columns: 1fr; gap: 18px; }
+  .overview-grid .kpi { grid-column: span 6; padding: 8px 0 18px; }
+  .kpi .value { font-size: 25px; }
+  .kpi .label { font-size: 13px; }
+  .agents-status th, .agents-status td { padding: 10px 5px; }
+  .agents-status td:first-child { white-space: normal; overflow-wrap: anywhere; }
+  .agents-status .tablewrap { margin: 0; }
+  dl.kv { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+/* The roster stays dense enough to scan with the performance chart. */
+.agents-status th, .agents-status td { padding-top: 7px; padding-bottom: 7px; line-height: 1.35; }
+.agents-status .small { line-height: 1.35; }
+.agents-status > div > .stack { gap: 8px; }
+
+.performance-layout { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 20px; align-items: start; }
+.performance-content { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-content: start; min-width: 0; }
+.performance-content > .card { grid-column: 1; }
+.performance-content > .card:first-child { grid-column: 1 / -1; }
+.performance-layout > .agents-status { grid-column: auto; min-width: 0; }
+@media (max-width: 999px) {
+  .performance-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .performance-content { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .performance-content > .card { grid-column: 1; }
+  .performance-layout { gap: 16px; }
+}
+.agents-status td:first-child { min-width: 90px; overflow-wrap: normal; }

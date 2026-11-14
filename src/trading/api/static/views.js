@@ -143,23 +143,36 @@ function deriveAlerts(ctx, data) {
   if (rd && rd.executor_lease !== "held") out.push(["bad", "Executor lease missing", "No worker is holding the trading lease."]);
   if (rd && rd.database !== "ok") out.push(["bad", "Database unreachable", ""]);
   if (rd && rd.market_data === "stale") out.push(["bad", "Market data is stale", "Fresh bars have stopped arriving."]);
+  if (rd && rd.market_data === "incomplete") out.push(["warn", "Market data incomplete", "Some configured symbols lack current bars; check Data for coverage."]);
   const cov = data.report && data.report.data_coverage;
   if (cov && data.report.ticks > 20) {
     const gappy = Object.entries(cov).filter(([, c]) => c.missing / data.report.ticks > 0.1).map(([s]) => s);
     if (gappy.length) out.push(["warn", gappy.length + " symbols missing >10% of bars", gappy.join(", ") + " (thin IEX volume is normal for some ETFs)"]);
   }
   if (st.session && st.session.is_open && data.report && data.report.ticks === 0 && ctx.isLive) out.push(["warn", "Market is open but no ticks yet", "The first tick arrives a minute after the open."]);
+  for (const agent of (data.agentList && data.agentList.items) || []) {
+    if (!agent.enabled || !["failing", "degraded"].includes(agent.health)) continue;
+    const state = (agent.schedule_state || "schedule unknown").replaceAll("_", " ");
+    const skipped = agent.last_skip_reason ? "Last skipped: " + agent.last_skip_reason.replaceAll("_", " ") + ". " : "";
+    out.push([agent.health === "failing" ? "bad" : "warn", agent.name + " needs attention", agent.health + "; " + state + ". " + skipped + (agent.last_run_at ? "Last run " + ago(agent.last_run_at) + "." : "No run recorded.")]);
+  }
   if (data.pending > 0) out.push(["warn", data.pending + " strategy proposal" + (data.pending > 1 ? "s" : "") + " awaiting review", "Open Research to approve or reject."]);
   if (!out.length) out.push(["good", "All clear", "Mode, risk, lease, data and trading state look healthy."]);
   return out;
 }
 
 function mountOverview(root, ctx) {
+  const heading = el("header", null, "overview-heading");
+  const title = el("div");
+  title.append(el("h1", "Trading operations"), el("p", "Your paper portfolio, execution health and agent activity in one workspace.", "muted"));
+  const sessionLabel = el("div", null, "session-label");
+  heading.append(title, sessionLabel);
+  root.append(heading);
   const kpiDefs = [
     ["equity", "Equity"], ["day", "Day P&L"], ["spy", "SPY (same period)"], ["exposure", "Current exposure"], ["realized", "Day realized change"], ["unreal", "Day unrealized change"],
   ];
   const kpis = {};
-  const grid = el("div", null, "grid");
+  const grid = el("div", null, "grid overview-grid");
   for (const [key, label] of kpiDefs) {
     const c = el("section", null, "card kpi col-2");
     const v = el("div", "Loading…", "value");
@@ -169,15 +182,20 @@ function mountOverview(root, ctx) {
     grid.append(c);
   }
   const alerts = panel("Attention", { cls: "col-12" });
+  alerts.node.classList.add("attention-panel");
   grid.prepend(alerts.node);
   alerts.set("loading", () => empty("Loading system checks…"));
   const equity = panel("Equity (selected session, ET)", { cls: "col-8" });
-  const now = panel("Agents right now", { cls: "col-4" });
+  const now = panel("Agent roster", { cls: "col-4 agents-status" });
   const positions = panel("Open positions", { cls: "col-4" });
   const pnl = panel("Strategy P&L", { cls: "col-4" });
   const costs = panel("Session costs & reconciliation", { cls: "col-6" });
   const diagnostics = panel("Sampled NO_ENTRY evaluations", { cls: "col-6" });
-  append(grid, equity.node, now.node, positions.node, pnl.node, costs.node, diagnostics.node);
+  const performance = el("div", null, "performance-layout col-12");
+  const content = el("div", null, "performance-content");
+  content.append(equity.node, positions.node, pnl.node);
+  performance.append(content, now.node);
+  append(grid, performance, costs.node, diagnostics.node);
   root.append(grid);
   let firstChart = true;
 
@@ -195,6 +213,7 @@ function mountOverview(root, ctx) {
 
   return (data, nextCtx) => {
     if (nextCtx) ctx = nextCtx;
+    sessionLabel.replaceChildren(el("span", ctx.explicit ? "Selected session" : "Current session", "muted small"), el("strong", ctx.day), el("span", "Eastern time", "muted small"));
     const p = data.portfolio, r = data.report;
     const eq = r && r.equity;
     const missing = r ? "No session snapshot" : "Report unavailable";
@@ -241,7 +260,7 @@ function mountOverview(root, ctx) {
       const box = el("div", null, "stack");
       box.append(el("p", "Current health · " + (ctx.explicit ? "selected session runs" : "latest run per agent"), "muted small"));
       box.append(table("Current agent health and latest runs", [
-        { label: "Agent", get: agent => agent.name },
+        { label: "Agent", get: agent => agent.name.replaceAll("_", " ") },
         { label: "Now", get: agent => chip(agent.enabled ? agent.health : "disabled", agent.enabled ? ({ ok: "good", degraded: "warn", failing: "bad" }[agent.health] || "") : "") },
         { label: "Latest run", wrap: true, get: agent => {
           const run = latest[agent.name];
@@ -260,9 +279,9 @@ function mountOverview(root, ctx) {
     ], items || [], "flat: no open positions"));
 
     const strat = (r && r.strategies) || {};
-    pnl.set({ strat, available: !!r }, () => !r ? empty("Report unavailable") : table("Strategy P&L for selected session", [
+    pnl.set({ strat, available: !!r }, () => !r ? empty("Report unavailable") : table("Strategy realized P&L for selected session", [
       { label: "Strategy", get: (x) => x[0] }, { label: "Signals", num: true, get: (x) => Object.values(x[1].signals).reduce((a, b) => a + b, 0) },
-      { label: "Net P&L", num: true, get: (x) => glyph(x[1].net_pnl) + signedUsd(x[1].net_pnl), cls: (x) => trend(x[1].net_pnl) },
+      { label: "Realized net P&L", num: true, get: (x) => glyph(x[1].net_pnl) + signedUsd(x[1].net_pnl), cls: (x) => trend(x[1].net_pnl) },
     ], Object.entries(strat), "no strategy activity yet"));
     costs.set(r, () => {
       if (!r) return empty("Report unavailable");

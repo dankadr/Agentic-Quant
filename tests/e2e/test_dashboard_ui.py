@@ -287,7 +287,7 @@ def test_overview_uses_selected_session_values_and_honest_errors(new_page, demo:
     assert page.locator(".kpi").nth(0).inner_text().find("$812.34") >= 0
     assert "-$2.00" in page.locator(".kpi").nth(4).inner_text()
     assert "NO_BREAKOUT" in page.inner_text("#view")
-    assert page.locator("#view .grid > .card").first.inner_text().startswith("ATTENTION")
+    assert page.locator("#view .grid > .card").first.inner_text().lower().startswith("attention")
     page.fill("#date", "2026-10-16")
     page.dispatch_event("#date", "change")
     page.wait_for_function("document.querySelector('#view').getAttribute('aria-busy') === 'false'")
@@ -331,15 +331,21 @@ def test_overview_lists_all_agents_and_retains_mobile_kpi_hierarchy(new_page, de
         "opportunities",
     ):
         assert (
-            name
+            name.replace("_", " ")
             in page.get_by_role("table", name="Current agent health and latest runs").inner_text()
         )
     assert any("latest_per_agent=true" in url for url in page.requests)
+    assert page.get_by_role("heading", name="Trading operations").count() == 1
+    assert page.locator("#nav").bounding_box()["width"] == 220
     page.screenshot(path="/tmp/dashboard-data-desktop.png", full_page=True)  # noqa: S108 - seeded visual QA
     page.set_viewport_size({"width": 375, "height": 800})
     assert page.evaluate("getComputedStyle(document.querySelector('.kpi')).gridColumn") == "span 6"
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
     page.screenshot(path="/tmp/dashboard-data-mobile.png", full_page=True)  # noqa: S108 - seeded visual QA
+    page.click("#theme")
+    page.screenshot(path="/tmp/dashboard-redesign-mobile-light.png", full_page=True)  # noqa: S108 - seeded visual QA
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.screenshot(path="/tmp/dashboard-redesign-desktop-light.png", full_page=True)  # noqa: S108 - seeded visual QA
 
 
 @pytest.mark.parametrize("name", ["data_quality", "execution_quality", "opportunities"])
@@ -368,3 +374,29 @@ def test_advisory_run_results_are_readable_safe_text(new_page, demo: Demo, name:
     assert "Configured universe only" in page.inner_text("#view")
     assert page.query_selector("#view img") is None
     assert page.evaluate("window.__pwned") is None
+
+
+def test_attention_includes_enabled_agent_failures(new_page, demo: Demo) -> None:
+    page = new_page()
+    page.route(
+        "**/v1/agents",
+        lambda route: route.fulfill(
+            json={
+                "items": [
+                    {
+                        "name": "data_quality",
+                        "enabled": True,
+                        "health": "failing",
+                        "schedule_state": "overdue",
+                        "last_skip_reason": "no_market_data",
+                    }
+                ]
+            }
+        ),
+    )
+    login(page, demo)
+    page.wait_for_function("document.querySelector('#view').getAttribute('aria-busy') === 'false'")
+    assert "Market data incomplete" in page.locator(".attention-panel").inner_text()
+    assert "data_quality needs attention" in page.locator(".attention-panel").inner_text()
+    assert "no market data" in page.locator(".attention-panel").inner_text()
+    assert page.locator(".attention-panel .alert.bad").filter(has_text="data_quality").count() == 1
