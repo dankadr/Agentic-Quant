@@ -4,7 +4,7 @@ import { badge, clear, el, icon, append } from "./util.js";
 
 const REFRESH_MS = 15000;
 const $ = (id) => document.getElementById(id);
-const state = { route: "overview", date: null, status: null, ready: null, mounted: null, update: null, timer: null, inflight: false, pending: 0 };
+const state = { route: "overview", date: null, status: null, ready: null, mounted: null, update: null, timer: null, inflight: false, queued: false, forceMount: false, pending: 0 };
 
 // ---------- theme ----------
 function applyTheme(theme) {
@@ -140,28 +140,67 @@ function mountRoute() {
 
 }
 
-async function refresh(forceMount) {
-  if (state.inflight) return;
+function refreshError(message) {
+  let box = $("refresh-error");
+  if (!box) {
+    box = el("div", null, "alert bad refresh-error", { id: "refresh-error", role: "alert" });
+    $("view").before(box);
+  }
+  clear(box);
+  box.hidden = !message;
+  $("view").dataset.stale = message ? "true" : "false";
+  if (!message) return;
+  const text = el("div");
+  append(text, el("strong", "Refresh failed"), el("p", "Displayed data may be stale. Current health is unverified. " + message, "small"));
+  const retry = el("button", "Retry refresh", "btn", { type: "button" });
+  retry.addEventListener("click", () => refresh());
+  append(box, text, retry);
+}
+
+async function refresh(forceMount = false) {
+  if (state.inflight) {
+    state.queued = true;
+    state.forceMount = state.forceMount || forceMount;
+    return;
+  }
   state.inflight = true;
+  const route = state.route, date = state.date, key = session.key;
+  const current = () => state.route === route && state.date === date && session.key === key;
   try {
     const [status, rd] = await Promise.all([api("/v1/system/status"), ready()]);
+    if (!current()) return;
     state.status = status; state.ready = rd;
     const ctx = context();
-    const routeChanged = state.mounted !== state.route || forceMount;
+    const routeChanged = state.mounted !== route || forceMount;
     if (routeChanged) mountRoute();
-    const data = await VIEWS[state.route].fetch(ctx);
-    if (state.route === "overview") state.pending = data.pending || 0;
-    else if (state.route === "research" && data.proposals) state.pending = data.proposals.items.filter((p) => p.status === "PENDING_REVIEW").length;
+    const data = await VIEWS[route].fetch(ctx);
+    if (!current()) return;
+    if (route === "overview") state.pending = data.pending || 0;
+    else if (route === "research" && data.proposals) state.pending = data.proposals.items.filter((p) => p.status === "PENDING_REVIEW").length;
     renderHeader();
     state.update(data, ctx);
     $("view").setAttribute("aria-busy", "false");
+    refreshError(null);
     $("updated").textContent = "updated " + new Date().toLocaleTimeString("en-GB", { hour12: false });
     showApp(true);
   } catch (e) {
+    if (!current()) return;
     if (e instanceof ApiError && e.status === 401) { signOut("That key was rejected."); return; }
-    $("updated").textContent = "error: " + e.message;
+    $("view").setAttribute("aria-busy", "false");
+    if ($("view").hidden) {
+      $("login-error").textContent = "Dashboard unavailable. " + e.message + ". Submit your key to retry.";
+      return;
+    }
+    refreshError(e.message);
+    $("updated").textContent = "refresh failed";
+    showApp(true);
   } finally {
     state.inflight = false;
+    if (state.queued) {
+      const mount = state.forceMount;
+      state.queued = false; state.forceMount = false;
+      if (session.key) refresh(mount);
+    }
   }
 }
 
@@ -171,6 +210,8 @@ function showApp(on) {
 }
 function signOut(message) {
   session.key = null;
+  state.queued = false; state.forceMount = false;
+  refreshError(null);
   if (state.timer) { clearInterval(state.timer); state.timer = null; }
   state.mounted = null; state.status = null;
   showApp(false);
