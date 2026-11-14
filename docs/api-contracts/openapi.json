@@ -133,6 +133,17 @@
       },
       "AgentListItem": {
         "properties": {
+          "data_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Age Seconds"
+          },
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
@@ -153,8 +164,48 @@
             ],
             "title": "Last Run At"
           },
+          "last_skip_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Skip Reason"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          },
           "name": {
             "title": "Name",
+            "type": "string"
+          },
+          "next_scheduled_run": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Scheduled Run"
+          },
+          "schedule_state": {
+            "default": "unknown",
+            "title": "Schedule State",
             "type": "string"
           },
           "uses_llm": {
@@ -1857,6 +1908,17 @@
             "title": "Completion Tokens",
             "type": "integer"
           },
+          "data_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Age Seconds"
+          },
           "failed": {
             "title": "Failed",
             "type": "integer"
@@ -1888,6 +1950,41 @@
             ],
             "title": "Last Run At"
           },
+          "last_skip_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Skip Reason"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          },
+          "next_scheduled_run": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Scheduled Run"
+          },
           "prompt_tokens": {
             "title": "Prompt Tokens",
             "type": "integer"
@@ -1898,6 +1995,16 @@
           },
           "runs": {
             "title": "Runs",
+            "type": "integer"
+          },
+          "schedule_state": {
+            "default": "unknown",
+            "title": "Schedule State",
+            "type": "string"
+          },
+          "skipped": {
+            "default": 0,
+            "title": "Skipped",
             "type": "integer"
           }
         },

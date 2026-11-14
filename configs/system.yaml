@@ -1,7 +1,7 @@
 system:
   mode: PAPER_ONLY
   timezone: America/New_York
-  starting_cash_usd: '1000.00'
+  starting_cash_usd: '100000.00'
   require_fresh_market_data: true
 
 # Universe (owner decision 2). Liquid, tight-spread names. Sectors feed the 30% sector cap.

@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import text
@@ -8,6 +9,19 @@ from trading.core.config import load_config
 from trading.execution.replay import ReplayResult, replay_session
 
 CFG = load_config(Path("configs"))
+# Synthetic small-account cases are independent of deployment funding.
+CFG = CFG.model_copy(
+    update={
+        "system": CFG.system.model_copy(update={"starting_cash_usd": Decimal("1000")}),
+        "strategies": {
+            name: cfg.model_copy(update={"params": {**cfg.params, "trade_notional": "120"}})
+            if name in {"orb_v1", "vwap_v1"}
+            else cfg
+            for name, cfg in CFG.strategies.items()
+        },
+    }
+)
+
 DAY = date(2026, 10, 19)
 FIXTURES = Path("tests/fixtures/replay")
 SESSION = FIXTURES / "2026-10-19"

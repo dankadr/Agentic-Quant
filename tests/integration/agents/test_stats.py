@@ -1,5 +1,5 @@
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -117,3 +117,55 @@ def test_non_macro_decisions_have_no_affected_orders(db: Session) -> None:
     run(db, "fundamental", "COMPLETED", 1, {"catalysts": []})
     (decision,) = agent_decisions(db, "fundamental")
     assert decision.affected_orders == ()
+
+
+def test_summary_reports_last_success_and_skip_beyond_daily_window(db: Session, calendar) -> None:
+    from trading.core.config import AgentsConfig
+
+    now = T0 + timedelta(days=5)  # Saturday, market closed
+    run(db, "macro", "COMPLETED", 20, {"data_at": (T0 + timedelta(minutes=19)).isoformat()})
+    summary = agent_summary(
+        db,
+        "macro",
+        since=now - timedelta(hours=24),
+        now=now,
+        calendar=calendar,
+        agents=AgentsConfig(macro={"enabled": True}),
+    )
+    assert summary.runs == 0
+    assert summary.last_success_at == T0 + timedelta(minutes=20)
+    assert summary.health == "idle"
+    assert summary.schedule_state == "outside_schedule"
+    assert summary.next_scheduled_run > now
+
+
+def test_skip_reason_and_data_age_visible(db: Session) -> None:
+    run(db, "technical", "SKIPPED", 0, {"skip_reason": "no_experiments", "data_at": T0.isoformat()})
+    summary = agent_summary(db, "technical", since=SINCE, now=T0 + timedelta(seconds=90))
+    assert summary.skipped == 1
+    assert summary.last_skip_reason == "no_experiments"
+    assert summary.data_age_seconds == 90
+    assert summary.health == "idle"
+
+
+def test_malformed_observation_timestamp_does_not_break_summary(db: Session) -> None:
+    run(db, "macro", "COMPLETED", 0, {"data_at": "2026-10-19T13:30:00"})
+    summary = agent_summary(db, "macro", since=SINCE, now=T0)
+    assert summary.data_age_seconds is None
+
+
+def test_missing_five_minute_agent_becomes_overdue(db, calendar):
+    from trading.core.config import AgentsConfig
+
+    agents = AgentsConfig.model_validate({"data_quality": {"enabled": True}})
+    now = datetime(2026, 10, 19, 14, 12, 30, tzinfo=UTC)
+    summary = agent_summary(
+        db,
+        "data_quality",
+        since=now - timedelta(hours=24),
+        now=now,
+        calendar=calendar,
+        agents=agents,
+    )
+    assert summary.health == "degraded"
+    assert summary.schedule_state == "overdue"

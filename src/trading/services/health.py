@@ -28,7 +28,7 @@ def new_holder_id(worker_id: str) -> str:
 
 
 def check_health(role: str, session: Session, settings: Settings, clock: Clock) -> bool:
-    if role == "research":
+    if role in {"research", "heavy"}:
         # The research worker holds no lease to prove. Reaching the database is its whole check;
         # a stalled model call shows up as a long-running job, not as an unhealthy process.
         session.execute(text("SELECT 1"))

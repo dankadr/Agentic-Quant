@@ -121,6 +121,9 @@ def ingest_bars(
             report.unknown_symbols.add(bar.symbol)
             continue
         flags = _bar_flags(bar)
+        recorded = getattr(provider, "recorded_flags", None)
+        if recorded is not None:
+            flags.update(recorded("bars.csv", bar.symbol, bar.ts))
         info = _session_at(calendar, bar.ts)
         session_date = info.session_date if info else None
         if info is None:
@@ -223,6 +226,9 @@ def ingest_quotes(
             report.unknown_symbols.add(quote.symbol)
             continue
         flags = _quote_flags(quote)
+        recorded = getattr(provider, "recorded_flags", None)
+        if recorded is not None:
+            flags.update(recorded("quotes.csv", quote.symbol, quote.ts))
         if _session_at(calendar, quote.ts) is None:
             flags.add(Flag.OUTSIDE_SESSION)
         earlier = previous_yielded.get(quote.symbol)

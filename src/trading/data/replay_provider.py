@@ -2,7 +2,7 @@
 
 import csv
 from bisect import bisect_left
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -11,7 +11,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from trading.core.time import ensure_utc
-from trading.data.models import Bar, CorporateActionRecord, Quote
+from trading.data.models import Bar, CorporateActionRecord, QualityFlag, Quote
 from trading.data.provider import DataFormatError
 
 _BAR_COLUMNS = ("symbol", "ts", "open", "high", "low", "close", "volume")
@@ -29,7 +29,15 @@ class _Table:
 
 
 class CsvReplayProvider:
-    def __init__(self, root: Path, name: str = "replay") -> None:
+    def __init__(
+        self,
+        root: Path,
+        name: str = "replay",
+        *,
+        availability_clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._recorded_flags: dict[tuple[str, str, datetime], tuple[QualityFlag, ...]] = {}
+        self._availability_clock = availability_clock
         self._root = root
         self.name = name
         self._cache: dict[str, tuple[tuple[int, int], _Table]] = {}
@@ -79,7 +87,18 @@ class CsvReplayProvider:
                 raise DataFormatError(error)
             if ts is None or not start <= ts < end:
                 continue
+            if row.get("available_at") and self._ts(row["available_at"], where) > (
+                self._availability_clock() if self._availability_clock else end
+            ):
+                continue
+            self._recorded_flags[(filename, symbol, ts)] = tuple(
+                QualityFlag(flag) for flag in row.get("quality_flags", "").split("|") if flag
+            )
+
             yield ts, row, where
+
+    def recorded_flags(self, filename: str, symbol: str, ts: datetime) -> tuple[QualityFlag, ...]:
+        return self._recorded_flags.get((filename, symbol, ts), ())
 
     def _rows(self, filename: str, required: Sequence[str]) -> Iterator[tuple[str, dict[str, str]]]:
         path = self._root / filename

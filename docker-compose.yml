@@ -125,6 +125,26 @@ services:
       retries: 6
       start_period: 20s
 
+  # Historical collection and replay; owns no executor lease. Scratch must be migrated separately.
+  heavy:
+    <<: *app
+    command: ["heavy-worker"]
+    volumes:
+      - ${TRADING_DATA_DIR:-./data}/agent-research:/app/data/agent-research
+    environment:
+      <<: *app-env
+      TRADING_SCRATCH_DATABASE_URL: ${TRADING_SCRATCH_DATABASE_URL:-}
+      TRADING_ALPACA_KEY_ID_FILE: /run/secrets/alpaca_key_id
+      TRADING_ALPACA_SECRET_FILE: /run/secrets/alpaca_secret
+      TRADING_LLM_API_KEY_FILE: /run/secrets/llm_api_key
+    secrets: [db_app_password, alpaca_key_id, alpaca_secret, llm_api_key]
+    healthcheck:
+      test: ["CMD", "trading", "healthcheck", "heavy"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
   prometheus:
     image: prom/prometheus:v2.55.1
     restart: unless-stopped

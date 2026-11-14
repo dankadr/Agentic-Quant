@@ -37,7 +37,16 @@ def test_list_covers_every_agent_with_health(
     agent_run(db, "evaluator", "REJECTED_INVALID", -5, {"error": "too long"})
     body = client.get("/v1/agents", headers=bearer(viewer_key)).json()
     by_name = {a["name"]: a for a in body["items"]}
-    assert set(by_name) == {"macro", "fundamental", "evaluator", "consensus", "technical"}
+    assert set(by_name) == {
+        "macro",
+        "fundamental",
+        "evaluator",
+        "consensus",
+        "technical",
+        "data_quality",
+        "execution_quality",
+        "opportunities",
+    }
     assert (by_name["evaluator"]["health"], by_name["macro"]["health"]) == ("failing", "idle")
     assert by_name["macro"]["enabled"] is True  # configs/agents.yaml
     assert by_name["consensus"]["uses_llm"] is False

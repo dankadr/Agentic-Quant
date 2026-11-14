@@ -1,4 +1,4 @@
-from trading.agents import consensus, evaluator, fundamental, macro, technical
+from trading.agents import advisory, consensus, evaluator, fundamental, macro, technical
 from trading.agents.registry import AGENT_REGISTRY, LOCKED_SCOPES
 from trading.core.config import AgentsConfig
 
@@ -8,6 +8,9 @@ _MODULES = {
     "evaluator": evaluator,
     "consensus": consensus,
     "technical": technical,
+    "data_quality": advisory,
+    "execution_quality": advisory,
+    "opportunities": advisory,
 }
 
 

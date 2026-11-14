@@ -123,7 +123,7 @@ OpenAI-compatible (your Unsloth server); put its key in `secrets/llm_api_key` (e
 - **Evaluator** (`agents.evaluator.enabled`): a daily narrative over `trading report`, stored in
   `agent_runs`.
 
-Built but **off** (enable one at a time in `configs/agents.yaml`):
+Additional research roles (enablement is shown by `/v1/agents`):
 
 - **Fundamental**: ranked watchlist + dated catalysts from Alpaca news headlines. Headlines are
   untrusted data: cleaned, length-capped, passed as a JSON field; every symbol must be in the
@@ -157,7 +157,7 @@ headlines are untrusted); a test guards against `innerHTML` and friends.
 
 ### Agents view
 
-One tab per agent (macro, fundamental, evaluator, consensus, technical) with a health dot. Each shows
+One tab per agent (macro, fundamental, evaluator, consensus, technical, data quality, execution quality, opportunities) with a health dot. Each shows
 the numbers (runs, valid replies, tokens), the rules the agent follows (job, what it can and cannot
 affect, model and prompt version, valid output, failure behaviour; the prompt text is read-only),
 its recent decisions with the evidence and limits it stated and the orders it sized, its settings,
@@ -171,6 +171,19 @@ broker, strategies and the LLM endpoint are locked. An approved change is applie
 open (at least 10 minutes after the close); the scheduler then marks it applied and the worker and
 scheduler exit once with code 4 so Docker restarts them with the new settings. Nothing changes
 mid-session. Every proposal, approval and application is in the audit log.
+
+## Agent upgrade and paired paper experiment
+
+All eight research and control roles are configured enabled. New deterministic agents monitor data quality
+(every five minutes), rank activity in the existing universe (every thirty minutes), and review
+execution costs after close. The technical agent now has weekly scratch research on Saturday 08:00 UTC.
+The separate `heavy-worker` requires a migrated disposable `TRADING_SCRATCH_DATABASE_URL`; missing
+prerequisites are recorded as skipped, not successful work. No research proposal applies itself.
+
+Repeat entries default to one until a reviewed strategy proposal enables two, with a thirty-minute
+cooldown after a complete exit. The account cap stays ten. Daily paired replay and a normalized
+review after ten sessions compare both settings. Follow [the rollout runbook](docs/runbooks/agent-upgrade.md)
+for scratch provisioning, activation, interpretation and rollback.
 
 ## Paper run
 

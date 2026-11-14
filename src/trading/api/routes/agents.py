@@ -47,6 +47,11 @@ class AgentListItem(BaseModel):
     last_run_at: UtcDatetime | None
     enabled: bool
     uses_llm: bool
+    next_scheduled_run: UtcDatetime | None = None
+    schedule_state: str = "unknown"
+    last_success_at: UtcDatetime | None = None
+    last_skip_reason: str | None = None
+    data_age_seconds: float | None = None
 
 
 class AgentList(BaseModel):
@@ -76,6 +81,12 @@ class SummaryOut(BaseModel):
     last_run_at: UtcDatetime | None
     last_error: str | None
     health: str
+    skipped: int = 0
+    last_success_at: UtcDatetime | None = None
+    last_skip_reason: str | None = None
+    next_scheduled_run: UtcDatetime | None = None
+    schedule_state: str = "unknown"
+    data_age_seconds: float | None = None
 
 
 class ConfigField(BaseModel):
@@ -205,6 +216,7 @@ def _since(clock: Clock) -> datetime:
 
 @router.get("/v1/agents", response_model=AgentList)
 def list_agents(
+    request: Request,
     _: AuthPrincipal = Depends(require_viewer),
     session: Session = Depends(get_session),
     base: AgentsConfig = Depends(get_base),
@@ -213,7 +225,14 @@ def list_agents(
     running = _running(base, session)
     items = []
     for name, info in AGENT_REGISTRY.items():
-        summary = agent_summary(session, name, since=_since(clock))
+        summary = agent_summary(
+            session,
+            name,
+            since=_since(clock),
+            now=clock.now(),
+            calendar=request.app.state.calendar,
+            agents=running,
+        )
         items.append(
             AgentListItem(
                 name=name,
@@ -221,6 +240,11 @@ def list_agents(
                 last_run_at=summary.last_run_at,
                 enabled=bool(getattr(running, name).enabled),
                 uses_llm=info.uses_llm,
+                next_scheduled_run=summary.next_scheduled_run,
+                schedule_state=summary.schedule_state,
+                last_success_at=summary.last_success_at,
+                last_skip_reason=summary.last_skip_reason,
+                data_age_seconds=summary.data_age_seconds,
             )
         )
     return AgentList(items=items)
@@ -229,13 +253,21 @@ def list_agents(
 @router.get("/v1/agents/{name}", response_model=AgentDetail)
 def get_agent(
     name: str,
+    request: Request,
     _: AuthPrincipal = Depends(require_viewer),
     session: Session = Depends(get_session),
     base: AgentsConfig = Depends(get_base),
     clock: Clock = Depends(get_clock),
 ) -> AgentDetail:
     info = _info(name)
-    summary = agent_summary(session, name, since=_since(clock))
+    summary = agent_summary(
+        session,
+        name,
+        since=_since(clock),
+        now=clock.now(),
+        calendar=request.app.state.calendar,
+        agents=_running(base, session),
+    )
     running = getattr(_running(base, session), name).model_dump()
     projected = getattr(_projected(base, session), name).model_dump()
     fields = [

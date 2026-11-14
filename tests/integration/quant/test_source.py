@@ -20,6 +20,19 @@ from trading.quant.registry import seed_strategies
 from trading.quant.source import StrategyIntentSource
 
 CFG = load_config(Path("configs"))
+# Synthetic small-account cases are independent of deployment funding.
+CFG = CFG.model_copy(
+    update={
+        "system": CFG.system.model_copy(update={"starting_cash_usd": Decimal("1000")}),
+        "strategies": {
+            name: cfg.model_copy(update={"params": {**cfg.params, "trade_notional": "120"}})
+            if name in {"orb_v1", "vwap_v1"}
+            else cfg
+            for name, cfg in CFG.strategies.items()
+        },
+    }
+)
+
 D = Decimal
 OPEN = datetime(2026, 10, 19, 13, 30, tzinfo=UTC)
 NOW = OPEN + timedelta(minutes=16, seconds=5)  # the 13:45 breakout bar has just closed

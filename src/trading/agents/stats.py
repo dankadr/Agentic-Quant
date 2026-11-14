@@ -6,7 +6,7 @@ missing or oddly typed keys never raise, and nothing here is rendered as HTML.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from uuid import UUID
@@ -14,8 +14,12 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from trading.core.config import AgentsConfig
+from trading.core.time import ensure_utc
+from trading.data.calendar import NEW_YORK, CalendarUnavailable, MarketCalendar
 from trading.db.models.research import AgentRun
 from trading.db.models.trading import OrderIntent
+from trading.jobs.schedule import plan_session_jobs
 
 Health = Literal["ok", "degraded", "failing", "idle"]
 _BAD = ("REJECTED_INVALID", "FAILED")
@@ -34,6 +38,12 @@ class AgentSummary:
     last_run_at: datetime | None
     last_error: str | None
     health: Health
+    skipped: int = 0
+    last_success_at: datetime | None = None
+    last_skip_reason: str | None = None
+    next_scheduled_run: datetime | None = None
+    schedule_state: str = "unknown"
+    data_age_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -81,32 +91,91 @@ def _when(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return ensure_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
     except ValueError:
         return None
 
 
-def agent_summary(session: Session, name: str, *, since: datetime) -> AgentSummary:
-    runs = list(
-        session.scalars(
-            select(AgentRun)
-            .where(AgentRun.agent_name == name, AgentRun.started_at >= since)
-            .order_by(AgentRun.started_at.desc(), AgentRun.id.desc())
+def _schedule_context(
+    name: str,
+    now: datetime,
+    calendar: MarketCalendar | None,
+    agents: AgentsConfig | None,
+) -> tuple[datetime | None, datetime | None, str]:
+    if agents is None or calendar is None:
+        return None, None, "unknown"
+    if not getattr(getattr(agents, name, None), "enabled", False):
+        return None, None, "disabled"
+    if name == "technical":
+        at = now.astimezone(UTC).replace(hour=8, minute=0, second=0, microsecond=0)
+        at += timedelta(days=(5 - at.weekday()) % 7)
+        if at <= now:
+            at += timedelta(days=7)
+        return at, None, "waiting_for_research"
+    day = now.astimezone(NEW_YORK).date()
+    try:
+        current = calendar.session_on(day)
+        following = calendar.next_session_after(day)
+        sessions = [s for s in (current, following) if s is not None]
+        jobs = [
+            j
+            for s in sessions
+            for j in plan_session_jobs(s, agents=agents)
+            if j.kind == f"agent_{name}"
+        ]
+        next_at = min((j.scheduled_at for j in jobs if j.scheduled_at > now), default=None)
+        expected = max((j.scheduled_at for j in jobs if j.scheduled_at <= now), default=None)
+        outside = current is None or not current.open_at <= now <= current.close_at + timedelta(
+            minutes=20
         )
+        return next_at, expected, "outside_schedule" if outside else "scheduled"
+    except CalendarUnavailable:
+        return None, None, "calendar_unavailable"
+
+
+def agent_summary(
+    session: Session,
+    name: str,
+    *,
+    since: datetime,
+    now: datetime | None = None,
+    calendar: MarketCalendar | None = None,
+    agents: AgentsConfig | None = None,
+) -> AgentSummary:
+    query = select(AgentRun).where(AgentRun.agent_name == name)
+    if now is not None:
+        query = query.where(AgentRun.started_at <= now)
+    query = query.order_by(AgentRun.started_at.desc(), AgentRun.id.desc())
+    runs = list(session.scalars(query.where(AgentRun.started_at >= since)))
+    latest = session.scalar(query.limit(1))
+    success = session.scalar(query.where(AgentRun.status == "COMPLETED").limit(1))
+    skipped = session.scalar(query.where(AgentRun.status == "SKIPPED").limit(1))
+    next_at, expected, schedule = _schedule_context(
+        name, now or since + timedelta(hours=24), calendar, agents
     )
-    if not runs:
-        return AgentSummary(name, 0, 0, 0, 0, 0, 0, None, None, "idle")
     tokens = [_result(r).get("tokens") for r in runs]
     prompt = sum(_int(t.get("prompt")) for t in tokens if isinstance(t, dict))
     completion = sum(_int(t.get("completion")) for t in tokens if isinstance(t, dict))
-    latest = runs[0]
-    health: Health = (
-        "failing"
-        if latest.status in _BAD
-        else "degraded"
-        if any(r.status != "COMPLETED" for r in runs)
-        else "ok"
-    )
+    health: Health = "idle"
+    if runs:
+        health = (
+            "failing"
+            if runs[0].status in _BAD
+            else "degraded"
+            if any(r.status in _BAD for r in runs)
+            else "idle"
+            if runs[0].status == "SKIPPED"
+            else "ok"
+        )
+    # Missing an expected run is meaningful only during its scheduled session, with grace
+    # for the worker queue. Weekends and prerequisite waits never manufacture failures.
+    if schedule == "scheduled" and expected is not None and now is not None:
+        if now > expected + timedelta(minutes=2 if name == "data_quality" else 10) and (
+            latest is None or latest.started_at < expected
+        ):
+            health, schedule = "degraded", "overdue"
+    observed = _when(_result(latest).get("data_at")) if latest else None
+    age = max(0.0, (now - ensure_utc(observed)).total_seconds()) if now and observed else None
     return AgentSummary(
         name=name,
         runs=len(runs),
@@ -115,9 +184,15 @@ def agent_summary(session: Session, name: str, *, since: datetime) -> AgentSumma
         failed=sum(r.status == "FAILED" for r in runs),
         prompt_tokens=prompt,
         completion_tokens=completion,
-        last_run_at=latest.started_at,
+        last_run_at=latest.started_at if latest else None,
         last_error=next((e for r in runs if (e := _text(_result(r).get("error")))), None),
         health=health,
+        skipped=sum(r.status == "SKIPPED" for r in runs),
+        last_success_at=success.completed_at if success else None,
+        last_skip_reason=_text(_result(skipped).get("skip_reason")) if skipped else None,
+        next_scheduled_run=next_at,
+        schedule_state=schedule,
+        data_age_seconds=age,
     )
 
 
@@ -161,6 +236,8 @@ def agent_decisions(
                 status=run.status,
                 headline=_text(result.get("conclusion"))
                 or _text(result.get("regime"))
+                or _text(result.get("summary"))
+                or _text(result.get("skip_reason"))
                 or error
                 or run.status,
                 confidence=_decimal(result.get("confidence")),

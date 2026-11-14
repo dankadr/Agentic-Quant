@@ -76,6 +76,25 @@ def _usage(body: dict[str, Any]) -> tuple[int, int]:
     return int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0))
 
 
+def _failure_reason(response: httpx.Response) -> str:
+    """Allowlisted diagnostics; response text may echo credentials or private inputs."""
+    safe_codes = {
+        "model_not_found",
+        "context_length_exceeded",
+        "invalid_request_error",
+        "unsupported_parameter",
+        "model_not_loaded",
+        "insufficient_quota",
+    }
+    try:
+        body = response.json()
+        error = body.get("error", {}) if isinstance(body, dict) else {}
+        code = error.get("code") if isinstance(error, dict) else None
+    except ValueError:
+        code = None
+    return code if isinstance(code, str) and code in safe_codes else "bad_request"
+
+
 class LlmClient:
     def __init__(
         self,
@@ -184,7 +203,10 @@ class LlmClient:
                 if response.status_code == 429 or response.status_code >= 500:
                     last = f"HTTP {response.status_code}"
                 elif response.status_code != 200:
-                    raise LlmError(f"model endpoint failed (HTTP {response.status_code})")
+                    raise LlmError(
+                        f"model endpoint failed (HTTP {response.status_code}; "
+                        f"{_failure_reason(response)})"
+                    )
                 else:
                     try:
                         decoded: dict[str, Any] = response.json()

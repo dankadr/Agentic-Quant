@@ -12,7 +12,7 @@ def test_shipped_agents_config_is_valid() -> None:
     assert cfg.agents.evaluator.enabled is True
     assert cfg.agents.fundamental.enabled is True
     assert cfg.agents.consensus.enabled is True
-    assert cfg.agents.technical.enabled is False  # run by hand: it can file proposals
+    assert cfg.agents.technical.enabled is True  # scheduled research can only propose
     assert cfg.agents.llm.base_url.startswith("https://")
     assert set(cfg.agents.macro.dependent_strategies) <= set(cfg.strategies)
 

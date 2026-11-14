@@ -39,7 +39,7 @@ from trading.risk.halts import NotInHaltError, clear_drawdown_halt
 from trading.services.health import check_health, new_holder_id
 
 API_PORT = 8000
-METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102, "research": 9103}
+METRICS_PORTS = {"api": 9100, "worker": 9101, "scheduler": 9102, "research": 9103, "heavy": 9104}
 
 if TYPE_CHECKING:
     from trading.agents.llm import LlmClient
@@ -57,6 +57,7 @@ class ServiceRole(StrEnum):
     WORKER = "worker"
     SCHEDULER = "scheduler"
     RESEARCH = "research"
+    HEAVY = "heavy"
 
 
 def _bootstrap(service: str) -> tuple[Settings, AppConfig, sessionmaker[Session], str | None]:
@@ -132,7 +133,7 @@ def _llm_client(
     from trading.agents.llm import LlmClient  # noqa: PLC0415
 
     any_agent = config.agents.macro.enabled or config.agents.evaluator.enabled
-    any_agent = any_agent or config.agents.fundamental.enabled
+    any_agent = any_agent or config.agents.fundamental.enabled or config.agents.technical.enabled
     if not (any_agent or force):
         return None
     key_file = settings.llm_api_key_file or Path("secrets/llm_api_key")
@@ -235,6 +236,7 @@ def scheduler() -> None:
         calendar=_calendar(),
         stop=_stop_on_signals(),
         agents=_config.agents,
+        config=_config,
         config_version=config_version,
     )
     raise typer.Exit(code)
@@ -271,6 +273,44 @@ def research_worker() -> None:
         stop=_stop_on_signals(),
         config_version=config_version,
     )
+    raise typer.Exit(code)
+
+
+@app.command("heavy-worker")
+def heavy_worker() -> None:
+    """Run serialized historical research and paired replay on a dedicated scratch DB."""
+    from trading.services.heavy import build_heavy_handlers, run_heavy_worker  # noqa: PLC0415
+
+    settings, config, sf, version = _bootstrap("heavy")
+    clock = SystemClock()
+    today = clock.now().date()
+    calendar = XnysCalendar(today - timedelta(days=150), today + timedelta(days=400))
+    provider = _alpaca_provider(settings)
+    llm = _llm_client(settings, config)
+    try:
+        code = run_heavy_worker(
+            sf=sf,
+            clock=clock,
+            worker_id=new_holder_id(settings.worker_id),
+            handlers=build_heavy_handlers(
+                sf=sf,
+                settings=settings,
+                config=config,
+                calendar=calendar,
+                clock=clock,
+                provider=provider,
+                provider_name=_market_data_provider_name(settings),
+                llm=llm,
+                root=Path("data/agent-research"),
+            ),
+            stop=_stop_on_signals(),
+            config_version=version,
+        )
+    finally:
+        if provider is not None:
+            provider.close()
+        if llm is not None:
+            llm.close()
     raise typer.Exit(code)
 
 

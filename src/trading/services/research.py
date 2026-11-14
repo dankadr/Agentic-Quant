@@ -6,8 +6,9 @@ model call therefore delays research output, never a tick, an exit, or an operat
 
 import threading
 import time
+from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 import httpx
@@ -55,6 +56,40 @@ class ResearchContext:
 
 
 def build_research_handlers(ctx: ResearchContext) -> dict[str, Handler]:
+    from trading.agents.advisory import (  # noqa: PLC0415
+        run_data_quality_agent,
+        run_execution_quality_agent,
+        run_opportunities_agent,
+    )
+
+    def agent_data_quality(job: Job) -> None:
+        run_data_quality_agent(
+            ctx.session_factory,
+            config=ctx.config,
+            calendar=ctx.calendar,
+            provider_name=ctx.provider_name,
+            now=ctx.clock.now(),
+        )
+
+    def agent_opportunities(job: Job) -> None:
+        run_opportunities_agent(
+            ctx.session_factory,
+            config=ctx.config,
+            calendar=ctx.calendar,
+            provider_name=ctx.provider_name,
+            now=ctx.clock.now(),
+        )
+
+    def agent_execution_quality(job: Job) -> None:
+        run_execution_quality_agent(
+            ctx.session_factory,
+            config=ctx.config,
+            calendar=ctx.calendar,
+            provider_name=ctx.provider_name,
+            now=ctx.clock.now(),
+            session_date=date.fromisoformat(str(job.payload["session_date"])),
+        )
+
     def agent_fundamental(job: Job) -> None:
         fundamental_job(ctx.session_factory, ctx.llm, ctx.news, config=ctx.config, clock=ctx.clock)
 
@@ -183,6 +218,9 @@ def build_research_handlers(ctx: ResearchContext) -> dict[str, Handler]:
                 )
 
     return {
+        "agent_data_quality": agent_data_quality,
+        "agent_opportunities": agent_opportunities,
+        "agent_execution_quality": agent_execution_quality,
         "document_import": document_import,
         "research_analyze": research_analyze,
         "watchdog_check": watchdog_check,
@@ -205,12 +243,11 @@ def run_research_worker(
     poll: float = 1.0,
     config_check_interval: float = 30.0,
     config_version: str | None = None,
+    kinds: Collection[str] = RESEARCH_KINDS,
 ) -> int:
     """Process research jobs until ``stop``. Exit 3 on database failure, like the executor, and
     exit 4 between jobs when an approved agent-config change was applied (restart to load it)."""
-    runner = JobRunner(
-        session_factory, handlers, clock=clock, worker_id=worker_id, kinds=RESEARCH_KINDS
-    )
+    runner = JobRunner(session_factory, handlers, clock=clock, worker_id=worker_id, kinds=kinds)
     last_config_check = time.monotonic()
     _log.info("research_worker_started", worker_id=worker_id)
     try:

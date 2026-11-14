@@ -113,6 +113,7 @@ def run_backtest(
     account_name: str = "backtest",
     minutes_per_day: int | None = None,
     reset: bool = True,
+    prepare: Callable[[sessionmaker[Session]], None] | None = None,
 ) -> BacktestResult:
     """Replay every session in ``[start, end]``. ``minutes_per_day`` only shortens sessions."""
     if not account_name.startswith(SCRATCH_ACCOUNT_PREFIXES):
@@ -134,7 +135,13 @@ def run_backtest(
     else:
         ensure_scratch(session_factory)
 
-    provider = CsvReplayProvider(fixtures_dir)
+    if prepare is not None:
+        prepare(session_factory)
+    clock = ManualClock(infos[0].open_at - timedelta(minutes=30))
+    provider = CsvReplayProvider(
+        fixtures_dir,
+        availability_clock=lambda: clock.now(),  # noqa: PLW0108 - clock changes each session
+    )
     for info in infos:
         clock = ManualClock(info.open_at - timedelta(minutes=30))
         with session_factory.begin() as session:

@@ -4,7 +4,7 @@
 import { optional } from "./api.js";
 import { append, badge, chip, clear, el, empty, ago, fmtDateTime } from "./util.js";
 
-export const AGENT_ORDER = ["macro", "fundamental", "evaluator", "consensus", "technical"];
+export const AGENT_ORDER = ["macro", "fundamental", "evaluator", "consensus", "technical", "data_quality", "execution_quality", "opportunities"];
 export const agentState = { selected: "macro", drafts: {} };
 
 const HEALTH_LEVEL = { ok: "good", degraded: "warn", failing: "bad", idle: "" };
@@ -56,6 +56,14 @@ function numbers(d) {
   );
   const box = el("div", null, "stack");
   box.append(row);
+  box.append(kv([
+    ["Schedule", s.schedule_state || "unknown"],
+    ["Next scheduled run", s.next_scheduled_run ? fmtDateTime(s.next_scheduled_run) : "waiting for prerequisites"],
+    ["Last valid result", s.last_success_at ? fmtDateTime(s.last_success_at) : "none"],
+    ["Skipped / 24 h", String(s.skipped || 0)],
+    ["Last skip reason", s.last_skip_reason || "none"],
+    ["Observed data age", s.data_age_seconds === null || s.data_age_seconds === undefined ? "unknown" : Math.round(s.data_age_seconds) + " seconds"],
+  ]));
   if (s.last_error) box.append(el("p", "Last error: " + s.last_error, "bad small"));
   return section("Numbers", box);
 }
@@ -146,7 +154,7 @@ function decisions(d) {
     if (i === 0) det.setAttribute("open", "");  // the latest decision's "why" is visible at a glance
     const sum = el("summary");
     append(sum, el("span", fmtDateTime(x.at), "mono small"), document.createTextNode(" "),
-      chip(x.status, x.status === "COMPLETED" ? "good" : "bad"), document.createTextNode(" "),
+      chip(x.status, x.status === "COMPLETED" ? "good" : x.status === "SKIPPED" ? "warn" : "bad"), document.createTextNode(" "),
       el("span", x.headline), x.confidence ? el("span", " confidence " + x.confidence, "muted small") : null);
     det.append(sum);
     const body = el("div", null, "stack");

@@ -21,7 +21,7 @@ def test_replay_command_prints_a_result(
     assert report["orders"] == 0
     assert report["decisions"] == 1
     assert len(report["result_hash"]) == 64
-    assert report["final_equity"] == "1000.0000"
+    assert report["final_equity"] == "100000.0000"
 
 
 def test_replay_command_rejects_a_non_session_date(

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import ModuleType
 
-from trading.agents import consensus, evaluator, fundamental, macro, technical
+from trading.agents import advisory, consensus, evaluator, fundamental, macro, technical
 from trading.core.config import AgentsConfig
 
 LOCKED_SCOPES: tuple[str, ...] = (
@@ -131,3 +131,31 @@ AGENT_REGISTRY: Mapping[str, AgentInfo] = {
         requires=("LLM key (secrets/llm_api_key)",),
     ),
 }
+
+
+_ADVISORY_JOBS = {
+    "data_quality": (
+        "Checks closed-minute coverage, flagged bars and quote freshness every five minutes."
+    ),
+    "execution_quality": (
+        "Reviews end-of-day fills, cancellations, risk denials, fees and estimated slippage."
+    ),
+    "opportunities": (
+        "Ranks activity in the configured universe every thirty minutes; no profit prediction."
+    ),
+}
+for _name, _job in _ADVISORY_JOBS.items():
+    AGENT_REGISTRY[_name] = AgentInfo(  # type: ignore[index]
+        name=_name,
+        job=_job,
+        can_affect=("research observations displayed to the owner",),
+        cannot=_NEVER,
+        uses_llm=False,
+        prompt_version=advisory.PROMPT_VERSION,
+        prompt_text=None,
+        valid_output="deterministic metrics, evidence and explicit data limitations",
+        on_failure=(
+            "A missing prerequisite is recorded as SKIPPED with its reason; no orders change."
+        ),
+        editable=_fields(_name),
+    )

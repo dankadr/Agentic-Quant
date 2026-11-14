@@ -28,7 +28,7 @@ def edit(path: Path, keys: list[str], value: Any) -> None:
 def test_loads_repo_configs() -> None:
     cfg = load_config(Path("configs"))
     assert cfg.system.mode == "PAPER_ONLY"
-    assert cfg.system.starting_cash_usd == Decimal("1000.00")
+    assert cfg.system.starting_cash_usd == Decimal("100000.00")
     assert cfg.risk.max_symbol_exposure_pct == Decimal("0.15")  # raised from 10% on 2026-10-28
     assert cfg.risk.max_daily_loss_pct == Decimal("0.025")  # raised from 1% on 2026-10-28
     assert cfg.risk.max_new_entries_per_day == 10

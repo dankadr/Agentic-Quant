@@ -4,13 +4,15 @@ import threading
 import time
 from datetime import timedelta
 
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.agents.effective_config import apply_when_idle, config_changed
 from trading.core.clock import Clock
-from trading.core.config import AgentsConfig
+from trading.core.config import AgentsConfig, AppConfig
 from trading.data.calendar import MarketCalendar
+from trading.db.models.research import Strategy
 from trading.jobs.keepalive import Keepalive
 from trading.jobs.lease import SCHEDULER_LEASE, Lease, acquire_lease, release_lease, renew_lease
 from trading.jobs.queue import enqueue
@@ -27,14 +29,29 @@ def tick(
     clock: Clock,
     calendar: MarketCalendar | None,
     agents: AgentsConfig | None = None,
+    *,
+    config: AppConfig | None = None,
 ) -> None:
     """Plan and enqueue the jobs due now. Dedupe keys make this idempotent."""
     for spec in plan_jobs(clock.now(), calendar, agents=agents):
         with session_factory.begin() as session:
+            payload = dict(spec.payload)
+            if spec.kind == "paper_comparison" and config is not None:
+                strategies = dict(config.strategies)
+                versions = {}
+                for row in session.scalars(select(Strategy)):
+                    if row.id in strategies:
+                        strategies[row.id] = strategies[row.id].model_copy(
+                            update={"params": dict(row.params_json)}
+                        )
+                        versions[row.id] = row.version
+                snapshot = config.model_copy(update={"strategies": strategies})
+                payload["session_config"] = snapshot.model_dump(mode="json")
+                payload["strategy_versions"] = versions
             enqueue(
                 session,
                 kind=spec.kind,
-                payload=spec.payload,
+                payload=payload,
                 scheduled_at=spec.scheduled_at,
                 dedupe_key=spec.dedupe_key,
             )
@@ -55,6 +72,7 @@ def run_scheduler(
     calendar: MarketCalendar | None,
     stop: threading.Event,
     agents: AgentsConfig | None = None,
+    config: AppConfig | None = None,
     lease_ttl: timedelta = timedelta(seconds=30),
     interval: float = 10.0,
     acquire_retry: float = 5.0,
@@ -85,7 +103,7 @@ def run_scheduler(
     ).start()
     try:
         while not stop.is_set() and not keeper.lost.is_set():
-            tick(session_factory, clock, calendar, agents)
+            tick(session_factory, clock, calendar, agents, config=config)
             if time.monotonic() - last_config_check >= config_check_interval:
                 last_config_check = time.monotonic()
                 if calendar is not None:

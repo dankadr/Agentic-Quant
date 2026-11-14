@@ -95,6 +95,42 @@ def plan_session_jobs(session: SessionInfo, *, agents: AgentsConfig | None = Non
                 {"session_date": day},
             )
         )
+    if agents is not None:
+        for name, interval_minutes in (("data_quality", 5), ("opportunities", 30)):
+            if not getattr(getattr(agents, name, None), "enabled", False):
+                continue
+            at = session.open_at + timedelta(minutes=interval_minutes)
+            while at <= session.close_at:
+                if name == "opportunities" and at == session.close_at:
+                    break
+                kind = f"agent_{name}"
+                jobs.append(
+                    JobSpec(
+                        kind,
+                        f"{kind}:{isoformat_z(at)}",
+                        at + AGENT_DELAY,
+                        {"at": isoformat_z(at), "session_date": day},
+                    )
+                )
+                at += timedelta(minutes=interval_minutes)
+        if getattr(getattr(agents, "execution_quality", None), "enabled", False):
+            jobs.append(
+                JobSpec(
+                    "agent_execution_quality",
+                    f"agent_execution_quality:{day}",
+                    session.close_at + timedelta(minutes=13),
+                    {"session_date": day},
+                )
+            )
+        # Paired replay is heavy work and is never claimed by the intraday research worker.
+        jobs.append(
+            JobSpec(
+                "paper_comparison",
+                f"paper_comparison:{day}",
+                session.close_at + timedelta(minutes=15),
+                {"session_date": day},
+            )
+        )
     jobs.append(
         JobSpec(
             "session_end",
@@ -132,6 +168,22 @@ def plan_jobs(
             payload={},
         ),
     ]
+    # Weekly collection/research is independent of whether Saturday is a trading session.
+    weekly = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    if (
+        agents is not None
+        and agents.technical.enabled
+        and now.weekday() == 5
+        and now - PLANNING_WINDOW <= weekly <= now
+    ):
+        jobs.append(
+            JobSpec(
+                "quant_research",
+                f"quant_research:{weekly.date().isoformat()}",
+                weekly,
+                {"as_of": isoformat_z(weekly)},
+            )
+        )
     if calendar is None:
         return jobs
     try:

@@ -166,6 +166,12 @@ class TechnicalAgentConfig(_Frozen):
     enabled: bool = False
 
 
+class AdvisoryAgentConfig(_Frozen):
+    """Read-only deterministic adviser; timing is fixed by the market calendar."""
+
+    enabled: bool = False
+
+
 class SuggestionsConfig(_Frozen):
     """Evidence a settings suggestion needs before it may be proposed (below it: "watching")."""
 
@@ -181,6 +187,9 @@ class AgentsConfig(_Frozen):
     fundamental: FundamentalAgentConfig = FundamentalAgentConfig()
     consensus: ConsensusAgentConfig = ConsensusAgentConfig()
     technical: TechnicalAgentConfig = TechnicalAgentConfig()
+    data_quality: AdvisoryAgentConfig = AdvisoryAgentConfig()
+    execution_quality: AdvisoryAgentConfig = AdvisoryAgentConfig()
+    opportunities: AdvisoryAgentConfig = AdvisoryAgentConfig()
 
 
 class _AgentsFile(_Frozen):

@@ -13,6 +13,9 @@ RESEARCH_KINDS = frozenset(
         "agent_consensus",
         "agent_macro",
         "agent_evaluator",
+        "agent_data_quality",
+        "agent_execution_quality",
+        "agent_opportunities",
         "document_import",
         "research_analyze",
         "sec_discover",
@@ -21,4 +24,5 @@ RESEARCH_KINDS = frozenset(
         "alert_dispatch",
     }
 )
-ALL_KINDS = EXECUTION_KINDS | OPERATIONS_KINDS | RESEARCH_KINDS
+HEAVY_KINDS = frozenset({"quant_research", "paper_comparison"})
+ALL_KINDS = EXECUTION_KINDS | OPERATIONS_KINDS | RESEARCH_KINDS | HEAVY_KINDS

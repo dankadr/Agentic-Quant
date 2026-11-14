@@ -26,6 +26,9 @@ def test_every_planned_kind_is_assigned_to_a_role() -> None:
             "fundamental": {"enabled": True},
             "consensus": {"enabled": True},
             "evaluator": {"enabled": True},
+            "data_quality": {"enabled": True},
+            "execution_quality": {"enabled": True},
+            "opportunities": {"enabled": True},
         }
     )
     planned = {j.kind for j in plan_session_jobs(session, agents=agents)}
