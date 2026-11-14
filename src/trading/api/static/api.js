@@ -39,3 +39,9 @@ export async function post(path, body) {
 export async function ready() {
   try { return await (await fetch("/v1/health/ready", { cache: "no-store" })).json(); } catch (e) { return null; }
 }
+
+// Checked overview requests expose section failures without changing optional() callers.
+export async function checked(path) {
+  try { return { data: await api(path), error: null }; }
+  catch (error) { if (error.status === 401) throw error; return { data: null, error: error.message }; }
+}

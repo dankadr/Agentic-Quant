@@ -57,7 +57,7 @@ p { margin: 0 0 6px; }
 .nav a { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; min-height: 40px; border-radius: 8px; color: var(--muted);
   text-decoration: none; white-space: nowrap; transition: background-color 150ms var(--ease-out), color 150ms var(--ease-out); }
 .nav a[aria-current="page"] { color: var(--text); background: var(--raised); box-shadow: inset 0 -2px 0 var(--accent); }
-.nav .count { font-size: 11px; background: var(--accent-bg); color: var(--accent); border-radius: 999px; padding: 0 7px; }
+.nav .count { font-size: 12px; background: var(--accent-bg); color: var(--accent); border-radius: 999px; padding: 0 7px; }
 @media (hover: hover) and (pointer: fine) { .nav a:hover { color: var(--text); background: var(--raised); } }
 
 /* controls */
@@ -131,7 +131,7 @@ td.wrap { white-space: normal; min-width: 200px; }
 .chart { position: relative; }
 .chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
 .chart .grid-line { stroke: var(--grid); stroke-width: 1; }
-.chart .axis { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
+.chart .axis { fill: var(--muted); font-size: 12px; font-family: var(--mono); }
 .chart .baseline { stroke: var(--border-strong); stroke-dasharray: 4 4; }
 .chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .chart .line.up { stroke: var(--good); } .chart .line.down { stroke: var(--bad); }
@@ -150,9 +150,9 @@ td.wrap { white-space: normal; min-width: 200px; }
 /* heatmap */
 table.heat { border-collapse: separate; border-spacing: 3px; width: auto; }
 table.heat th, table.heat td { padding: 0; border: 0; position: static; background: none; }
-table.heat th { font-family: var(--mono); font-size: 11px; padding: 0 6px 0 0; text-align: right; }
+table.heat th { font-family: var(--mono); font-size: 12px; padding: 0 6px 0 0; text-align: right; }
 table.heat th.col { text-align: center; padding: 0 0 4px; }
-.heat td { width: 38px; height: 26px; border-radius: 5px; text-align: center; font: 11px var(--mono); color: var(--text); }
+.heat td { width: 38px; height: 26px; border-radius: 5px; text-align: center; font: 12px var(--mono); color: var(--text); }
 .heat td.lv0 { background: var(--bad-bg); color: var(--bad); } .heat td.lv1 { background: var(--warn-bg); color: var(--warn); }
 .heat td.lv2 { background: color-mix(in srgb, var(--good) 22%, var(--surface)); } .heat td.lv3 { background: color-mix(in srgb, var(--good) 45%, var(--surface)); }
 .heat-swatch.lv0 { background: var(--bad-bg); box-shadow: inset 0 0 0 1px var(--bad); } .heat-swatch.lv1 { background: var(--warn-bg); box-shadow: inset 0 0 0 1px var(--warn); }
@@ -216,6 +216,6 @@ dialog textarea { width: 100%; min-height: 70px; resize: vertical; margin-top: 8
 .dot.good { background: var(--good); }
 .dot.warn { background: var(--warn); }
 .dot.bad { background: var(--bad); }
-.label { color: var(--muted); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; margin: 6px 0 2px; }
+.label { color: var(--muted); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; margin: 6px 0 2px; }
 .wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
 input[type="number"], input[type="text"] { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; font: inherit; min-width: 90px; }

@@ -1,4 +1,4 @@
-import { api, optional } from "./api.js";
+import { api, optional, checked } from "./api.js";
 import { barChart, heatmap, equityChart, meter } from "./charts.js";
 import { agentState, agentTabs, loadAgent, renderAgentPanel } from "./agentpanel.js";
 import { append, badge, card, chip, clear, el, empty, fmtDateTime, fmtMoney, fmtPct, fmtTime, ago, glyph, num, signedUsd, stable, table, trend, usd } from "./util.js";
@@ -28,6 +28,13 @@ function list(items) {
   const ul = el("ul", null, "plain");
   for (const i of items || []) ul.append(el("li", i));
   return ul;
+}
+
+function readableResult(value) {
+  if (value === null || typeof value !== "object") return el("p", value == null ? "Unavailable" : String(value), "small");
+  const dl = el("dl", null, "kv");
+  for (const [key, item] of Object.entries(value)) { const dd = el("dd"); dd.append(readableResult(item)); dl.append(el("dt", key.replaceAll("_", " ")), dd); }
+  return dl;
 }
 
 function runDetail(run) {
@@ -79,6 +86,19 @@ function runDetail(run) {
         box.append(el("p", r.proposal_filed ? "Proposal filed for review." : "No proposal filed (" + (r.reason || "none") + ").", "muted small"));
       }
       break;
+    case "data_quality":
+    case "execution_quality":
+    case "opportunities":
+      if (r.conclusion) box.append(el("p", r.conclusion, "prose"));
+      if (r.reason) box.append(el("p", "Reason: " + r.reason, "muted small"));
+      if (r.data_at) box.append(el("p", "Data as of " + fmtDateTime(r.data_at) + " ET", "muted small"));
+      for (const [key, value] of Object.entries(r)) {
+        if (["conclusion", "reason", "data_at", "error"].includes(key)) continue;
+        const details = el("details", null, "run");
+        details.append(el("summary", key.replaceAll("_", " ")), readableResult(value));
+        box.append(details);
+      }
+      break;
     default: break;
   }
   box.append(el("p", "model " + run.model + " | prompt " + run.prompt_version + " | " + fmtDateTime(run.started_at) + " ET", "muted small mono"));
@@ -93,7 +113,7 @@ function runSummary(run) {
     case "fundamental": return r.watchlist ? "watchlist " + r.watchlist.map((w) => w.symbol).join(" ") : r.error || "";
     case "consensus": return r.entries !== undefined ? r.entries + " entries, " + r.vetoed + " vetoed, value " + signedUsd(r.value_added) : "";
     case "technical": return r.assessment ? (r.proposal_filed ? "proposal filed" : "no proposal") : r.error || "";
-    default: return r.error || "";
+    default: return r.conclusion || r.reason || r.error || "";
   }
 }
 
@@ -112,6 +132,9 @@ function runItem(run, open, compact) {
 function deriveAlerts(ctx, data) {
   const out = [];
   const st = ctx.status;
+  if (!st) out.push(["warn", "System status unavailable", "Health could not be verified."]);
+  for (const name of data.loadErrors || []) out.push(["warn", name + " unavailable", "Retry to refresh this section."]);
+  if (!ctx.ready) out.push(["warn", "Readiness unavailable", "Lease and market data health could not be verified."]);
   if (!st) return out;
   if (st.mode !== "PAPER_ONLY") out.push(["bad", "Mode is " + st.mode, "The system must only ever run PAPER_ONLY."]);
   if (st.risk_state !== "NORMAL") out.push(["bad", "Risk state " + st.risk_state, st.risk_reason || "New entries are blocked until this clears."]);
@@ -133,24 +156,28 @@ function deriveAlerts(ctx, data) {
 
 function mountOverview(root, ctx) {
   const kpiDefs = [
-    ["equity", "Equity"], ["day", "Day P&L"], ["spy", "SPY (same period)"], ["exposure", "Exposure"], ["realized", "Realized P&L"], ["unreal", "Unrealized P&L"],
+    ["equity", "Equity"], ["day", "Day P&L"], ["spy", "SPY (same period)"], ["exposure", "Current exposure"], ["realized", "Day realized change"], ["unreal", "Day unrealized change"],
   ];
   const kpis = {};
   const grid = el("div", null, "grid");
   for (const [key, label] of kpiDefs) {
     const c = el("section", null, "card kpi col-2");
-    const v = el("div", "-", "value");
+    const v = el("div", "Loading…", "value");
     const sub = el("div", "", "sub");
     append(c, el("div", label, "label"), v, sub);
     kpis[key] = { v, sub, last: null };
     grid.append(c);
   }
-  const alerts = panel("Alerts", { cls: "col-4" });
+  const alerts = panel("Attention", { cls: "col-12" });
+  grid.prepend(alerts.node);
+  alerts.set("loading", () => empty("Loading system checks…"));
   const equity = panel("Equity (selected session, ET)", { cls: "col-8" });
   const now = panel("Agents right now", { cls: "col-4" });
   const positions = panel("Open positions", { cls: "col-4" });
   const pnl = panel("Strategy P&L", { cls: "col-4" });
-  append(grid, equity.node, alerts.node, now.node, positions.node, pnl.node);
+  const costs = panel("Session costs & reconciliation", { cls: "col-6" });
+  const diagnostics = panel("Sampled NO_ENTRY evaluations", { cls: "col-6" });
+  append(grid, equity.node, now.node, positions.node, pnl.node, costs.node, diagnostics.node);
   root.append(grid);
   let firstChart = true;
 
@@ -166,16 +193,22 @@ function mountOverview(root, ctx) {
     k.sub.textContent = sub || "";
   }
 
-  return (data) => {
+  return (data, nextCtx) => {
+    if (nextCtx) ctx = nextCtx;
     const p = data.portfolio, r = data.report;
-    setKpi("equity", p ? usd(p.equity) : "-", p && p.equity, p ? "cash " + usd(p.cash) + " | buying power " + usd(p.buying_power) : "no snapshot yet");
-    const dayPnl = r && r.equity && r.equity.pnl;
-    setKpi("day", dayPnl !== null && dayPnl !== undefined ? glyph(dayPnl) + signedUsd(dayPnl) : "-", dayPnl, r && r.equity ? "max drawdown " + fmtPct(Math.abs(Number(r.equity.max_drawdown_pct))) : "");
+    const eq = r && r.equity;
+    const missing = r ? "No session snapshot" : "Report unavailable";
+    const present = (v) => v !== null && v !== undefined;
+    setKpi("equity", eq && present(eq.end) ? usd(eq.end) : "Unavailable", eq && eq.end, eq && present(eq.end) ? "selected session end" : missing);
+    const dayPnl = eq && eq.pnl;
+    setKpi("day", present(dayPnl) ? glyph(dayPnl) + signedUsd(dayPnl) : "Unavailable", dayPnl, "selected session · excludes capital flows");
     const spy = r && r.benchmark && r.benchmark.return_pct;
-    setKpi("spy", spy !== null && spy !== undefined ? glyph(spy) + fmtPct(spy) : "-", spy, "buy-and-hold benchmark");
-    setKpi("exposure", p ? usd(p.exposure) : "-", p && p.exposure, "");
-    setKpi("realized", p ? signedUsd(p.realized_pnl) : "-", p && p.realized_pnl, r ? "fees " + usd(r.costs.fees) + " | slippage est. " + usd(r.costs.slippage_estimate) : "");
-    setKpi("unreal", p ? signedUsd(p.unrealized_pnl) : "-", p && p.unrealized_pnl, "");
+    setKpi("spy", present(spy) ? glyph(spy) + fmtPct(spy) : "Unavailable", spy, "buy-and-hold benchmark");
+    setKpi("exposure", !ctx.explicit && p ? usd(p.exposure) : "Unavailable", !ctx.explicit && p && p.exposure, ctx.explicit ? "unavailable for historical date" : p ? "latest portfolio snapshot" : "Portfolio unavailable");
+    for (const [key, field] of [["realized", "realized_pnl_change"], ["unreal", "unrealized_pnl_change"]]) {
+      const value = eq && eq[field];
+      setKpi(key, present(value) ? signedUsd(value) : "Unavailable", value, "change during selected session");
+    }
 
     alerts.set(deriveAlerts(ctx, data), (items) => {
       const box = el("div", null, "alerts");
@@ -186,10 +219,16 @@ function mountOverview(root, ctx) {
         a.append(el("span", null, "dot"), t);
         box.append(a);
       }
+      if ((data.loadErrors || []).length) {
+        const retry = el("button", "Retry unavailable sections", "btn", { type: "button" });
+        retry.addEventListener("click", () => ctx.actions.refresh());
+        box.append(retry);
+      }
       return box;
     });
 
-    equity.set({ pts: data.equity && data.equity.points, s: ctx.session }, () => {
+    equity.set({ pts: data.equity && data.equity.points, s: ctx.session, available: !!data.equity }, () => {
+      if (!data.equity) return empty("Equity chart unavailable");
       const node = equityChart(data.equity && data.equity.points, ctx.session, firstChart);
       if (data.equity && data.equity.points && data.equity.points.length > 1) firstChart = false;
       return node;
@@ -197,36 +236,49 @@ function mountOverview(root, ctx) {
 
     const latest = {};
     for (const run of (data.agents && data.agents.items) || []) if (!latest[run.agent_name]) latest[run.agent_name] = run;
-    now.set(latest, () => {
+    now.set({ latest, list: data.agentList, errors: data.loadErrors, explicit: ctx.explicit }, () => {
+      if (!data.agentList) return empty("Agent status unavailable");
       const box = el("div", null, "stack");
-      const macro = latest.macro;
-      if (macro && macro.status === "COMPLETED") {
-        const res = macro.result || {};
-        const live = res.valid_until && new Date(res.valid_until).getTime() > Date.now();
-        box.append(el("div", null, "row")); box.lastChild.append(chip("macro", "accent"), chip(res.regime || "?", "accent"), chip(live ? "valid" : "expired", live ? "good" : "warn"));
-        box.append(meter(res.risk_multiplier, "good"), el("p", "entry size x" + res.risk_multiplier + " | " + ago(macro.started_at), "muted small"));
-      } else box.append(el("p", macro ? "macro: last run " + macro.status.toLowerCase() : "macro agent has not run", "muted small"));
-      for (const name of ["fundamental", "consensus", "evaluator", "technical"]) {
-        const run = latest[name];
-        if (!run) continue;
-        const row = el("div", null, "row");
-        append(row, chip(name), chip(run.status, statusLevel(run.status)), el("span", ago(run.started_at), "muted small"));
-        box.append(row);
-      }
+      box.append(el("p", "Current health · " + (ctx.explicit ? "selected session runs" : "latest run per agent"), "muted small"));
+      box.append(table("Current agent health and latest runs", [
+        { label: "Agent", get: agent => agent.name },
+        { label: "Now", get: agent => chip(agent.enabled ? agent.health : "disabled", agent.enabled ? ({ ok: "good", degraded: "warn", failing: "bad" }[agent.health] || "") : "") },
+        { label: "Latest run", wrap: true, get: agent => {
+          const run = latest[agent.name];
+          const cell = el("div", null, "small");
+          cell.append(el("div", run ? run.status + " · " + ago(run.started_at) : (data.loadErrors || []).includes("Agent runs") ? "Unavailable" : "No run recorded"), el("div", (agent.schedule_state || "schedule unknown").replaceAll("_", " "), "muted"));
+          return cell;
+        } },
+      ], data.agentList.items || []));
       return box;
     });
 
-    positions.set(data.positions && data.positions.items, (items) => table("Open positions", [
+    positions.set({ items: data.positions && data.positions.items, historical: ctx.explicit }, ({ items, historical }) => historical ? empty("Current positions unavailable for historical date") : !items ? empty("Positions unavailable") : table("Current open positions", [
       { label: "Symbol", get: (x) => x.symbol }, { label: "Qty", num: true, get: (x) => x.qty },
       { label: "Value", num: true, get: (x) => (x.market_value ? usd(x.market_value) : "-") },
-      { label: "P&L", num: true, get: (x) => (x.unrealized_pnl ? signedUsd(x.unrealized_pnl) : "-"), cls: (x) => trend(x.unrealized_pnl) },
+      { label: "P&L", num: true, get: (x) => (x.unrealized_pnl != null ? signedUsd(x.unrealized_pnl) : "-"), cls: (x) => trend(x.unrealized_pnl) },
     ], items || [], "flat: no open positions"));
 
     const strat = (r && r.strategies) || {};
-    pnl.set(strat, () => table("Strategy P&L today", [
+    pnl.set({ strat, available: !!r }, () => !r ? empty("Report unavailable") : table("Strategy P&L for selected session", [
       { label: "Strategy", get: (x) => x[0] }, { label: "Signals", num: true, get: (x) => Object.values(x[1].signals).reduce((a, b) => a + b, 0) },
       { label: "Net P&L", num: true, get: (x) => glyph(x[1].net_pnl) + signedUsd(x[1].net_pnl), cls: (x) => trend(x[1].net_pnl) },
     ], Object.entries(strat), "no strategy activity yet"));
+    costs.set(r, () => {
+      if (!r) return empty("Report unavailable");
+      const box = el("div", null, "stack"), kv = el("dl", null, "kv");
+      for (const [label, value] of [["Fees", r.costs?.fees], ["Slippage estimate", r.costs?.slippage_estimate], ["Capital flows", eq?.capital_flows], ["P&L reconciliation residual", eq?.reconciliation_residual], ["Attribution residual", eq?.attribution_residual]]) kv.append(el("dt", label), el("dd", present(value) ? usd(value) : "Unavailable"));
+      box.append(kv, el("p", "Slippage is already reflected in fill prices; do not subtract it again. Reconciliation residual compares session P&L with realized and unrealized changes.", "muted small"));
+      return box;
+    });
+    diagnostics.set(r && r.diagnostic_counts, (counts) => {
+      if (!counts) return empty("Sampled evaluation data unavailable");
+      const box = el("div", null, "stack");
+      box.append(el("p", counts.sampled_evaluations + " sampled evaluations, not unique opportunities.", "muted small"));
+      const rows = Object.entries(counts.by_strategy || {}).flatMap(([strategy, reasons]) => Object.entries(reasons).map(([reason, count]) => ({ strategy, reason, count })));
+      box.append(table("Sampled NO_ENTRY reasons", [{ label: "Strategy", get: x => x.strategy }, { label: "Reason", get: x => x.reason, wrap: true }, { label: "Samples", num: true, get: x => x.count }], rows, "No sampled NO_ENTRY evaluations"));
+      return box;
+    });
   };
 }
 
@@ -570,9 +622,14 @@ function mountActivity(root) {
 export const VIEWS = {
   overview: {
     label: "Overview", icon: "overview", mount: mountOverview,
-    fetch: (c) => Promise.all([optional("/v1/portfolio"), optional("/v1/equity?date=" + c.day), optional("/v1/report/daily?date=" + c.day), optional("/v1/agents/runs?limit=20"),
-      optional("/v1/positions?limit=50"), optional("/v1/config-proposals?status=PENDING_REVIEW&limit=50"), optional("/v1/strategies")])
-      .then(([portfolio, equity, report, agents, positions, props, strategies]) => ({ portfolio, equity, report, agents, positions, strategies, pending: props ? props.items.length : 0 })),
+    fetch: async (c) => {
+      const paths = { portfolio: ["Portfolio", "/v1/portfolio"], equity: ["Equity chart", "/v1/equity?date=" + c.day], report: ["Report", "/v1/report/daily?date=" + c.day], agents: ["Agent runs", "/v1/agents/runs?latest_per_agent=true" + (c.explicit ? "&date=" + c.day : "")], agentList: ["Agent status", "/v1/agents"], positions: ["Positions", "/v1/positions?limit=50"], props: ["Proposals", "/v1/config-proposals?status=PENDING_REVIEW&limit=50"], strategies: ["Strategies", "/v1/strategies"] };
+      const results = await Promise.all(Object.entries(paths).map(async ([key, [label, path]]) => [key, label, await checked(path)]));
+      const data = { loadErrors: [] };
+      for (const [key, label, result] of results) { data[key] = result.data; if (result.error) data.loadErrors.push(label); }
+      data.pending = data.props ? data.props.items.length : null;
+      return data;
+    },
   },
   trading: {
     label: "Trading", icon: "trading", mount: mountTrading,

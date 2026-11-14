@@ -64,7 +64,7 @@ function context() {
   return {
     status, ready: state.ready, day, explicit: !!state.date, isLive: live && !!sess && sess.is_open,
     session: sess, openMs: sess ? new Date(sess.open_at).getTime() : new Date(day + "T13:30:00Z").getTime(),
-    actions: { review: reviewProposal, agentChange, agentReview, agentSuggestion },
+    actions: { refresh: () => refresh(), review: reviewProposal, agentChange, agentReview, agentSuggestion },
   };
 }
 

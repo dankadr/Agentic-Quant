@@ -1,4 +1,4 @@
-import { ET, el, svg, usd, signedUsd, fmtTime, num } from "./util.js";
+import { ET, el, svg, usd, signedUsd, fmtTime, num, table } from "./util.js";
 
 const W = 900, H = 280, PAD = { l: 62, r: 26, t: 14, b: 26 };
 const hourFmt = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: ET });
@@ -61,8 +61,11 @@ export function equityChart(points, session, animate) {
   const hit = svg("rect", { x: PAD.l, y: PAD.t, width: W - PAD.l - PAD.r, height: H - PAD.t - PAD.b, fill: "transparent" });
   s.append(hit);
 
-  const tip = el("div", null, "tip", { role: "status" });
-  root.append(s, tip);
+  const tip = el("div", null, "tip", { "aria-hidden": "true" });
+  const announcement = el("div", "", "sr-only chart-announcement", { role: "status", "aria-live": "polite", "aria-atomic": "true" });
+  const fallback = el("details", null, "run");
+  fallback.append(el("summary", "View equity data table"), table("Session equity points", [{ label: "Time (ET)", get: p => fmtTime(p.ts) }, { label: "Equity", num: true, get: p => usd(p.equity) }], points));
+  root.append(s, tip, announcement, fallback);
 
   let index = values.length - 1;
   function show(i, fromPointer) {
@@ -75,7 +78,7 @@ export function equityChart(points, session, animate) {
     const px = (x / W) * rect.width;
     tip.style.transform = "translateX(" + Math.max(0, Math.min(rect.width - tip.offsetWidth, px - tip.offsetWidth / 2)) + "px)";
     root.classList.add("active");
-    if (!fromPointer) tip.setAttribute("aria-live", "polite");
+    if (!fromPointer) announcement.textContent = tip.textContent;
   }
   function nearest(clientX) {
     const rect = s.getBoundingClientRect();

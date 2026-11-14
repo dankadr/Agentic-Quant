@@ -262,3 +262,109 @@ def test_typing_in_an_agent_setting_survives_a_background_refresh(new_page, demo
     )
     assert page.input_value("#cfg-run_every_minutes") == "20"
     assert "Review change (1)" in page.inner_text("#view")
+
+
+def test_overview_uses_selected_session_values_and_honest_errors(new_page, demo: Demo) -> None:
+    page = new_page(color_scheme="dark")
+    report = {
+        "equity": {
+            "end": "812.34",
+            "pnl": "-7.66",
+            "realized_pnl_change": "-2.00",
+            "unrealized_pnl_change": "-5.66",
+        },
+        "benchmark": {},
+        "costs": {"fees": "0.12", "slippage_estimate": "0.03"},
+        "strategies": {},
+        "diagnostic_counts": {
+            "sampled_evaluations": 4,
+            "by_strategy": {"orb_v1": {"NO_BREAKOUT": 4}},
+        },
+    }
+    page.route("**/v1/report/daily?*", lambda route: route.fulfill(json=report))
+    login(page, demo)
+    page.wait_for_function("document.querySelector('#view').getAttribute('aria-busy') === 'false'")
+    assert page.locator(".kpi").nth(0).inner_text().find("$812.34") >= 0
+    assert "-$2.00" in page.locator(".kpi").nth(4).inner_text()
+    assert "NO_BREAKOUT" in page.inner_text("#view")
+    assert page.locator("#view .grid > .card").first.inner_text().startswith("ATTENTION")
+    page.fill("#date", "2026-10-16")
+    page.dispatch_event("#date", "change")
+    page.wait_for_function("document.querySelector('#view').getAttribute('aria-busy') === 'false'")
+    page.wait_for_selector("text=unavailable for historical date")
+    assert "unavailable for historical date" in page.locator(".kpi").nth(3).inner_text()
+    page.route(
+        "**/v1/report/daily?*", lambda route: route.fulfill(status=503, json={"detail": "offline"})
+    )
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    page.wait_for_selector("text=Report unavailable")
+    assert "All clear" not in page.inner_text("#view")
+    assert page.get_by_role("button", name="Retry unavailable sections").count() == 1
+
+
+def test_equity_chart_has_table_and_pointer_is_silent_after_keyboard(new_page, demo: Demo) -> None:
+    page = new_page()
+    login(page, demo)
+    page.wait_for_selector(".chart svg")
+    assert page.get_by_role("table", name="Session equity points", include_hidden=True).count() == 1
+    page.focus(".chart svg")
+    page.keyboard.press("ArrowLeft")
+    assert page.locator(".chart .chart-announcement").inner_text()
+    previous = page.locator(".chart .chart-announcement").inner_text()
+    page.locator(".chart svg").hover(position={"x": 100, "y": 50})
+    assert page.locator(".chart .chart-announcement").inner_text() == previous
+    assert page.locator(".chart .tip").get_attribute("role") is None
+
+
+def test_overview_lists_all_agents_and_retains_mobile_kpi_hierarchy(new_page, demo: Demo) -> None:
+    page = new_page(color_scheme="dark")
+    login(page, demo)
+    page.wait_for_function("document.querySelector('#view').getAttribute('aria-busy') === 'false'")
+    for name in (
+        "macro",
+        "fundamental",
+        "technical",
+        "consensus",
+        "evaluator",
+        "data_quality",
+        "execution_quality",
+        "opportunities",
+    ):
+        assert (
+            name
+            in page.get_by_role("table", name="Current agent health and latest runs").inner_text()
+        )
+    assert any("latest_per_agent=true" in url for url in page.requests)
+    page.screenshot(path="/tmp/dashboard-data-desktop.png", full_page=True)  # noqa: S108 - seeded visual QA
+    page.set_viewport_size({"width": 375, "height": 800})
+    assert page.evaluate("getComputedStyle(document.querySelector('.kpi')).gridColumn") == "span 6"
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+    page.screenshot(path="/tmp/dashboard-data-mobile.png", full_page=True)  # noqa: S108 - seeded visual QA
+
+
+@pytest.mark.parametrize("name", ["data_quality", "execution_quality", "opportunities"])
+def test_advisory_run_results_are_readable_safe_text(new_page, demo: Demo, name: str) -> None:
+    page = new_page()
+    hostile = "<img src=x onerror=window.__pwned=1>"
+    run = {
+        "agent_name": name,
+        "status": "COMPLETED",
+        "model": "deterministic",
+        "prompt_version": "v1",
+        "started_at": "2026-10-19T14:00:00Z",
+        "result": {
+            "conclusion": "Review complete",
+            "coverage": {"SPY": {"expected": 30, "bars": 28}},
+            "evidence": [hostile],
+            "limitations": ["Configured universe only"],
+        },
+    }
+    page.route("**/v1/agents/runs?*", lambda route: route.fulfill(json={"items": [run]}))
+    login(page, demo, route="agents")
+    page.get_by_role("button", name=name, exact=True).click()
+    page.wait_for_selector("text=Review complete")
+    page.locator("details.run").evaluate_all("nodes => nodes.forEach(n => n.open = true)")
+    assert hostile in page.inner_text("#view")
+    assert "Configured universe only" in page.inner_text("#view")
+    assert page.query_selector("#view img") is None
+    assert page.evaluate("window.__pwned") is None
