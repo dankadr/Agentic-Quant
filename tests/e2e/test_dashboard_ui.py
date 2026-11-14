@@ -49,7 +49,10 @@ def test_every_view_renders_without_console_errors_or_csp_violations(new_page, d
         )
         page.wait_for_selector("#view .card", timeout=10000)
         # A mounted card exists before the route's asynchronous fetch has populated it.
-        page.wait_for_function("(route) => { const v = document.querySelector('#view'); return v?.dataset.route === route && v.getAttribute('aria-busy') === 'false' && v.innerText.trim().length > 0; }", arg=route)
+        page.wait_for_function(
+            "(route) => { const v = document.querySelector('#view'); return v?.dataset.route === route && v.getAttribute('aria-busy') === 'false' && v.innerText.trim().length > 0; }",
+            arg=route,
+        )
         assert page.inner_text("#view").strip(), route
     bad = [p for p in page.problems if "503" not in p]  # no portfolio snapshot is an expected 503
     assert bad == []
