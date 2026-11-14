@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.brokers.paper.broker import PaperBroker
-from trading.control.state import RiskState, get_system_state, set_risk_state
+from trading.control.state import RiskState, TradingState, get_system_state, set_risk_state
 from trading.core.clock import Clock
 from trading.core.config import AppConfig
 from trading.core.enums import TimeInForce
@@ -26,6 +26,7 @@ from trading.data.provider import MarketDataProvider
 from trading.data.snapshot import MarketSnapshot, build_snapshot
 from trading.db.models.market import Instrument, MarketBar
 from trading.db.models.portfolio import Account, Position, TradingSession
+from trading.db.models.research import Strategy
 from trading.db.models.trading import Order, RiskDecisionRow
 from trading.execution.intents import IntentSource, ProposalRequest
 from trading.execution.manager import ExecutionManager
@@ -39,7 +40,9 @@ from trading.portfolio.valuation import (
     record_equity_snapshot,
     value_portfolio,
 )
+from trading.quant.flatten import FlattenParams
 from trading.quant.proposals import SCRATCH_ACCOUNT_PREFIXES, apply_approved
+from trading.quant.source import StrategyIntentSource
 from trading.risk.halts import evaluate_halts, start_session
 from trading.risk.models import ProposedOrder, RiskEngine
 from trading.risk.service import build_account_view, evaluate_and_record
@@ -201,6 +204,25 @@ class PaperTickProcessor:
         with self._sf() as session:
             return get_system_state(session).risk_state
 
+    def _flatten_due(self, now: datetime) -> bool:
+        # Only the strategy source can rebuild a flatten proposal after cancellation.
+        if not isinstance(self._intents, StrategyIntentSource):
+            return False
+        info = self._calendar.session_at(now)
+        cfg = self._config.strategies.get("eod_flatten")
+        if info is None or cfg is None or not cfg.enabled or cfg.shadow_only:
+            return False
+        with self._sf() as session:
+            strategy = session.get(Strategy, "eod_flatten")
+            if strategy is None or not strategy.enabled:
+                return False
+            params = FlattenParams.model_validate(strategy.params_json)
+            return get_system_state(session).trading_state is TradingState.FLATTENING or (
+                info.close_at - timedelta(minutes=params.flatten_minutes_before_close)
+                <= now
+                < info.close_at
+            )
+
     # ---- session lifecycle -----------------------------------------------------------------
 
     def reconcile(self) -> ReconciliationReport:
@@ -357,6 +379,11 @@ class PaperTickProcessor:
             )
             if self._needs_reconcile():
                 self.reconcile()
+            if self._flatten_due(self._clock.now()):
+                self._manager.cancel_flatten_exits(
+                    account_id=self._account_id,
+                    minute=minute.replace(second=0, microsecond=0),
+                )
         except LeaseLost:
             raise
         except TradingError as exc:

@@ -347,6 +347,11 @@ class ExecutionManager:
 
     def sync_fills(self) -> int:
         """Import broker fills (idempotent) and pick up broker-side cancels/expiries."""
+        applied = self._import_fills()
+        self._sync_terminal_states()
+        return applied
+
+    def _import_fills(self) -> int:
         with self._sf() as session:
             latest = session.scalar(select(func.max(FillRow.ts)))
         since = None if latest is None else latest - _FILL_OVERLAP
@@ -368,7 +373,6 @@ class ExecutionManager:
                     now=now,
                 )
                 applied += result is not None
-        self._sync_terminal_states()
         return applied
 
     def _sync_terminal_states(self) -> None:
@@ -436,12 +440,49 @@ class ExecutionManager:
                 return OrderStatus.CANCELED
             if status not in OPEN_AT_BROKER:
                 return status  # terminal, or SUBMITTING/UNKNOWN which reconciliation owns
-            try:
-                broker_state = self._broker.cancel_order(order.client_order_id)
-            except (BrokerRejected, BrokerTimeout, BrokerUnavailable) as exc:
-                _log.warning("cancel_failed", order_id=str(order_id), error=type(exc).__name__)
-                return status
-            if broker_state.status is BrokerOrderStatus.CANCELED:
-                transition_order(session, order, OrderStatus.CANCELED, reason=reason, now=now)
-                return OrderStatus.CANCELED
+            client_order_id = order.client_order_id
+        with self._sf.begin() as session:
+            self._fence(session)
+        try:
+            broker_state = self._broker.cancel_order(client_order_id)
+        except (BrokerRejected, BrokerTimeout, BrokerUnavailable) as exc:
+            _log.warning("cancel_failed", order_id=str(order_id), error=type(exc).__name__)
             return status
+        # Import fills produced during the cancellation BEFORE making the order terminal.
+        # If import fails, the reservation remains in place and the tick fails closed.
+        self._import_fills()
+        with self._sf.begin() as session:
+            now = self._fence(session)
+            order = session.scalars(
+                select(Order).where(Order.id == order_id).with_for_update()
+            ).one()
+            if OrderStatus(order.status) in OPEN_AT_BROKER:
+                target = {
+                    BrokerOrderStatus.CANCELED: OrderStatus.CANCELED,
+                    BrokerOrderStatus.EXPIRED: OrderStatus.EXPIRED,
+                }.get(broker_state.status)
+                if target is not None:
+                    transition_order(session, order, target, reason=reason, now=now)
+            return OrderStatus(order.status)
+
+    def cancel_flatten_exits(self, *, account_id: UUID, minute: datetime) -> None:
+        """Supersede resting exits without releasing uncertain broker reservations.
+
+        Keep this minute's flatten order: a repeated tick must not cancel an order whose
+        replacement proposal already has a persisted dedupe decision.
+        """
+        with self._sf() as session:
+            exits = session.execute(
+                select(Order.id, Order.created_at, OrderIntent.strategy_ids)
+                .join(OrderIntent, OrderIntent.id == Order.intent_id)
+                .where(
+                    Order.account_id == account_id,
+                    OrderIntent.is_entry.is_(False),
+                    Order.status.in_([s.value for s in OPEN_AT_BROKER]),
+                )
+            ).all()
+        for order_id, created_at, strategies in exits:
+            if "eod_flatten" in strategies and created_at >= minute:
+                continue
+            self.cancel(order_id, reason="FLATTEN_REPLACE")
+        self.sync_fills()
