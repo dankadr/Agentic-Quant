@@ -41,3 +41,20 @@ Wire percentage fields retain fractional units; display fields label percentages
 Research prerequisite floor: every traded symbol must have at least 35 bars and one quote on each
 of the thirty sessions. Below that the technical workflow records an insufficient-coverage skip.
 This floor is prerequisite availability, not a claim that sparse IEX data is adequate for inference.
+
+## Dashboard verification
+
+The overview uses the selected session's ending equity, net performance and realized/unrealized
+changes. Current exposure and positions are intentionally unavailable when inspecting an explicit
+historical date. Agent health is current; run timestamps are independently labelled, and the
+latest-per-agent query prevents frequently running agents from hiding daily agents. The API
+supports `/v1/agents/runs?latest_per_agent=true&date=YYYY-MM-DD`; the date is optional and uses UTC
+run-start boundaries. Missing requests show unavailable sections with retry, rather than zero
+performance or a healthy system. Equity charts offer keyboard inspection and a data table.
+
+For a dashboard release, run the dashboard API integration modules and browser UI/motion tests.
+Inspect desktop and phone layouts in both themes. Confirm no external requests, no script execution
+from agent text, focused drafts survive refresh, and reduced motion removes positional feedback.
+After rollout, authenticate with a temporary viewer principal, check revision/schema and the eight
+configured agents, request a daily report and latest-per-agent results, then disable the principal.
+Enabled agents can be idle outside their schedules; that is distinct from a successful job run.
