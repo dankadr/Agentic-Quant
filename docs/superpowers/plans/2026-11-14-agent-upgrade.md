@@ -20,3 +20,16 @@ Weekly 30-session collect/merge, train10/test5/holdout5 untouched; technical aft
 
 ## Task 5: integrate/verify/rollout
 Main 3bc0dab base; original dirty worktree preserved. Preserve operating config ($100k, $12k trade size) rather than old worktree $8k/$6k changes. No risk increase. Additive OpenAPI fields, eight agents in panel. Tests/unit+integration full suite, ruff/mypy, mocked model end-to-end, final review. No production deployment or main merge without review; provide launch instructions, stage reentry config proposals at next session. Ten-session retrospective, no minimum-trade quota.
+
+## Implementation verification
+
+Implemented on feature/agent-upgrade, base3bc0dab. Measurement/reentry/advisory/heavy workflows and review fixes committed. Original dirty workspace and production stack preserved.
+
+- Core replay/guards plus unit suite: 692 passed.
+- Replay rejections:6 passed; strategy replay:7 passed; browser:15 passed.
+- Chaos/restart cases:3 passed in initial broad run.
+- Broad run completed all integration cases before replay partitioning. Two fixture assertions (synthetic funding and pre-upgrade parameter presence) were corrected; full quant API and proposal modules passed on rerun. No remaining known failing case.
+- Ruff check/format:clean; mypy181 modules:clean; Compose config/whitespace:clean.
+- Read-only operating-data check: 2026-11-13 net -54.1438 reconciles realized -189.8835 and unrealized +135.7397; residual0. SPY display -0.7526%.
+
+Implementation defaults/limits: retain active $12k sizing and $100k funding; research requires35 bars and1 quote per traded symbol/session (not proof of data adequacy); ledger ADJUSTMENT is external capital and accounting corrections require classification review. Ambiguous recorded job/snapshot association skips paired comparison. No production deployment, merge or strategy activation performed. See docs/runbooks/agent-upgrade.md.
