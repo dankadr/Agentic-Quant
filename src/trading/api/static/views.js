@@ -1,5 +1,6 @@
 import { api, optional, checked } from "./api.js";
 import { barChart, heatmap, equityChart, meter } from "./charts.js";
+import { renderPerformance } from "./performance.js";
 import { agentState, agentTabs, loadAgent, renderAgentPanel } from "./agentpanel.js";
 import { append, badge, card, chip, clear, el, empty, fmtDateTime, fmtMoney, fmtPct, fmtTime, ago, glyph, num, signedUsd, stable, table, trend, usd } from "./util.js";
 
@@ -508,10 +509,11 @@ function mountStrategies(root) {
 
 function mountAgents(root, ctx) {
   const grid = el("div", null, "grid");
+  const performance = panel("Agent scorecards", { cls: "col-12" });
   const tabs = panel("Agents", { cls: "col-12" });
   const host = el("div", null, "stack col-12");
   const history = panel("Run history", { cls: "col-12" });
-  append(grid, tabs.node, host, history.node);
+  append(grid, performance.node, tabs.node, host, history.node);
   root.append(grid);
   let cache = [], list = null, current = null, drawn = null;
 
@@ -540,6 +542,7 @@ function mountAgents(root, ctx) {
     drawHistory();
   }
   return (data) => {
+    performance.set(data.performance, () => renderPerformance(data.performance, () => ctx.actions.refresh()));
     cache = (data.runs && data.runs.items) || [];
     list = data.list;
     if (data.current && data.current.name === agentState.selected) current = data.current;
@@ -690,7 +693,7 @@ export const VIEWS = {
   },
   agents: {
     label: "Agents", icon: "agents", mount: mountAgents,
-    fetch: () => Promise.all([optional("/v1/agents"), optional("/v1/agents/runs?limit=80"), loadAgent(agentState.selected)]).then(([list, runs, current]) => ({ list, runs, current })),
+    fetch: () => Promise.all([optional("/v1/agents"), optional("/v1/agents/runs?limit=80"), loadAgent(agentState.selected), checked("/v1/agents/performance?days=30")]).then(([list, runs, current, evidence]) => ({ list, runs, current, performance: evidence.data })),
   },
   research: {
     label: "Research", icon: "research", mount: mountResearch,

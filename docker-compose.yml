@@ -52,7 +52,7 @@ services:
       retries: 20
 
   migrate:
-    image: robinhood-trading:local
+    image: robinhood-trading:${TRADING_RELEASE_REVISION:-local}
     build: .
     command: ["migrate"]
     restart: "no"

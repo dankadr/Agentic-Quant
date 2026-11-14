@@ -400,3 +400,39 @@ def test_attention_includes_enabled_agent_failures(new_page, demo: Demo) -> None
     assert "data_quality needs attention" in page.locator(".attention-panel").inner_text()
     assert "no market data" in page.locator(".attention-panel").inner_text()
     assert page.locator(".attention-panel .alert.bad").filter(has_text="data_quality").count() == 1
+
+
+def test_agent_scorecards_separate_unknown_quality_and_trade_contribution(
+    new_page, demo: Demo
+) -> None:  # type: ignore[no-untyped-def]
+    page = new_page()
+    login(page, demo, route="agents")
+    page.wait_for_selector(".agent-scorecard", timeout=10000)
+    assert page.locator(".agent-scorecard").count() == 8
+    technical = page.locator('.agent-scorecard[data-agent="technical"]')
+    assert "No observations" in technical.inner_text()
+    assert "Not measured" in technical.inner_text()
+    assert "Current version" in technical.inner_text()
+    assert "Recorded-run completion" in page.inner_text("#view")
+    assert "Overall score" not in page.inner_text("#view")
+    page.locator(".evidence-cards").screenshot(path="/tmp/agent-scorecards-desktop.png")
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.locator(".agent-scorecard[data-agent=macro]").screenshot(
+        path="/tmp/agent-scorecard-mobile.png"
+    )
+
+
+def test_scorecard_failure_is_visible_and_retry_restores_cards(new_page, demo: Demo) -> None:  # type: ignore[no-untyped-def]
+    page = new_page()
+
+    def fail(route):  # type: ignore[no-untyped-def]
+        route.fulfill(status=503, content_type="application/json", body='{"detail":"not ready"}')
+
+    page.route("**/v1/agents/performance?*", fail)
+    login(page, demo, route="agents")
+    page.wait_for_selector("text=Performance evidence unavailable")
+    page.unroute("**/v1/agents/performance?*", fail)
+    page.get_by_role("button", name="Retry performance evidence").click()
+    page.wait_for_selector(".agent-scorecard", timeout=10000)
+    assert page.locator(".agent-scorecard").count() == 8
