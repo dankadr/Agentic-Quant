@@ -17,7 +17,9 @@ from sqlalchemy.orm import Session
 from trading.core.errors import TradingError
 from trading.db.models.research import Strategy, StrategyConfigProposal
 from trading.monitoring.audit import record_audit
+from trading.quant.orb import OrbParams
 from trading.quant.source import DEFAULT_FACTORIES
+from trading.quant.vwap import VwapParams
 
 PENDING, APPROVED, REJECTED, APPLIED, SUPERSEDED = (
     "PENDING_REVIEW",
@@ -106,7 +108,17 @@ def propose_config(
     if not parameters:
         raise ProposalInvalid("parameters must not be empty")
     _reject_floats(parameters, "parameters")
-    unknown = set(parameters) - set(strategy.params_json)
+    # Added, defaulted schema fields must be proposable on pre-upgrade stored rows.
+    # The full constructor below still rejects anything outside the strategy schema.
+    fields = (
+        OrbParams.model_fields
+        if strategy.id == "orb_v1"
+        else VwapParams.model_fields
+        if strategy.id == "vwap_v1"
+        else {}
+    )
+    defaulted = {name for name, field in fields.items() if not field.is_required()}
+    unknown = set(parameters) - set(strategy.params_json) - defaulted
     if unknown:
         raise ProposalInvalid(f"unknown parameters {sorted(unknown)}")
     _validate(strategy, {**strategy.params_json, **parameters}, universe)

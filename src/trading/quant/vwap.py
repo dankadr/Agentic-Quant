@@ -16,7 +16,7 @@ from trading.core.enums import Side
 from trading.core.money import NoFloatDecimal, ceil_to_increment, floor_to_increment
 from trading.data.models import Bar
 from trading.quant.indicators import rolling_std, slope_bps, vwap_series
-from trading.quant.models import Holding, SignalProposal, StrategyInput
+from trading.quant.models import Holding, SignalProposal, StrategyInput, entry_block_reason
 
 _CENT = Decimal("0.01")
 _BPS = Decimal(10000)
@@ -36,6 +36,8 @@ class VwapParams(BaseModel):
     max_spread_bps: NoFloatDecimal = Field(gt=0)
     trade_notional: NoFloatDecimal = Field(gt=0)
     signal_ttl_seconds: int = Field(gt=0, le=300)
+    max_entries_per_symbol_per_day: int = Field(default=1, gt=0, le=10)
+    reentry_cooldown_minutes: int = Field(default=30, ge=0, le=390)
 
 
 class VwapStrategy:
@@ -78,11 +80,13 @@ class VwapStrategy:
 
     def evaluate(self, data: StrategyInput) -> Sequence[SignalProposal]:
         p = self.p
+        self.entry_diagnostics = dict.fromkeys(p.symbols, "NO_SIGNAL")
         signals: list[SignalProposal] = []
         for symbol in p.symbols:
             view = data.snapshot.symbols.get(symbol)
             bars = tuple(b for b in data.bars.get(symbol, ()) if b.available_at <= data.now)
             if view is None or not view.tradable or view.quote is None or len(bars) < p.min_bars:
+                self.entry_diagnostics[symbol] = "DATA_UNAVAILABLE"
                 continue
             stats = self._stats(bars)
             if stats is None:
@@ -97,12 +101,14 @@ class VwapStrategy:
                 None,
             )
             if held is not None:
+                self.entry_diagnostics[symbol] = "HOLDING"
                 exit_signal = self._exit(data, symbol, held, bars[-1], view.quote.bid, vwap, z)
                 if exit_signal is not None:
                     signals.append(exit_signal)
                 continue
             entry = self._entry(data, symbol, bars, view.quote, vwap, z, std)
             if entry is not None:
+                self.entry_diagnostics[symbol] = "SIGNAL"
                 signals.append(entry)
         return signals
 
@@ -140,9 +146,18 @@ class VwapStrategy:
         std: Decimal,
     ) -> SignalProposal | None:
         p = self.p
-        if (self.strategy_id, symbol) in data.entered_today:
+        blocked = entry_block_reason(
+            data,
+            self.strategy_id,
+            symbol,
+            maximum=p.max_entries_per_symbol_per_day,
+            cooldown_minutes=p.reentry_cooldown_minutes,
+        )
+        if blocked is not None:
+            self.entry_diagnostics[symbol] = blocked
             return None
         if data.now >= data.session.close_at - _ENTRY_WINDOW_END_BEFORE_CLOSE:
+            self.entry_diagnostics[symbol] = "SESSION_ENTRY_CUTOFF"
             return None
         if quote.spread_bps > p.max_spread_bps:
             return None

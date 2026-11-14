@@ -1,7 +1,7 @@
 """Opening Range Breakout (long only). A research hypothesis, not validated edge.
 
 Entry: after the opening range completes, a closed bar above range-high (plus a buffer) on
-volume well above the range's average, with a sane spread, once per symbol per session.
+volume well above the range's average, with a sane spread and a bounded daily entry budget.
 Exit: stop at range-low, target at ``target_r`` multiples of the initial risk, or a time stop.
 """
 
@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from trading.core.enums import Side
 from trading.core.money import NoFloatDecimal, ceil_to_increment, floor_to_increment
 from trading.data.models import Bar
-from trading.quant.models import Holding, SignalProposal, StrategyInput
+from trading.quant.models import Holding, SignalProposal, StrategyInput, entry_block_reason
 
 _CENT = Decimal("0.01")
 _BPS = Decimal(10000)
@@ -36,6 +36,8 @@ class OrbParams(BaseModel):
     min_avg_volume: NoFloatDecimal = Field(ge=0)
     trade_notional: NoFloatDecimal = Field(gt=0)
     signal_ttl_seconds: int = Field(gt=0, le=300)
+    max_entries_per_symbol_per_day: int = Field(default=1, gt=0, le=10)
+    reentry_cooldown_minutes: int = Field(default=30, ge=0, le=390)
 
 
 class OrbStrategy:
@@ -64,6 +66,7 @@ class OrbStrategy:
 
     def evaluate(self, data: StrategyInput) -> Sequence[SignalProposal]:
         p = self.p
+        self.entry_diagnostics = dict.fromkeys(p.symbols, "NO_SIGNAL")
         open_at = data.session.open_at
         range_end = open_at + timedelta(minutes=p.opening_range_minutes)
         if data.now < range_end:
@@ -73,9 +76,11 @@ class OrbStrategy:
             view = data.snapshot.symbols.get(symbol)
             bars = tuple(b for b in data.bars.get(symbol, ()) if b.available_at <= data.now)
             if view is None or not view.tradable or view.quote is None or not bars:
+                self.entry_diagnostics[symbol] = "DATA_UNAVAILABLE"
                 continue
             range_bars = [b for b in bars if open_at <= b.ts < range_end]
             if len(range_bars) != p.opening_range_minutes:
+                self.entry_diagnostics[symbol] = "DATA_UNAVAILABLE"
                 continue  # a gap in the opening range: no trade rather than a guess
             range_high = max(b.high for b in range_bars)
             range_low = min(b.low for b in range_bars)
@@ -88,12 +93,14 @@ class OrbStrategy:
                 None,
             )
             if held is not None:
+                self.entry_diagnostics[symbol] = "HOLDING"
                 exit_signal = self._exit(data, symbol, held, bars[-1], view.quote.bid, range_low)
                 if exit_signal is not None:
                     signals.append(exit_signal)
                 continue
             entry = self._entry(data, symbol, bars, range_bars, range_high, range_low, view.quote)
             if entry is not None:
+                self.entry_diagnostics[symbol] = "SIGNAL"
                 signals.append(entry)
         return signals
 
@@ -126,9 +133,18 @@ class OrbStrategy:
         range_high: Decimal, range_low: Decimal, quote: Any,
     ) -> SignalProposal | None:  # fmt: skip
         p = self.p
-        if (self.strategy_id, symbol) in data.entered_today:
+        blocked = entry_block_reason(
+            data,
+            self.strategy_id,
+            symbol,
+            maximum=p.max_entries_per_symbol_per_day,
+            cooldown_minutes=p.reentry_cooldown_minutes,
+        )
+        if blocked is not None:
+            self.entry_diagnostics[symbol] = blocked
             return None
         if data.now >= data.session.close_at - _ENTRY_WINDOW_END_BEFORE_CLOSE:
+            self.entry_diagnostics[symbol] = "SESSION_ENTRY_CUTOFF"
             return None
         last = bars[-1]
         average_volume = sum((b.volume for b in range_bars), Decimal(0)) / len(range_bars)

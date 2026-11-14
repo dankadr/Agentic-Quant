@@ -36,6 +36,7 @@ from trading.quant.bars import load_session_bars
 from trading.quant.flatten import FlattenStrategy
 from trading.quant.holdings import (
     load_entered_today,
+    load_entry_history,
     load_holdings,
     load_in_flight,
     load_open_buy_by_strategy,
@@ -131,16 +132,48 @@ class StrategyIntentSource:
                 now=now,
                 session=info,
                 entered_today=load_entered_today(session, self._account_id, info.open_at),
+                entry_history=load_entry_history(session, self._account_id, info.open_at, now),
                 positions={p.symbol: p.qty for p in portfolio.positions},
                 flatten_now=trading_state is TradingState.FLATTENING,
             )
             signals: list[SignalProposal] = []
+            diagnostics: list[dict[str, Any]] = []
             for strategy in strategies:
                 try:
                     signals.extend(strategy.evaluate(data))
+                    diagnostics.extend(
+                        {
+                            "strategy_id": strategy.strategy_id,
+                            "symbol": symbol,
+                            "outcome": "NO_ENTRY",
+                            "reason": reason,
+                        }
+                        for symbol, reason in getattr(strategy, "entry_diagnostics", {}).items()
+                        if reason != "SIGNAL"
+                    )
                 except Exception:
                     _log.exception("strategy_failed", strategy=strategy.strategy_id)
+                    diagnostics.append(
+                        {
+                            "strategy_id": strategy.strategy_id,
+                            "outcome": "FAULT",
+                            "reason": "STRATEGY_FAILED",
+                        }
+                    )
             if not signals:
+                # Bounded snapshots distinguish ordinary no-signal minutes from faults.
+                if now.minute % 5 == 0:
+                    existing = session.scalar(
+                        select(AllocationDecision.id)
+                        .where(
+                            AllocationDecision.ts >= now.replace(second=0, microsecond=0),
+                            AllocationDecision.ts <= now,
+                            AllocationDecision.targets_json == {},
+                        )
+                        .limit(1)
+                    )
+                    if existing is None:
+                        self._persist(session, snapshot, (), (), {}, now, diagnostics)
                 return ()
             exposure = build_account_view(
                 session,
@@ -173,7 +206,9 @@ class StrategyIntentSource:
                 ),
             )
             result = self._allocator.allocate(signals, ctx)
-            self._persist(session, snapshot, signals, result.notes, result.targets, now)
+            self._persist(
+                session, snapshot, signals, result.notes, result.targets, now, diagnostics
+            )
         return result.requests
 
     def _macro_scale(self, session: Session, now: datetime) -> dict[str, Decimal]:
@@ -197,6 +232,7 @@ class StrategyIntentSource:
         notes: Sequence[AllocationNote],
         targets: Mapping[str, Any],
         now: datetime,
+        diagnostics: Sequence[dict[str, Any]] = (),
     ) -> None:
         by_id = {n.signal_id: n for n in notes}
         for sig in signals:
@@ -247,6 +283,7 @@ class StrategyIntentSource:
                             }
                             for n in notes
                         ]
+                        + list(diagnostics)
                     )
                 ),
             )

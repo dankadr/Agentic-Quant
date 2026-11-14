@@ -9,7 +9,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from trading.execution.state_machine import TERMINAL
-from trading.quant.models import Holding
+from trading.quant.models import EntryHistory, Holding
 
 _TERMINAL = tuple(s.value for s in TERMINAL)
 
@@ -40,7 +40,7 @@ def load_holdings(session: Session, account_id: UUID, as_of: datetime) -> tuple[
             " JOIN orders o ON o.id = f.order_id"
             " JOIN instruments i ON i.id = o.instrument_id"
             " WHERE o.account_id = :acct AND f.ts <= :as_of"
-            " ORDER BY a.strategy_id, i.symbol, f.ts, f.id"
+            " ORDER BY a.strategy_id, i.symbol, f.ts, f.execution_id"
         ),
         {"acct": account_id, "as_of": as_of},
     ).all()
@@ -110,3 +110,56 @@ def load_open_buy_by_strategy(session: Session, account_id: UUID) -> dict[str, D
         {"acct": account_id, "terminal": list(_TERMINAL)},
     ).all()
     return {r.strategy_id: Decimal(r.notional) for r in rows}
+
+
+def load_entry_history(
+    session: Session, account_id: UUID, since: datetime, as_of: datetime
+) -> dict[tuple[str, str], EntryHistory]:
+    """Reconstruct flat-to-long entries and fully-flat exits, including partial fills.
+
+    Replay earlier fills too: overnight holdings must not be mistaken for new session entries.
+    Pending orders reserve an entry slot without consuming the filled-entry budget.
+    """
+    rows = session.execute(
+        text(
+            "SELECT a.strategy_id, i.symbol, a.allocated_qty AS qty, f.ts"
+            " FROM strategy_attribution a JOIN fills f ON f.id = a.fill_id"
+            " JOIN orders o ON o.id = f.order_id JOIN instruments i ON i.id = o.instrument_id"
+            " WHERE o.account_id = :acct AND f.ts <= :at"
+            " ORDER BY f.ts, f.execution_id, a.strategy_id"
+        ),
+        {"acct": account_id, "at": as_of},
+    )
+    qtys: dict[tuple[str, str], Decimal] = {}
+    histories: dict[tuple[str, str], EntryHistory] = {}
+    for row in rows:
+        key = (row.strategy_id, row.symbol)
+        before = qtys.get(key, Decimal(0))
+        qty = Decimal(row.qty)
+        after = before + qty
+        qtys[key] = after
+        h = histories.get(key, EntryHistory())
+        if qty > 0 and before < DUST and after >= DUST:
+            if row.ts >= since:
+                h = EntryHistory(h.entries + 1, None)
+        elif before >= DUST and after < DUST and row.ts >= since:
+            h = EntryHistory(h.entries, row.ts)
+        # Do not carry yesterday's closed episodes into today's limits or cooldown.
+        if h.entries or h.last_exit_at is not None:
+            histories[key] = h
+    pending = session.execute(
+        text(
+            "SELECT DISTINCT s.strategy_id, i.symbol FROM orders o"
+            " JOIN order_intents n ON n.id=o.intent_id"
+            " JOIN instruments i ON i.id=o.instrument_id"
+            " CROSS JOIN LATERAL unnest(n.strategy_ids) AS s(strategy_id)"
+            " WHERE o.account_id=:acct AND o.created_at <= :at"
+            " AND o.status NOT IN :terminal"
+        ).bindparams(bindparam("terminal", expanding=True)),
+        {"acct": account_id, "at": as_of, "terminal": list(_TERMINAL)},
+    )
+    for row in pending:
+        key = (row.strategy_id, row.symbol)
+        h = histories.get(key, EntryHistory())
+        histories[key] = EntryHistory(h.entries, h.last_exit_at, True)
+    return histories

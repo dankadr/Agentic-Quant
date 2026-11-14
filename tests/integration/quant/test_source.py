@@ -403,3 +403,72 @@ def test_an_expired_macro_view_blocks_when_required_and_is_ignored_when_not(worl
     _macro_world(world, required=True)
     _macro_run(world, "1.0", valid_minutes=-5)  # already expired
     assert world.propose() == ()
+
+
+def test_no_signal_is_recorded_separately_from_faults_at_five_minute_sample(world: World) -> None:
+    world.orb_day(breakout_volume="1000")
+    at = t(20) + timedelta(seconds=5)
+    # Supply fresh data but no breakout confirmation.
+    for minute in range(16, 20):
+        world.bar("SPY", minute, "100.00", "100.10", "99.90", "100.00", "1000")
+    world.quote("SPY", at - timedelta(seconds=1), "99.99", "100.01")
+    assert world.propose(at) == ()
+    diagnostics = world.db.execute(
+        text("select rationale_json from allocation_decisions")
+    ).scalar_one()
+    spy = next(
+        d for d in diagnostics if d.get("strategy_id") == "orb_v1" and d.get("symbol") == "SPY"
+    )
+    assert (spy["outcome"], spy["reason"]) == ("NO_ENTRY", "NO_SIGNAL")
+
+
+def test_second_entry_uses_durable_exit_time_after_restart(world: World) -> None:
+    from dataclasses import replace
+
+    world.orb_day()
+    world.db.execute(
+        text(
+            "update strategies set params_json = params_json || '{\"max_entries_per_symbol_per_day\": 2,\"reentry_cooldown_minutes\": 30}'::jsonb where id='orb_v1'"
+        )
+    )
+    buy = new_order(
+        world.db, world.account_id, "entry1", qty="0.5", limit="101", strategy_ids=["orb_v1"]
+    )
+    apply_fill(
+        world.db,
+        account_id=world.account_id,
+        fill=replace(broker_fill(buy, "entry-fill", qty="0.5", price="100.30"), ts=t(16)),
+        settles_on=NEXT_DAY,
+        now=t(16),
+    )
+    sell = new_order(
+        world.db,
+        world.account_id,
+        "exit1",
+        side="SELL",
+        qty="0.5",
+        limit="100",
+        strategy_ids=["orb_v1"],
+    )
+    apply_fill(
+        world.db,
+        account_id=world.account_id,
+        fill=replace(broker_fill(sell, "exit-fill", qty="0.5", price="100.40"), ts=t(20)),
+        settles_on=NEXT_DAY,
+        now=t(20),
+    )
+    for minute in range(16, 51):
+        world.bar("SPY", minute, "100.05", "100.35", "100.05", "100.30", "1500")
+    world.quote("SPY", t(49), "100.29", "100.31")
+    assert world.propose(t(49) + timedelta(seconds=5)) == ()
+    world.source = StrategyIntentSource(
+        world.source._sf,
+        account_id=world.account_id,
+        calendar=world.calendar,
+        config=CFG,
+        instruments=world.instruments,
+        provider_name="replay",
+    )
+    world.quote("SPY", t(50), "100.29", "100.31")
+    (request,) = world.propose(t(50) + timedelta(seconds=5))
+    assert (request.strategy_id, request.side) == ("orb_v1", Side.BUY)

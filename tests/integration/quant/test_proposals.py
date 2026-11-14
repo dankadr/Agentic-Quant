@@ -170,3 +170,13 @@ def test_a_new_proposal_only_supersedes_the_same_proposers_pending_one(db: Sessi
         "PENDING_REVIEW",
         "PENDING_REVIEW",
     )
+
+
+def test_reentry_parameters_can_be_proposed_for_pre_upgrade_config(db: Session) -> None:
+    assert "max_entries_per_symbol_per_day" not in _params(db)[1]
+    p = _propose(db, {"max_entries_per_symbol_per_day": 2, "reentry_cooldown_minutes": 30})
+    assert p.status == "PENDING_REVIEW"
+    assert "max_entries_per_symbol_per_day" not in _params(db)[1]
+    review_proposal(db, p.id, approve=True, reviewer="human", now=T0)
+    apply_approved(db, now=T0 + timedelta(days=1))
+    assert _params(db)[1]["max_entries_per_symbol_per_day"] == 2

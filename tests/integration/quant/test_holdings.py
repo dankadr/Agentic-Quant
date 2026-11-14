@@ -51,3 +51,53 @@ def test_resting_buys_are_summed_per_strategy(db: Session) -> None:
     new_order(db, acct, "r2", qty="1.0", limit="50.00", strategy_ids=["orb_v1", "vwap_v1"])
     new_order(db, acct, "done", qty="1.0", limit="999", strategy_ids=["orb_v1"], status="FILLED")
     assert load_open_buy_by_strategy(db, acct) == {"orb_v1": D("125"), "vwap_v1": D("25")}
+
+
+def test_entry_history_replays_partial_fills_and_full_exits(db: Session) -> None:
+    from trading.quant import holdings
+
+    seed_strategies(db, CFG, now=T0)
+    acct = open_account(db)
+    buy = new_order(db, acct, "partial", qty="1", limit="200", strategy_ids=["orb_v1"])
+    for n, minute in enumerate((0, 1)):
+        fill = replace(
+            broker_fill(buy, f"part-{n}", qty="0.5", price="100"), ts=T0 + timedelta(minutes=minute)
+        )
+        apply_fill(db, account_id=acct, fill=fill, settles_on=NEXT_DAY, now=fill.ts)
+    _trade(db, acct, "s1", "SELL", "0.5", "101", T0 + timedelta(minutes=5))
+    db.flush()
+    h = holdings.load_entry_history(db, acct, T0, T0 + timedelta(minutes=6))[("orb_v1", "SPY")]
+    assert h.entries == 1
+    assert h.last_exit_at is None
+    _trade(db, acct, "s2", "SELL", "0.5", "101", T0 + timedelta(minutes=7))
+    h = holdings.load_entry_history(db, acct, T0, T0 + timedelta(minutes=8))[("orb_v1", "SPY")]
+    assert (h.entries, h.last_exit_at, h.pending) == (1, T0 + timedelta(minutes=7), False)
+    _trade(db, acct, "b2", "BUY", "0.5", "100", T0 + timedelta(minutes=40))
+    assert (
+        holdings.load_entry_history(db, acct, T0, T0 + timedelta(minutes=41))[
+            ("orb_v1", "SPY")
+        ].entries
+        == 2
+    )
+    # A fresh DB read has no process-memory dependency and does not see future fills.
+    assert (
+        holdings.load_entry_history(db, acct, T0, T0 + timedelta(minutes=6))[
+            ("orb_v1", "SPY")
+        ].entries
+        == 1
+    )
+
+
+def test_unfilled_cancellation_does_not_consume_but_open_order_blocks(db: Session) -> None:
+    from trading.quant import holdings
+
+    seed_strategies(db, CFG, now=T0)
+    acct = open_account(db)
+    order = new_order(
+        db, acct, "cancelled", qty="1", limit="100", strategy_ids=["orb_v1"], status="CANCELED"
+    )
+    assert holdings.load_entry_history(db, acct, T0, T0 + timedelta(minutes=5)) == {}
+    order.status = "ACKNOWLEDGED"
+    db.flush()
+    h = holdings.load_entry_history(db, acct, T0, T0 + timedelta(minutes=5))[("orb_v1", "SPY")]
+    assert (h.entries, h.last_exit_at, h.pending) == (0, None, True)

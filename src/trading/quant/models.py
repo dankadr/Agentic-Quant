@@ -74,6 +74,15 @@ class Holding:
 
 
 @dataclass(frozen=True)
+class EntryHistory:
+    """Durable session entry episodes and latest fully-flat transition."""
+
+    entries: int = 0
+    last_exit_at: datetime | None = None
+    pending: bool = False
+
+
+@dataclass(frozen=True)
 class StrategyInput:
     """Everything a strategy may look at: nothing here is later than ``now``."""
 
@@ -82,8 +91,9 @@ class StrategyInput:
     holdings: tuple[Holding, ...]
     now: datetime
     session: SessionInfo
-    # (strategy_id, symbol) pairs already entered this session: one entry per symbol per session
+    # Legacy input: without durable episode history an already-entered pair stays blocked.
     entered_today: frozenset[tuple[str, str]] = frozenset()
+    entry_history: Mapping[tuple[str, str], EntryHistory] = field(default_factory=dict)
     positions: Mapping[str, Decimal] = field(default_factory=dict)  # symbol -> total shares held
     # True while the system is FLATTENING: liquidate now, not only inside the pre-close window.
     flatten_now: bool = False
@@ -94,3 +104,23 @@ class SignalStrategy(Protocol):
     version: str
 
     def evaluate(self, data: StrategyInput) -> Sequence[SignalProposal]: ...
+
+
+def entry_block_reason(
+    data: StrategyInput, strategy_id: str, symbol: str, *, maximum: int, cooldown_minutes: int
+) -> str | None:
+    history = data.entry_history.get((strategy_id, symbol))
+    if history is None:
+        # Legacy inputs cannot establish a closed position or elapsed cooldown.
+        return "ENTRY_LIMIT" if (strategy_id, symbol) in data.entered_today else None
+    if history.pending:
+        return "ORDER_PENDING"
+    if history.entries >= maximum:
+        return "ENTRY_LIMIT"
+    if history.entries and history.last_exit_at is None:
+        return "HOLDING_OR_UNKNOWN_EXIT"
+    if history.last_exit_at is not None and (
+        data.now - history.last_exit_at < timedelta(minutes=cooldown_minutes)
+    ):
+        return "REENTRY_COOLDOWN"
+    return None
