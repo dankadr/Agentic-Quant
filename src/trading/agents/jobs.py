@@ -74,6 +74,7 @@ def evaluator_job(
         session_date=date.fromisoformat(str(payload["session_date"])),
         provider_name=provider_name,
         now=clock.now(),
+        clock=clock,
     )
     _log.info("agent_evaluator_done", status=status)
 
@@ -92,7 +93,9 @@ def fundamental_job(
         reason = "no_llm_key" if llm is None else "no_news_source"
         _skip(session_factory, config, fundamental, reason, clock.now())
         return
-    status = run_fundamental_agent(session_factory, llm, news, config=config, now=clock.now())
+    status = run_fundamental_agent(
+        session_factory, llm, news, config=config, now=clock.now(), clock=clock
+    )
     _log.info("agent_fundamental_done", status=status)
 
 

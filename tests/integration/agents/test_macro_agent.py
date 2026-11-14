@@ -282,3 +282,45 @@ def test_job_wrappers_respect_enablement_missing_llm_and_staleness(
         payload=payload,
     )  # type: ignore[arg-type]
     assert [status for status, _ in runs()][-1] in {"COMPLETED", "FAILED"}
+
+
+@pytest.mark.parametrize("usage_reported", [True, False])
+def test_macro_standardized_measurement_metadata(
+    seeded, db, session_factory, calendar, usage_reported
+):
+    class TimedLlm:
+        def complete_json(self, system, user, schema):
+            clock.advance(timedelta(seconds=7))
+            return LlmResult(
+                value=output(),
+                model="fake-model",
+                prompt_tokens=10,
+                completion_tokens=5,
+                usage_reported=usage_reported,
+            )
+
+    clock = ManualClock(NOW)
+    assert (
+        run_macro_agent(
+            session_factory,
+            TimedLlm(),
+            config=CFG,
+            calendar=calendar,
+            provider_name="replay",
+            clock=clock,
+        )
+        == "COMPLETED"
+    )
+    row = db.execute(
+        text(
+            "SELECT completed_at, available_at, prompt_tokens, completion_tokens, result_json FROM agent_runs"
+        )
+    ).one()
+    assert row.completed_at == NOW + timedelta(seconds=7)
+    assert row.available_at == row.completed_at
+    assert row.result_json["telemetry_version"] == "run-telemetry-v1"
+    assert row.result_json["completion_clock"] == "runtime"
+    assert row.result_json["usage_reported"] is usage_reported
+    assert (row.prompt_tokens, row.completion_tokens) == (
+        (10, 5) if usage_reported else (None, None)
+    )

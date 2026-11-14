@@ -175,7 +175,16 @@ def run_macro_agent(
             row.cost_usd = None  # unknown: a self-hosted endpoint has no metered cost
             if tokens is not None:
                 row.prompt_tokens, row.completion_tokens = tokens
-            row.result_json = json.loads(canonical_json(result))
+            row.result_json = json.loads(
+                canonical_json(
+                    {
+                        **result,
+                        "telemetry_version": "run-telemetry-v1",
+                        "completion_clock": "runtime",
+                        "usage_reported": tokens is not None,
+                    }
+                )
+            )
         return status
 
     if info is None:
@@ -225,7 +234,7 @@ def run_macro_agent(
             "tokens": {"prompt": result.prompt_tokens, "completion": result.completion_tokens},
         },
         used_model=result.model,
-        tokens=(result.prompt_tokens, result.completion_tokens),
+        tokens=(result.prompt_tokens, result.completion_tokens) if result.usage_reported else None,
     )
 
 

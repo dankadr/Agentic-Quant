@@ -598,7 +598,7 @@ def weekly_research(
             evaluate_holdout=False,
             strategy_version=versions[sid],
         )
-        run_technical_agent(sf, llm, config=config, strategy_id=sid, now=clock.now())
+        run_technical_agent(sf, llm, config=config, strategy_id=sid, now=clock.now(), clock=clock)
         with sf.begin() as session:
             record_experiment(
                 session,

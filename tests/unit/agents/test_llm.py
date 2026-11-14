@@ -150,3 +150,51 @@ def test_a_truncated_reply_is_never_parsed_from_a_nested_fragment() -> None:
 
     with pytest.raises(LlmInvalidOutput, match="truncated"):
         client(handler).complete_json("s", "u", Answer)
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        None,
+        {},
+        {"prompt_tokens": 3},
+        {"prompt_tokens": -1, "completion_tokens": 4},
+        {"prompt_tokens": True, "completion_tokens": 4},
+    ],
+)
+def test_missing_or_invalid_usage_is_not_reported_as_measured(usage):
+    body = {"choices": [{"message": {"content": '{"regime": "RANGING", "score": 1}'}}]}
+    if usage is not None:
+        body["usage"] = usage
+    result = client(lambda r: httpx.Response(200, json=body)).complete_json("s", "u", Answer)
+    assert result.usage_reported is False
+
+
+@pytest.mark.parametrize("missing_on", [0, 1])
+def test_repair_usage_is_unknown_if_either_response_omits_usage(missing_on):
+    bodies = [
+        {
+            "choices": [{"message": {"content": "invalid"}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7},
+        },
+        {
+            "choices": [{"message": {"content": '{"regime": "RANGING", "score": 1}'}}],
+            "usage": {"prompt_tokens": 13, "completion_tokens": 5},
+        },
+    ]
+    bodies[missing_on].pop("usage")
+    responses = iter(bodies)
+    result = client(lambda r: httpx.Response(200, json=next(responses))).complete_json(
+        "s", "u", Answer
+    )
+    assert result.usage_reported is False
+
+
+def test_explicit_zero_usage_remains_known():
+    body = {
+        "choices": [{"message": {"content": '{"regime": "RANGING", "score": 1}'}}],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+    }
+    result = client(lambda r: httpx.Response(200, json=body)).complete_json("s", "u", Answer)
+    assert result.usage_reported is True
+    assert (result.prompt_tokens, result.completion_tokens) == (0, 0)

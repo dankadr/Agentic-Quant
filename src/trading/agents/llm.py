@@ -45,6 +45,8 @@ class LlmResult[T: BaseModel]:
     model: str
     prompt_tokens: int
     completion_tokens: int
+    # False if any response (including schema repair) omitted valid usage counts.
+    usage_reported: bool = True
 
 
 def _extract_json(text: str) -> Any:
@@ -74,6 +76,14 @@ def _content(body: dict[str, Any]) -> str:
 def _usage(body: dict[str, Any]) -> tuple[int, int]:
     usage = body.get("usage") or {}
     return int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0))
+
+
+def _usage_reported(body: dict[str, Any]) -> bool:
+    usage = body.get("usage")
+    return isinstance(usage, dict) and all(
+        type(usage.get(key)) is int and usage[key] >= 0
+        for key in ("prompt_tokens", "completion_tokens")
+    )
 
 
 def _failure_reason(response: httpx.Response) -> str:
@@ -158,6 +168,7 @@ class LlmClient:
             {"role": "user", "content": user},
         ]
         body = self._post(self._payload(messages))
+        usage_reported = _usage_reported(body)
         prompt_tokens, completion_tokens = _usage(body)
         try:
             value = self._parse(body, schema)
@@ -174,6 +185,7 @@ class LlmClient:
                 },
             ]
             repaired = self._post(self._payload(messages))
+            usage_reported = usage_reported and _usage_reported(repaired)
             prompt_tokens += _usage(repaired)[0]
             completion_tokens += _usage(repaired)[1]
             value = self._parse(repaired, schema)
@@ -182,6 +194,7 @@ class LlmClient:
             model=self._config.model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            usage_reported=usage_reported,
         )
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:

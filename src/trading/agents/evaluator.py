@@ -6,7 +6,6 @@ in ``agent_runs`` for a human to read.
 
 import json
 from datetime import date, datetime
-from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -15,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from trading.agents.llm import LlmError, LlmInvalidOutput
 from trading.agents.macro import JsonLlm
+from trading.core.clock import Clock
 from trading.core.config import AppConfig
 from trading.core.hashing import canonical_json, content_hash
 from trading.core.time import isoformat_z
@@ -162,6 +162,7 @@ def run_evaluator_agent(
     session_date: date,
     provider_name: str,
     now: datetime,
+    clock: Clock | None = None,
 ) -> str:
     run_id: UUID = uuid4()
     model = config.agents.llm.model
@@ -177,14 +178,28 @@ def run_evaluator_agent(
             )
         )
 
-    def finish(status: str, result: dict[str, object], used_model: str = model) -> str:
+    tokens: tuple[int, int] | None = None
+    response_model = model
+
+    def finish(status: str, result: dict[str, object], used_model: str | None = None) -> str:
+        done = clock.now() if clock is not None else now
+        if clock is not None:
+            result = {
+                **result,
+                "telemetry_version": "run-telemetry-v1",
+                "completion_clock": "runtime",
+                "usage_reported": tokens is not None,
+            }
         with session_factory.begin() as session:
             row = session.get(AgentRun, run_id)
             assert row is not None  # noqa: S101 - inserted above
             row.status = status
-            row.completed_at = now
-            row.model = used_model
-            row.cost_usd = Decimal(0)
+            row.completed_at = done
+            row.available_at = done if status == "COMPLETED" else None
+            row.model = used_model or response_model
+            row.cost_usd = None  # unmetered self-hosted inference cost is unknown
+            if tokens is not None:
+                row.prompt_tokens, row.completion_tokens = tokens
             row.result_json = json.loads(canonical_json(result))
         return status
 
@@ -199,6 +214,9 @@ def run_evaluator_agent(
     except LlmError as exc:
         _log.warning("evaluator_llm_failed", error=str(exc))
         return finish("FAILED", {"error": str(exc), "input_hash": digest})
+    response_model = result.model
+    if result.usage_reported:
+        tokens = (result.prompt_tokens, result.completion_tokens)
     out = result.value
     try:
         rendered = render_review(report, out)
