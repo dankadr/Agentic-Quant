@@ -48,8 +48,15 @@ def test_backtest_prepares_causal_macro_history_after_reset(session_factory, db,
         config=load_config(Path("configs")),
         minutes_per_day=2,
         prepare=prepare,
+        tick_times={at.replace(minute=31): at.replace(minute=31, second=5, microsecond=100000)},
     )
     with session_factory() as session:
+        ticks = (
+            session.execute(text("SELECT ts FROM equity_snapshots WHERE kind='INTRADAY'"))
+            .scalars()
+            .all()
+        )
+        assert ticks == [at.replace(minute=31, second=5, microsecond=100000)]
         assert (
             session.execute(
                 text("SELECT count(*) FROM agent_runs WHERE result_json->>'marker'='history'")

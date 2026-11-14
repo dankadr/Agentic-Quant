@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -95,3 +95,23 @@ def test_empty_quote_collection_is_not_usable_research(tmp_path: Path):
     )
     (tmp_path / "quotes.csv").write_text("symbol,ts,bid,ask\n")
     assert not heavy.research_data_ready(tmp_path, [date(2026, 11, 13)], ["SPY"])
+
+
+def test_tick_timeline_uses_durable_job_minute_not_snapshot_floor():
+    minute = datetime(2026, 11, 13, 14, 31, tzinfo=UTC)
+    observed = minute.replace(minute=32, second=2)
+    completed = observed.replace(second=3)
+    assert heavy.recorded_timeline([observed], [(minute, completed)]) == {minute: observed}
+    assert heavy.recorded_timeline([observed], []) is None
+
+
+def test_reordered_completed_job_minutes_are_not_replayed():
+    first = datetime(2026, 11, 13, 14, 31, tzinfo=UTC)
+    second = first.replace(minute=32)
+    assert (
+        heavy.recorded_timeline(
+            [second.replace(second=10), second.replace(second=20)],
+            [(second, second.replace(second=11)), (first, second.replace(second=21))],
+        )
+        is None
+    )

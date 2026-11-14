@@ -110,6 +110,8 @@ function markNav() {
 // ---------- rendering ----------
 function mountRoute(animate) {
   const view = clear($("view"));
+  view.dataset.route = state.route;
+  view.setAttribute("aria-busy", "true");
   const ctx = context();
   state.update = VIEWS[state.route].mount(view, ctx);
   state.mounted = state.route;
@@ -134,6 +136,7 @@ async function refresh(forceMount) {
     else if (state.route === "research" && data.proposals) state.pending = data.proposals.items.filter((p) => p.status === "PENDING_REVIEW").length;
     renderHeader();
     state.update(data, ctx);
+    $("view").setAttribute("aria-busy", "false");
     $("updated").textContent = "updated " + new Date().toLocaleTimeString("en-GB", { hour12: false });
     showApp(true);
   } catch (e) {

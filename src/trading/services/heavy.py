@@ -84,6 +84,7 @@ def compare_entries(
     day: date,
     runner: Callable[..., BacktestResult] = run_backtest,
     prepare: Callable[[sessionmaker[Session]], None] | None = None,
+    tick_times: dict[datetime, datetime] | None = None,
 ) -> dict[str, Any]:
     """Paired fresh accounts, identical input, only the entry limit differs."""
     result: dict[str, Any] = {}
@@ -91,6 +92,8 @@ def compare_entries(
         kwargs: dict[str, Any] = {}
         if prepare is not None:
             kwargs["prepare"] = prepare
+        if tick_times is not None:
+            kwargs["tick_times"] = tick_times
         run = runner(
             scratch,
             fixtures_dir=fixtures,
@@ -309,6 +312,34 @@ def retrospective(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def recorded_timeline(
+    observed: list[datetime], jobs: list[tuple[datetime, datetime]]
+) -> dict[datetime, datetime] | None:
+    """Associate serial executor snapshots with durable successful job completions.
+
+    Any missing snapshot, duplicate minute, reordered completion or overlapping association
+    is ambiguous and must be skipped rather than inferred from wall-clock minute floors.
+    """
+    jobs = sorted(jobs, key=lambda row: row[1])
+    observed = sorted(observed)
+    if len(jobs) != len(observed) or not jobs:
+        return None
+    result = {}
+    previous_complete = None
+    previous_minute = None
+    for stamp, (minute, complete) in zip(observed, jobs, strict=True):
+        if previous_minute is not None and minute <= previous_minute:
+            return None
+        if minute in result or not minute <= stamp <= complete:
+            return None
+        if previous_complete is not None and stamp <= previous_complete:
+            return None
+        result[minute] = stamp
+        previous_complete = complete
+        previous_minute = minute
+    return result
+
+
 def comparison_job(
     sf: sessionmaker[Session],
     scratch: sessionmaker[Session],
@@ -340,6 +371,41 @@ def comparison_job(
         config = config.model_copy(
             update={"system": config.system.model_copy(update={"starting_cash_usd": start_equity})}
         )
+    with sf() as session:
+        observed = list(
+            session.execute(
+                text(
+                    "SELECT e.ts FROM equity_snapshots e JOIN accounts a"
+                    " ON a.id=e.account_id WHERE a.name='paper-primary' AND e.kind='INTRADAY'"
+                    " AND e.ts>=:s AND e.ts<:e ORDER BY e.ts"
+                ),
+                {"s": info.open_at, "e": info.close_at + timedelta(minutes=1)},
+            ).scalars()
+        )
+    with sf() as session:
+        jobs = [
+            (datetime.fromisoformat(row.payload_json["minute"]), row.updated_at)
+            for row in session.execute(
+                text(
+                    "SELECT payload_json, updated_at FROM jobs"
+                    " WHERE kind='paper_tick' AND state='SUCCEEDED' AND attempts=1"
+                    " AND scheduled_at>=:s AND scheduled_at<:e ORDER BY updated_at"
+                ),
+                {"s": info.open_at, "e": info.close_at + timedelta(minutes=1)},
+            )
+        ]
+    tick_times = recorded_timeline(observed, jobs)
+    if not tick_times:
+        _record(
+            sf,
+            kind="PAPER_COMPARISON",
+            now=now,
+            status="SKIPPED",
+            metrics={"skip_reason": "no_recorded_tick_timeline"},
+            params={},
+            day=day,
+        )
+        return
     directory = root / "comparisons" / day.isoformat()
     if not export_recorded(sf, directory, provider=provider_name, info=info, as_of=now):
         _record(
@@ -356,6 +422,9 @@ def comparison_job(
         "data": fixture_fingerprint(directory),
         "config": content_hash(config.model_dump()),
         "versions": versions,
+        "tick_timeline": content_hash(
+            {k.isoformat(): v.isoformat() for k, v in tick_times.items()}
+        ),
         "day": day.isoformat(),
     }
     with sf() as session:
@@ -374,6 +443,7 @@ def comparison_job(
         config=config,
         day=day,
         prepare=_macro_prepare(sf, info.close_at),
+        tick_times=tick_times,
     )
     metrics["limitations"] = [
         "paired fresh simulated accounts; not a reconstruction of live fills",

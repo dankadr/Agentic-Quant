@@ -114,6 +114,7 @@ def run_backtest(
     minutes_per_day: int | None = None,
     reset: bool = True,
     prepare: Callable[[sessionmaker[Session]], None] | None = None,
+    tick_times: dict[datetime, datetime] | None = None,
 ) -> BacktestResult:
     """Replay every session in ``[start, end]``. ``minutes_per_day`` only shortens sessions."""
     if not account_name.startswith(SCRATCH_ACCOUNT_PREFIXES):
@@ -167,7 +168,12 @@ def run_backtest(
                 intents=None,  # strategies
             )
             drive_session(
-                runtime.processor, session_factory, clock, info, max_minutes=minutes_per_day
+                runtime.processor,
+                session_factory,
+                clock,
+                info,
+                max_minutes=minutes_per_day,
+                tick_times=tick_times,
             )
         finally:
             with session_factory.begin() as session:

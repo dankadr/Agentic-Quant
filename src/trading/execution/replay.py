@@ -125,6 +125,7 @@ def drive_session(
     first_minute: datetime | None = None,
     stop_after: datetime | None = None,
     max_minutes: int | None = None,
+    tick_times: dict[datetime, datetime] | None = None,
 ) -> bool:
     """Run one session through the production tick path. Returns True if it stopped early.
 
@@ -152,7 +153,10 @@ def drive_session(
             return True
         if max_minutes is not None and ticks >= max_minutes:
             break
-        clock.set(minute + timedelta(seconds=5))
+        if tick_times is not None and minute not in tick_times:
+            minute += _ONE_MINUTE
+            continue
+        clock.set(tick_times[minute] if tick_times is not None else minute + timedelta(seconds=5))
         processor.run_tick(minute)
         minute += _ONE_MINUTE
         ticks += 1
