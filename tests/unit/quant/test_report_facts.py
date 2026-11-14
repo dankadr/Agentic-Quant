@@ -30,10 +30,10 @@ def test_model_explanations_reference_deterministic_metrics() -> None:
         findings=[
             {
                 "metric_id": "benchmark.return",
-                "explanation": "A single session cannot establish an edge.",
+                "explanation_code": "SMALL_SAMPLE",
             }
         ],
-        suggestions=["Investigate execution quality."],
+        suggestions=["REVIEW_EXECUTION"],
     )
     review = render_review(report, out)
     assert "-0.7526%" in review["findings"][0]
@@ -50,5 +50,16 @@ def test_numeric_model_claims_and_unknown_metric_references_are_rejected() -> No
     with pytest.raises(ValueError, match="unknown metric"):
         render_review(
             {"date": "2026-11-13", "ticks": 0},
-            EvaluatorOutput(findings=[{"metric_id": "invented", "explanation": "Missing."}]),
+            EvaluatorOutput(
+                findings=[{"metric_id": "invented", "explanation_code": "OBSERVATION"}]
+            ),
         )
+
+
+def test_spelled_out_fabricated_amounts_cannot_enter_the_review() -> None:
+    with pytest.raises(ValidationError):
+        EvaluatorOutput(
+            findings=[{"metric_id": "equity.pnl", "explanation": "lost one million dollars"}]
+        )
+    with pytest.raises(ValidationError):
+        EvaluatorOutput(suggestions=["Loss is one million dollars; double the size."])

@@ -36,7 +36,7 @@ def _entries(session: Session, account_id: Any, start: datetime, end: datetime) 
     return [
         r
         for r in load_roundtrips(session, account_id, end=end)
-        if r.entry_ts >= start and r.strategy_id != "eod_flatten"
+        if r.decision_ts >= start and r.strategy_id != "eod_flatten"
     ]
 
 
@@ -70,11 +70,11 @@ def run_consensus_agent(
         found = _account(session)
         rows = _entries(session, found[0], start, end) if found else []
         for r in rows:
-            view = latest_macro_view(session, r.entry_ts)
+            view = latest_macro_view(session, r.decision_ts)
             defensive = view is not None and (
                 view.regime in DEFENSIVE_REGIMES or view.risk_multiplier < MIN_MULTIPLIER
             )
-            conflict = _conflict(session, r.strategy_id, r.symbol, r.entry_ts)
+            conflict = _conflict(session, r.strategy_id, r.symbol, r.decision_ts)
             conflicts += 1 if conflict else 0
             pnl = Decimal(r.pnl)
             base += pnl

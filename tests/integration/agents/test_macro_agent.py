@@ -186,8 +186,8 @@ def test_evaluator_writes_a_narrative_and_has_no_effect_on_trading(
     db.commit()
     llm = FakeLlm(
         EvaluatorOutput(
-            findings=[{"metric_id": "session.ticks", "explanation": "No activity to assess."}],
-            suggestions=["Wait for a larger sample."],
+            findings=[{"metric_id": "session.ticks", "explanation_code": "OBSERVATION"}],
+            suggestions=["MORE_HISTORY"],
         )
     )  # type: ignore[arg-type]
     status = run_evaluator_agent(
@@ -198,7 +198,9 @@ def test_evaluator_writes_a_narrative_and_has_no_effect_on_trading(
         text("select agent_name, result_json from agent_runs where agent_name = 'evaluator'")
     ).one()
     assert "A single session cannot establish an edge." in row.result_json["summary"]
-    assert row.result_json["findings"] == ["Recorded ticks: 0. No activity to assess."]
+    assert row.result_json["findings"] == [
+        "Recorded ticks: 0. Review this recorded metric alongside the rest of the session."
+    ]
     assert row.result_json["input_hash"]
     assert json.loads(llm.last_user)["date"] == "2026-10-19"
     assert latest_macro_view(db, NOW) is None  # the evaluator never produces a trading view

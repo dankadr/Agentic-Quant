@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
-from tests.factories import T0, make_snapshot
+from tests.factories import T0, make_intent, make_order, make_risk_decision, make_snapshot
 from tests.integration.portfolio.helpers import (
     NEXT_DAY,
     broker_fill,
@@ -17,6 +17,7 @@ from tests.integration.portfolio.helpers import (
 )
 from trading.agents.consensus import run_consensus_agent
 from trading.core.config import load_config
+from trading.db.models.portfolio import Account
 from trading.portfolio.ledger import apply_fill
 from trading.quant.registry import seed_strategies
 
@@ -45,11 +46,37 @@ def macro(db: Session, regime: str, multiplier: str, at: datetime) -> None:
 
 
 def trade(
-    db: Session, acct, coid: str, strategy: str, symbol: str, entry: str, exit_: str, at: datetime
+    db: Session,
+    acct,
+    coid: str,
+    strategy: str,
+    symbol: str,
+    entry: str,
+    exit_: str,
+    at: datetime,
+    *,
+    decided_at: datetime | None = None,
 ) -> None:  # type: ignore[no-untyped-def]
-    buy = new_order(
-        db, acct, f"{coid}b", qty="1", limit="999", strategy_ids=[strategy], symbol=symbol
+    decision_at = decided_at or at
+    account = db.get(Account, acct)
+    assert account is not None
+    inst = get_instrument(db, symbol)
+    snapshot = make_snapshot(db, decision_at, data_hash=f"decision-{coid}")
+    risk = make_risk_decision(
+        db, account, inst, snapshot, dedupe_key=f"risk-{coid}", now=decision_at
     )
+    intent = make_intent(
+        db,
+        account,
+        inst,
+        risk,
+        client_order_id=f"{coid}b",
+        quantity="1",
+        limit_price="999",
+        strategy_ids=[strategy],
+        now=decision_at,
+    )
+    buy = make_order(db, intent, status="ACKNOWLEDGED", now=decision_at)
     apply_fill(db, account_id=acct, fill=replace(broker_fill(buy, f"{coid}be", qty="1", price=entry, symbol=symbol), ts=at), settles_on=NEXT_DAY, now=at)  # fmt: skip
     sell = new_order(
         db,
@@ -185,4 +212,24 @@ def test_repeated_entries_are_scored_against_each_entrys_own_macro_view(
     assert result["entries"] == 2
     assert (result["agreed"], result["vetoed"]) == (1, 1)
     assert D(result["base_pnl"]) == D("-1")
+    assert D(result["consensus_pnl"]) == D("2")
+
+
+def test_information_between_order_decision_and_fill_cannot_veto_the_entry(
+    db: Session, session_factory: sessionmaker[Session]
+) -> None:
+    seed_strategies(db, CFG, now=T0)
+    acct = open_account(db)
+    decision = OPEN + timedelta(minutes=20)
+    filled = decision + timedelta(minutes=1)
+    macro(db, "TRENDING", "1", decision - timedelta(minutes=1))
+    macro(db, "HIGH_VOLATILITY", "0.2", decision + timedelta(seconds=30))
+    signal(db, "vwap_v1", "SPY", "SELL", decision + timedelta(seconds=40))
+    trade(db, acct, "pending", "orb_v1", "SPY", "100", "102", filled, decided_at=decision)
+    db.commit()
+    run_consensus_agent(session_factory, config=CFG, session_date=DAY, now=END)
+    result = db.execute(
+        text("SELECT result_json FROM agent_runs WHERE agent_name='consensus'")
+    ).scalar_one()
+    assert (result["agreed"], result["vetoed"], result["conflicts"]) == (1, 0, 0)
     assert D(result["consensus_pnl"]) == D("2")

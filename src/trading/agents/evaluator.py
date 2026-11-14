@@ -7,9 +7,10 @@ in ``agent_runs`` for a human to read.
 import json
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.agents.llm import LlmError, LlmInvalidOutput
@@ -23,46 +24,73 @@ from trading.monitoring.report import daily_report
 
 _log = get_logger(__name__)
 AGENT_NAME = "evaluator"
-PROMPT_VERSION = "evaluator-v2"
+PROMPT_VERSION = "evaluator-v3"
 
-SYSTEM_PROMPT = """Review an automated PAPER trading session. The report includes deterministic
-facts indexed by metric id. Only explain those facts qualitatively; do not compute or repeat any
-numeric values, amounts, percentages, dates or counts in your text. Numbers are rendered by code.
-One session is insufficient to establish profitability. Slippage estimates already affect fill
-prices and must not be subtracted again. Attribution is realized P&L, not total equity change.
+ExplanationCode = Literal[
+    "SMALL_SAMPLE",
+    "CHECK_DATA",
+    "INCLUDED_COSTS",
+    "REALIZED_ONLY",
+    "RECONCILIATION",
+    "BENCHMARK_CONTEXT",
+    "OBSERVATION",
+]
+SuggestionCode = Literal[
+    "INVESTIGATE_DATA",
+    "REVIEW_EXECUTION",
+    "MORE_HISTORY",
+    "REVIEW_RECONCILIATION",
+    "REVIEW_STRATEGY",
+]
+EXPLANATIONS: dict[str, str] = {
+    "SMALL_SAMPLE": "A single session cannot establish an edge.",
+    "CHECK_DATA": "Check completeness and freshness before interpreting the result.",
+    "INCLUDED_COSTS": "Execution costs already affect recorded P&L.",
+    "REALIZED_ONLY": "Realized attribution is not the full change in account equity.",
+    "RECONCILIATION": "Investigate any unexplained accounting residual.",
+    "BENCHMARK_CONTEXT": "The benchmark supplies context, not evidence of a durable edge.",
+    "OBSERVATION": "Review this recorded metric alongside the rest of the session.",
+}
+SUGGESTIONS: dict[str, str] = {
+    "INVESTIGATE_DATA": "Investigate data completeness and freshness.",
+    "REVIEW_EXECUTION": "Investigate execution quality.",
+    "MORE_HISTORY": "Collect more independent sessions before drawing conclusions.",
+    "REVIEW_RECONCILIATION": "Review accounting and attribution reconciliation.",
+    "REVIEW_STRATEGY": "Review strategy evidence before proposing parameter changes.",
+}
+EXPLANATION_SCOPES = {
+    "CHECK_DATA": "data.",
+    "INCLUDED_COSTS": "costs.",
+    "REALIZED_ONLY": "strategy.",
+    "RECONCILIATION": "equity.reconciliation",
+    "BENCHMARK_CONTEXT": "benchmark.return",
+}
+
+SYSTEM_PROMPT = """Review an automated PAPER trading session. Facts are indexed by metric id.
+Select findings and suggestions using only the codes below; no free text is accepted or displayed.
+All displayed explanations and numeric values are rendered by deterministic code.
+Explanation codes: SMALL_SAMPLE, CHECK_DATA (data metrics), INCLUDED_COSTS (cost metrics),
+REALIZED_ONLY (strategy metrics), RECONCILIATION (equity.reconciliation),
+BENCHMARK_CONTEXT (benchmark.return), OBSERVATION.
+Suggestion codes: INVESTIGATE_DATA, REVIEW_EXECUTION, MORE_HISTORY,
+REVIEW_RECONCILIATION, REVIEW_STRATEGY.
 Return ONLY JSON:
-{"findings": [{"metric_id": "an id from facts", "explanation": "qualitative explanation"}],
- "suggestions": ["qualitative suggestion without numbers"]}.
-You cannot act, change settings, or place orders. No digits or percent signs in explanations.
+{"findings": [{"metric_id": "an id from facts", "explanation_code": "SMALL_SAMPLE"}],
+ "suggestions": ["MORE_HISTORY"]}.
+You cannot act, change settings, or place orders.
 """
 
 
 class MetricFinding(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     metric_id: str = Field(min_length=1, max_length=120)
-    explanation: str = Field(min_length=1, max_length=500)
-
-    @field_validator("explanation")
-    @classmethod
-    def no_numeric_claims(cls, value: str) -> str:
-        if any(c.isnumeric() for c in value) or "%" in value or "$" in value:
-            raise ValueError("numeric claims must come from deterministic facts")
-        return value
+    explanation_code: ExplanationCode
 
 
 class EvaluatorOutput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     findings: list[MetricFinding] = Field(default_factory=list, max_length=10)
-    suggestions: list[str] = Field(default_factory=list, max_length=6)
-
-    @field_validator("suggestions")
-    @classmethod
-    def no_numeric_suggestions(cls, values: list[str]) -> list[str]:
-        for value in values:
-            MetricFinding.no_numeric_claims(value)
-            if len(value) > 500:
-                raise ValueError("suggestion too long")
-        return values
+    suggestions: list[SuggestionCode] = Field(default_factory=list, max_length=6)
 
 
 def report_facts(report: dict[str, object]) -> dict[str, str]:
@@ -110,7 +138,10 @@ def render_review(report: dict[str, object], out: EvaluatorOutput) -> dict[str, 
     for finding in out.findings:
         if finding.metric_id not in facts:
             raise ValueError(f"unknown metric {finding.metric_id!r}")
-        findings.append(f"{facts[finding.metric_id]} {finding.explanation}")
+        scope = EXPLANATION_SCOPES.get(finding.explanation_code)
+        if scope and not finding.metric_id.startswith(scope):
+            raise ValueError("explanation code does not apply to metric")
+        findings.append(f"{facts[finding.metric_id]} {EXPLANATIONS[finding.explanation_code]}")
     summary = (
         f"Paper session {report.get('date')}. {facts.get('equity.pnl', facts['session.ticks'])} "
         "A single session cannot establish an edge."
@@ -118,7 +149,7 @@ def render_review(report: dict[str, object], out: EvaluatorOutput) -> dict[str, 
     return {
         "summary": summary,
         "findings": findings,
-        "suggestions": out.suggestions,
+        "suggestions": [SUGGESTIONS[code] for code in out.suggestions],
         "facts": facts,
     }
 
