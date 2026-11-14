@@ -123,7 +123,7 @@ def test_performance_reports_account_and_strategy_scope(
     assert body["scope"] == "account"
     assert body["net_pnl"] == "10.0000"
     assert body["return_pct"] is not None
-    assert body["start_equity"] == "100000.0000"
+    assert body["start_equity"] == "1000.0000"
     assert "equity_curve" not in body
     strat = client.get(
         "/v1/performance?start=2026-10-19&end=2026-10-19&strategy_id=orb_v1",

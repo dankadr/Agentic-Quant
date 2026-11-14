@@ -37,3 +37,7 @@ Review sampled NO_ENTRY reasons, invalid quotes, missing data, agent errors and 
 ## Accounting interpretation
 
 Wire percentage fields retain fractional units; display fields label percentages. Attribution is realized performance, while account equity includes unrealized changes. Reconciliation exposes unexplained residuals. Ledger INITIAL_DEPOSIT and ADJUSTMENT entries (and their reversals) are external capital; dividends are performance. Classify any accounting correction before treating an adjustment as a deposit. Slippage is already reflected in simulated execution prices and is never deducted a second time.
+
+Research prerequisite floor: every traded symbol must have at least 35 bars and one quote on each
+of the thirty sessions. Below that the technical workflow records an insufficient-coverage skip.
+This floor is prerequisite availability, not a claim that sparse IEX data is adequate for inference.
