@@ -346,3 +346,8 @@ dl.kv dd { min-width: 0; overflow-wrap: anywhere; }
   .performance-layout { gap: 16px; }
 }
 .agents-status td:first-child { min-width: 90px; overflow-wrap: normal; }
+
+/* A failed refresh must stay visible above previously loaded session data. */
+.refresh-error { margin: 18px 28px 0; }
+@media (min-width: 1000px) { .refresh-error { margin-left: 248px; } }
+@media (max-width: 560px) { .refresh-error { margin: 18px 18px 0; } }
