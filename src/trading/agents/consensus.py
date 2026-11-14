@@ -22,32 +22,22 @@ from trading.core.hashing import canonical_json
 from trading.core.time import isoformat_z
 from trading.db.models.research import AgentRun
 from trading.monitoring.report import _account
+from trading.quant.roundtrips import Roundtrip, load_roundtrips
 
 AGENT_NAME = "consensus"
-PROMPT_VERSION = "consensus-v1"
+PROMPT_VERSION = "consensus-v2"
 DEFENSIVE_REGIMES = frozenset({"HIGH_VOLATILITY", "UNKNOWN"})
 MIN_MULTIPLIER = Decimal("0.5")
 CONFLICT_BEFORE = timedelta(seconds=120)  # look back only: nothing after the entry is usable
 _ZERO = Decimal(0)
 
 
-def _entries(session: Session, account_id: Any, start: datetime, end: datetime) -> list[Any]:
-    return list(
-        session.execute(
-            text(
-                "SELECT a.strategy_id, i.symbol,"
-                " min(f.ts) FILTER (WHERE a.allocated_qty > 0) AS entry_ts,"
-                " coalesce(sum(a.pnl), 0) AS pnl"
-                " FROM strategy_attribution a JOIN fills f ON f.id = a.fill_id"
-                " JOIN orders o ON o.id = f.order_id JOIN instruments i ON i.id = o.instrument_id"
-                " WHERE o.account_id = :acct AND f.ts >= :s AND f.ts < :e"
-                " AND a.strategy_id <> 'eod_flatten'"
-                " GROUP BY a.strategy_id, i.symbol"
-                " HAVING bool_or(a.allocated_qty > 0) ORDER BY entry_ts, a.strategy_id, i.symbol"
-            ),
-            {"acct": account_id, "s": start, "e": end},
-        )
-    )
+def _entries(session: Session, account_id: Any, start: datetime, end: datetime) -> list[Roundtrip]:
+    return [
+        r
+        for r in load_roundtrips(session, account_id, end=end)
+        if r.entry_ts >= start and r.strategy_id != "eod_flatten"
+    ]
 
 
 def _conflict(session: Session, strategy: str, symbol: str, at: datetime) -> bool:
@@ -108,7 +98,11 @@ def run_consensus_agent(
         "missed_pnl": missed,
         "value_added": consensus - base,
         "verdict": "SHADOW_ONLY",
-        "limitations": ["one session is far too small a sample to judge consensus"],
+        "limitations": [
+            "one session is far too small a sample to judge consensus",
+            "closed attributed episodes only; open positions are excluded",
+            "filtered-trade attribution is not a full portfolio replay",
+        ],
     }
     with session_factory.begin() as session:
         session.add(

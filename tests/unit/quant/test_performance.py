@@ -60,3 +60,10 @@ def test_no_floats_leak(fn) -> None:  # type: ignore[no-untyped-def]
     abs_dd, pct = fn([D(100), D(90)])
     assert isinstance(abs_dd, Decimal)
     assert isinstance(pct, Decimal)
+
+
+def test_percentage_drawdown_tracks_worst_fraction_not_largest_dollar_drop() -> None:
+    # 100->50 is 50%; after recovery 1000->900 is larger dollars but only 10%.
+    absolute, fraction = max_drawdown([D("100"), D("50"), D("1000"), D("900")])
+    assert absolute == D("100")
+    assert fraction == D("0.5")

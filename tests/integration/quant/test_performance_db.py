@@ -165,3 +165,44 @@ def test_benchmark_ignores_corrupt_bars_and_is_optional(db: Session) -> None:
     db.add(MarketBar(instrument_id=spy.id, interval="1m", ts=T0, provider="replay", open=D(0), high=D(1), low=D(0), close=D(1), volume=D(1),
                      ingested_at=T0, session_date=T0.date(), source_seq=None, quality_flags=["NON_POSITIVE_PRICE"]))  # fmt: skip
     assert load_report(db, account_id=account_id, start=START, end=END).benchmark is None
+
+
+def test_partial_exits_are_one_trade_including_entry_fees(db: Session) -> None:
+    seed_strategies(db, CFG, now=T0)
+    acct = open_account(db)
+    trade(db, acct, "partial-b", "BUY", "2", "100", T0, "orb_v1", fees="0.2")
+    trade(
+        db, acct, "partial-s1", "SELL", "1", "102", T0 + timedelta(minutes=5), "orb_v1", fees="0.1"
+    )
+    early = load_report(db, account_id=acct, start=START, end=T0 + timedelta(minutes=6))
+    assert early.trades.trades == 0
+    trade(
+        db, acct, "partial-s2", "SELL", "1", "103", T0 + timedelta(minutes=10), "orb_v1", fees="0.1"
+    )
+    report = load_report(db, account_id=acct, start=START, end=END)
+    assert report.trades.trades == 1
+    assert report.trades.expectancy == D("4.6")
+
+
+def test_deposit_is_not_a_trading_return_or_drawdown(db: Session) -> None:
+    from trading.db.models.portfolio import CashLedgerEntry
+
+    acct = open_account(db)
+    equity(db, acct, T0, "1000", "SESSION_START")
+    db.add(
+        CashLedgerEntry(
+            account_id=acct,
+            ts=T0 + timedelta(minutes=10),
+            amount=D("500"),
+            currency="USD",
+            source_type="ADJUSTMENT",
+            source_id=None,
+            settles_on=T0.date(),
+            reverses_id=None,
+        )
+    )
+    equity(db, acct, T0 + timedelta(minutes=20), "1500", "SESSION_END")
+    report = load_report(db, account_id=acct, start=START, end=END)
+    assert report.net_pnl == 0
+    assert report.return_pct == 0
+    assert report.max_drawdown_pct == 0

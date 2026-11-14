@@ -166,3 +166,23 @@ def test_a_day_without_trades_reports_zero_and_never_fails(
     ).scalar_one()
     assert r["entries"] == 0
     assert D(str(r["value_added"])) == 0
+
+
+def test_repeated_entries_are_scored_against_each_entrys_own_macro_view(
+    db: Session, session_factory: sessionmaker[Session]
+) -> None:
+    seed_strategies(db, CFG, now=T0)
+    acct = open_account(db)
+    macro(db, "TRENDING", "1", OPEN + timedelta(minutes=16))
+    trade(db, acct, "repeat-a", "orb_v1", "SPY", "100", "102", OPEN + timedelta(minutes=20))
+    macro(db, "HIGH_VOLATILITY", "0.2", OPEN + timedelta(hours=2))
+    trade(db, acct, "repeat-b", "orb_v1", "SPY", "100", "97", OPEN + timedelta(hours=2, minutes=10))
+    db.commit()
+    run_consensus_agent(session_factory, config=CFG, session_date=DAY, now=END)
+    result = db.execute(
+        text("select result_json from agent_runs where agent_name='consensus'")
+    ).scalar_one()
+    assert result["entries"] == 2
+    assert (result["agreed"], result["vetoed"]) == (1, 1)
+    assert D(result["base_pnl"]) == D("-1")
+    assert D(result["consensus_pnl"]) == D("2")

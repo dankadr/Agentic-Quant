@@ -10,6 +10,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from trading.quant.roundtrips import load_roundtrips
+
 _ZERO = Decimal(0)
 _TRADING_DAYS = Decimal(252)
 
@@ -34,9 +36,8 @@ def max_drawdown(equities: Sequence[Decimal]) -> tuple[Decimal, Decimal]:
             peak = value
             continue
         drop = peak - value
-        if drop > worst_abs:
-            worst_abs = drop
-            worst_pct = drop / peak if peak > 0 else _ZERO
+        worst_abs = max(worst_abs, drop)
+        worst_pct = max(worst_pct, drop / peak if peak > 0 else _ZERO)
     return worst_abs, worst_pct
 
 
@@ -143,13 +144,6 @@ _FILL_RATIO_SQL = text(
     " AND o.status NOT IN ('REJECTED', 'CREATED', 'RISK_APPROVED')"
     " AND (CAST(:strategy AS text) IS NULL OR :strategy = ANY (n.strategy_ids))"
 )
-_EXITS_SQL = text(
-    "SELECT a.pnl AS pnl FROM strategy_attribution a JOIN fills f ON f.id = a.fill_id"
-    " JOIN orders o ON o.id = f.order_id"
-    " WHERE o.account_id = :acct AND f.ts >= :a AND f.ts < :b AND a.allocated_qty < 0"
-    " AND (CAST(:strategy AS text) IS NULL OR a.strategy_id = :strategy)"
-    " ORDER BY f.ts, f.execution_id"
-)
 _EQUITY_SQL = text(
     "SELECT ts, equity, kind FROM equity_snapshots WHERE account_id = :acct"
     " AND ts >= :a AND ts < :b ORDER BY ts, id"
@@ -160,6 +154,33 @@ _STRATEGY_PNL_SQL = text(
     " WHERE o.account_id = :acct AND a.strategy_id = :strategy AND f.ts >= :a AND f.ts < :b"
     " ORDER BY f.ts, f.execution_id"
 )
+
+
+def _capital_events(
+    session: Session, account_id: UUID, *, start: datetime, end: datetime
+) -> list[tuple[datetime, Decimal]]:
+    rows = session.execute(
+        text(
+            "SELECT c.ts, c.amount FROM cash_ledger c"
+            " LEFT JOIN cash_ledger original ON original.id = c.reverses_id"
+            " WHERE c.account_id = :a AND c.ts > :s AND c.ts <= :e"
+            " AND coalesce(original.source_type, c.source_type) IN"
+            " ('INITIAL_DEPOSIT', 'ADJUSTMENT') ORDER BY c.ts, c.id"
+        ),
+        {"a": account_id, "s": start, "e": end},
+    )
+    return [(r.ts, r.amount) for r in rows]
+
+
+def capital_flows(session: Session, account_id: UUID, *, start: datetime, end: datetime) -> Decimal:
+    """External capital after the baseline snapshot, through the last mark.
+
+    The current ledger uses ADJUSTMENT for manual funding changes. Reversals inherit
+    their original entry's kind; dividends and trade corrections are not capital.
+    """
+    return sum(
+        (amount for _, amount in _capital_events(session, account_id, start=start, end=end)), _ZERO
+    )
 
 
 def load_report(
@@ -175,19 +196,32 @@ def load_report(
     params = {"acct": account_id, "a": start, "b": end, "strategy": strategy_id}
     costs_row = session.execute(_COSTS_SQL, params).one()
     ratio = session.execute(_FILL_RATIO_SQL, params).one()
-    exits = [r.pnl for r in session.execute(_EXITS_SQL, params) if r.pnl is not None]
+    exits = [
+        r.pnl
+        for r in load_roundtrips(session, account_id, end=end)
+        if r.exit_ts >= start and (strategy_id is None or r.strategy_id == strategy_id)
+    ]
     bench = _benchmark(session, benchmark_symbol, start, end, provider)
     if strategy_id is None:
         snapshots = session.execute(_EQUITY_SQL, params).all()
         curve = [(r.ts, r.equity) for r in snapshots if r.kind in ("INTRADAY", "SESSION_END")]
         start_equity = snapshots[0].equity if snapshots else None
         end_equity = curve[-1][1] if curve else None
+        capital_events = (
+            _capital_events(session, account_id, start=snapshots[0].ts, end=curve[-1][0])
+            if snapshots and curve
+            else []
+        )
+        flows = sum((amount for _, amount in capital_events), _ZERO)
         net = _ZERO
         if start_equity is not None and end_equity is not None:
-            net = end_equity - start_equity
+            net = end_equity - start_equity - flows
         ret = net / start_equity if start_equity and start_equity > 0 else None
         kind = "equity"
-        values = [v for _, v in curve]
+        values = ([start_equity] if start_equity is not None else []) + [
+            value - sum((amount for ts, amount in capital_events if ts <= at), _ZERO)
+            for at, value in curve
+        ]
     else:
         running = _ZERO
         curve = []
