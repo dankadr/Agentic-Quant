@@ -163,7 +163,7 @@ table.heat th.col { text-align: center; padding: 0 0 4px; }
 
 /* meters, gauge */
 .meter { height: 8px; border-radius: 999px; background: var(--raised); overflow: hidden; }
-.meter > span { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; transform: scaleX(0); transition: transform 500ms var(--ease-out); border-radius: 999px; }
+.meter > span { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; transform: scaleX(0); transition: transform 200ms var(--ease-out); border-radius: 999px; }
 .meter.good > span { background: var(--good); } .meter.warn > span { background: var(--warn); } .meter.bad > span { background: var(--bad); }
 
 /* strategy / agent cards */
@@ -187,6 +187,9 @@ ul.plain { margin: 4px 0; padding-left: 18px; } ul.plain li { margin: 2px 0; }
 dialog { background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: 14px; padding: 20px; width: min(460px, calc(100vw - 32px));
   box-shadow: 0 24px 60px rgba(0,0,0,0.5); opacity: 0; transform: scale(0.96) translateY(6px); transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out); }
 dialog[open] { opacity: 1; transform: none; }
+@starting-style {
+  dialog[open] { opacity: 0; transform: scale(0.96) translateY(6px); }
+}
 dialog.closing { opacity: 0; transform: scale(0.97) translateY(4px); }
 dialog::backdrop { background: rgba(2, 6, 12, 0.6); backdrop-filter: blur(3px); }
 dialog h2 { font-size: 17px; color: var(--text); text-transform: none; letter-spacing: 0; margin-bottom: 10px; }
@@ -207,7 +210,8 @@ dialog textarea { width: 100%; min-height: 70px; resize: vertical; margin-top: 8
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition-duration: 1ms !important; transition-delay: 0s !important; }
   .enter { opacity: 1; transform: none; } .chart .line.draw { stroke-dasharray: none; stroke-dashoffset: 0; }
-  dialog, .toast { transform: none; } .meter > span { transition: none; }
+  dialog, .toast, .btn:active { transform: none; } .meter > span { transition: none; }
+  @starting-style { dialog[open] { transform: none; } }
 }
 @media (prefers-contrast: more) { :root { --border: #6b7a90; --muted: #c5d0de; } :root[data-theme="light"] { --border: #5b6b80; --muted: #1e293b; } }
 

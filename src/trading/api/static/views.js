@@ -15,7 +15,19 @@ function panel(title, opts) {
       const sig = stable(data);
       if (sig === last) return;
       last = sig;
-      clear(body).append(render(data));
+      const next = render(data);
+      // Retain keyed meters so unrelated result updates do not replay their fill.
+      const previous = new Map([...body.querySelectorAll(".meter[data-meter-key]")].map(m => [m.dataset.meterKey, m]));
+      for (const fresh of next.querySelectorAll(".meter[data-meter-key]")) {
+        const existing = previous.get(fresh.dataset.meterKey);
+        if (!existing) continue;
+        existing.className = fresh.className;
+        existing.setAttribute("aria-valuenow", fresh.getAttribute("aria-valuenow"));
+        const target = fresh.firstElementChild.style.transform;
+        if (existing.firstElementChild.style.transform !== target) existing.firstElementChild.style.transform = target;
+        fresh.replaceWith(existing);
+      }
+      clear(body).append(next);
     },
   };
 }
@@ -47,7 +59,9 @@ function runDetail(run) {
         const row = el("div", null, "row");
         row.append(chip(r.regime, r.regime === "TRENDING" ? "good" : r.regime === "HIGH_VOLATILITY" ? "bad" : "accent"),
           el("span", "entry size x" + r.risk_multiplier, "mono"), el("span", "confidence " + r.confidence, "muted small"));
-        box.append(row, meter(r.risk_multiplier, Number(r.risk_multiplier) < 0.5 ? "bad" : Number(r.risk_multiplier) < 0.9 ? "warn" : "good"));
+        const riskMeter = meter(r.risk_multiplier, Number(r.risk_multiplier) < 0.5 ? "bad" : Number(r.risk_multiplier) < 0.9 ? "warn" : "good");
+        riskMeter.dataset.meterKey = "macro:" + run.id;
+        box.append(row, riskMeter);
         box.append(el("p", "Valid until " + fmtDateTime(r.valid_until) + " ET", "muted small"), list(r.evidence), list(r.limitations));
       }
       break;
@@ -201,13 +215,19 @@ function mountOverview(root, ctx) {
 
   function setKpi(key, text, value, sub) {
     const k = kpis[key];
+    if (k.flashFrame) cancelAnimationFrame(k.flashFrame);
+    k.v.className = "value " + (key === "equity" || key === "exposure" ? "" : trend(value));
     if (k.last !== null && k.last !== text) {
       const dir = num(value) !== null && num(k.lastValue) !== null ? (num(value) > num(k.lastValue) ? "flash-up" : "flash-down") : null;
-      if (dir) { k.v.classList.add(dir); requestAnimationFrame(() => requestAnimationFrame(() => k.v.classList.remove(dir))); }
+      if (dir) {
+        k.v.classList.add(dir);
+        k.flashFrame = requestAnimationFrame(() => {
+          k.flashFrame = requestAnimationFrame(() => { k.v.classList.remove(dir); k.flashFrame = null; });
+        });
+      }
     }
     k.last = text; k.lastValue = value;
     k.v.textContent = text;
-    k.v.className = "value " + (key === "equity" || key === "exposure" ? "" : trend(value));
     k.sub.textContent = sub || "";
   }
 

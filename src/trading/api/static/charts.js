@@ -147,7 +147,7 @@ export function meter(value, level) {
   const m = el("div", null, "meter" + (level ? " " + level : ""), { role: "meter", "aria-valuemin": 0, "aria-valuemax": 1, "aria-valuenow": num(value) ?? 0 });
   const fill = el("span");
   m.append(fill);
-  requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.transform = "scaleX(" + Math.max(0, Math.min(1, num(value) ?? 0)) + ")"; }));
+  fill.style.transform = "scaleX(" + Math.max(0, Math.min(1, num(value) ?? 0)) + ")";
   return m;
 }
 

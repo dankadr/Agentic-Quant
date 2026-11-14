@@ -38,12 +38,34 @@ function openDialog({ title, body, confirm = "Confirm", danger = false }) {
   ok.textContent = confirm;
   ok.className = "btn " + (danger ? "bad" : "primary");
   return new Promise((resolve) => {
-    let result = false;
-    const finish = () => {
-      dlg.classList.add("closing");
-      setTimeout(() => { dlg.close(); dlg.classList.remove("closing"); resolve(result); }, 160);
+    let result = false, closing = false, finished = false, fallback;
+    const complete = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(fallback);
+      dlg.removeEventListener("transitionend", transitioned);
+      dlg.close();
+      dlg.classList.remove("closing");
+      resolve(result);
     };
-    $("dialog-form").onsubmit = (e) => { e.preventDefault(); result = true; finish(); };
+    const transitioned = (event) => {
+      if (event.target === dlg && event.propertyName === "opacity") complete();
+    };
+    const finish = () => {
+      if (closing) return;
+      closing = true;
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { complete(); return; }
+      dlg.addEventListener("transitionend", transitioned);
+      dlg.classList.add("closing");
+      // Match computed timing (including overrides), with a fallback for cancelled transitions.
+      const style = getComputedStyle(dlg);
+      const milliseconds = (value) => value.trim().endsWith("ms") ? parseFloat(value) : parseFloat(value) * 1000;
+      const durations = style.transitionDuration.split(",").map(milliseconds);
+      const delays = style.transitionDelay.split(",").map(milliseconds);
+      const longest = Math.max(...durations.map((duration, i) => duration + delays[i % delays.length]));
+      fallback = setTimeout(complete, Math.max(200, longest + 50));
+    };
+    $("dialog-form").onsubmit = (e) => { e.preventDefault(); if (closing) return; result = true; finish(); };
     $("dialog-cancel").onclick = () => finish();
     dlg.oncancel = (e) => { e.preventDefault(); finish(); };
     dlg.showModal();
@@ -108,18 +130,14 @@ function markNav() {
 }
 
 // ---------- rendering ----------
-function mountRoute(animate) {
+function mountRoute() {
   const view = clear($("view"));
   view.dataset.route = state.route;
   view.setAttribute("aria-busy", "true");
   const ctx = context();
   state.update = VIEWS[state.route].mount(view, ctx);
   state.mounted = state.route;
-  if (animate) {
-    const cards = view.querySelectorAll(":scope .grid > *, :scope.cards > *, :scope > .cards > *");
-    cards.forEach((c, i) => { c.classList.add("enter"); c.style.setProperty("--i", Math.min(i, 8)); });
-    requestAnimationFrame(() => requestAnimationFrame(() => cards.forEach((c) => c.classList.add("in"))));
-  }
+
 }
 
 async function refresh(forceMount) {
@@ -130,7 +148,7 @@ async function refresh(forceMount) {
     state.status = status; state.ready = rd;
     const ctx = context();
     const routeChanged = state.mounted !== state.route || forceMount;
-    if (routeChanged) mountRoute(true);
+    if (routeChanged) mountRoute();
     const data = await VIEWS[state.route].fetch(ctx);
     if (state.route === "overview") state.pending = data.pending || 0;
     else if (state.route === "research" && data.proposals) state.pending = data.proposals.items.filter((p) => p.status === "PENDING_REVIEW").length;
