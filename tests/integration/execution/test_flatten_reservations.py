@@ -15,6 +15,10 @@ def env(db, session_factory, clock, calendar):
 
 
 def hold(env: Env) -> None:
+    from trading.quant.registry import seed_strategies
+
+    with env.sf.begin() as session:
+        seed_strategies(session, CFG, now=env.clock.now())
     buy = env.place(qty="8", limit="101")
     env.manager.submit(buy)
     env.tick()
@@ -229,3 +233,54 @@ def test_flatten_cancellation_still_requires_executor_fence(env: Env):
         env.manager.cancel_flatten_exits(account_id=env.account_id, minute=env.clock.now())
     assert env.status(sell) == "ACKNOWLEDGED"
     assert env.broker.get_order(env.row(sell).client_order_id).status.value == "ACCEPTED"
+
+
+def test_repeated_tick_preserves_unfilled_strategy_owned_flatten_order(env: Env, monkeypatch):
+    hold(env)
+    old_exit = env.place(side=Side.SELL, qty="8", limit="110")
+    env.manager.submit(old_exit)
+    tick = processor(env)
+    env.clock.set(env.clock.now().replace(hour=19, minute=40, second=0))
+    market(env)
+    # Keep the replacement unfilled, so the second tick exercises preservation rather than a fill.
+    monkeypatch.setattr(env.broker, "process_tick", lambda **kwargs: [])
+    cancellations = []
+    original = env.spy.cancel_order
+
+    def cancel(client_id):
+        cancellations.append(client_id)
+        return original(client_id)
+
+    monkeypatch.setattr(env.spy, "cancel_order", cancel)
+    assert tick.run_tick(env.clock.now()).orders_submitted == 1
+    replacement = env.scalar("select id from orders where side='SELL' and status='ACKNOWLEDGED'")
+    assert env.scalar(
+        "select strategy_ids from order_intents order by created_at desc limit 1"
+    ) == ["orb_v1"]
+    tick.run_tick(env.clock.now())
+    assert env.status(replacement) == "ACKNOWLEDGED"
+    assert len(cancellations) == 1
+
+
+def test_cancel_waits_for_delayed_fill_feed_before_releasing_reservation(env: Env, monkeypatch):
+    hold(env)
+    sell = env.place(side=Side.SELL, qty="8", limit="101")
+    env.manager.submit(sell)
+    original_cancel = env.spy.cancel_order
+    original_fills = env.broker.list_fills
+
+    def fill_then_cancel(client_id):
+        env.tick(bid="102", ask="102.02", volume="100", advance=1)
+        return original_cancel(client_id)
+
+    monkeypatch.setattr(env.spy, "cancel_order", fill_then_cancel)
+    monkeypatch.setattr(env.broker, "list_fills", lambda **kwargs: [])
+    assert env.manager.cancel(sell, reason="FLATTEN_REPLACE") is OrderStatus.ACKNOWLEDGED
+    env.manager.sync_fills()
+    assert env.status(sell) == "ACKNOWLEDGED"
+    assert env.scalar("select qty from positions") == 8
+    monkeypatch.setattr(env.broker, "list_fills", original_fills)
+    env.manager.sync_fills()
+    assert env.status(sell) == "CANCELED"
+    assert env.row(sell).filled_qty == 5
+    assert env.scalar("select qty from positions") == 3

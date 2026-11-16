@@ -26,29 +26,29 @@ Paper-only; preserve risk, sizing, entry caps and proposal approval. Unknown cos
 
 Files: execution/manager.py, execution/tick.py, appropriate execution/quant integration tests; alert/audit integration only if needed.
 
-- [ ] Reproduce unfilled acknowledged exit blocking flatten with real DB and paper broker.
-- [ ] Implement fenced cancel/sync/rebuild behavior at flatten boundary using effective strategy configuration.
-- [ ] Test partial fill during cancel, canceled/expired status, cancellation timeout, repeated tick and missing quote; assert no oversell and unresolved state is visible.
-- [ ] Run execution integration and targeted replay/control regressions; self-review and commit.
+- [x] Reproduce unfilled acknowledged exit blocking flatten with real DB and paper broker.
+- [x] Implement fenced cancel/sync/rebuild behavior at flatten boundary using effective strategy configuration.
+- [x] Test partial fill during cancel, canceled/expired status, cancellation timeout, repeated tick and missing quote; assert no oversell and unresolved state is visible.
+- [x] Run execution integration and targeted replay/control regressions; self-review and commit.
 
 ## Task 2: Accurate model run telemetry
 
 Files: agents/fundamental.py,evaluator.py,technical.py,jobs.py; heavy caller; tests/integration/agents and focused unit tests.
 
-- [ ] Add failing tests that advance injected clock during LLM call, return usage and assert completion/availability, NULL cost and measured-version marker.
-- [ ] Extend run functions compatibly with injectable clock; forward runtime clocks, preserve usage and unknowns.
-- [ ] Cover failed/invalid outcomes and no-experiment path without invented usage.
-- [ ] Run focused model/job/technical suites; self-review and commit.
+- [x] Add failing tests that advance injected clock during LLM call, return usage and assert completion/availability, NULL cost and measured-version marker.
+- [x] Extend run functions compatibly with injectable clock; forward runtime clocks, preserve usage and unknowns.
+- [x] Cover failed/invalid outcomes and no-experiment path without invented usage.
+- [x] Run focused model/job/technical suites; self-review and commit.
 
 ## Task 3: Scorecard design and implementation
 
-- [ ] Finalize presentation preference and precise read API semantics; log decision in spec.
-- [ ] Build read-only versioned completion/validation/observability card with raw denominators and evidence gates; add meaningful API/browser regressions.
-- [ ] Exclude legacy consensus utility from trading contribution and show no valid paired evidence until present.
-- [ ] Regenerate OpenAPI, verify desktop/mobile and existing route/security/accessibility flows.
+- [x] Finalize presentation preference and precise read API semantics; log decision in spec.
+- [x] Build read-only versioned completion/validation/observability card with raw denominators and evidence gates; add meaningful API/browser regressions.
+- [x] Exclude legacy consensus utility from trading contribution and show no valid paired evidence until present.
+- [x] Regenerate OpenAPI, verify desktop/mobile and existing route/security/accessibility flows.
 
 ## Release
 
-- [ ] Fresh independent code review of execution safety and metric denominators.
-- [ ] Ruff, formatting, mypy, relevant integration/browser/guard regressions; inspect every result.
+- [x] Fresh independent code review of execution safety and metric denominators.
+- [x] Ruff, formatting, mypy, relevant integration/browser/guard regressions; inspect every result.
 - [ ] Push/deploy through established revision image process; authenticate and verify release/schema/eight agents, scorecards and healthy services.

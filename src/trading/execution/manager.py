@@ -399,7 +399,10 @@ class ExecutionManager:
                 order = session.scalars(
                     select(Order).where(Order.id == order_id).with_for_update()
                 ).one()
-                if order.status in {s.value for s in OPEN_AT_BROKER}:
+                if (
+                    order.status in {s.value for s in OPEN_AT_BROKER}
+                    and order.filled_qty == state.filled_qty
+                ):
                     transition_order(
                         session, order, target, reason="BROKER_" + target.value, now=now
                     )
@@ -449,14 +452,17 @@ class ExecutionManager:
             _log.warning("cancel_failed", order_id=str(order_id), error=type(exc).__name__)
             return status
         # Import fills produced during the cancellation BEFORE making the order terminal.
-        # If import fails, the reservation remains in place and the tick fails closed.
+        # If import fails or the fill feed lags the cancellation quantity, keep the reservation.
         self._import_fills()
         with self._sf.begin() as session:
             now = self._fence(session)
             order = session.scalars(
                 select(Order).where(Order.id == order_id).with_for_update()
             ).one()
-            if OrderStatus(order.status) in OPEN_AT_BROKER:
+            if (
+                OrderStatus(order.status) in OPEN_AT_BROKER
+                and order.filled_qty == broker_state.filled_qty
+            ):
                 target = {
                     BrokerOrderStatus.CANCELED: OrderStatus.CANCELED,
                     BrokerOrderStatus.EXPIRED: OrderStatus.EXPIRED,
@@ -473,7 +479,7 @@ class ExecutionManager:
         """
         with self._sf() as session:
             exits = session.execute(
-                select(Order.id, Order.created_at, OrderIntent.strategy_ids)
+                select(Order.id, Order.created_at)
                 .join(OrderIntent, OrderIntent.id == Order.intent_id)
                 .where(
                     Order.account_id == account_id,
@@ -481,8 +487,10 @@ class ExecutionManager:
                     Order.status.in_([s.value for s in OPEN_AT_BROKER]),
                 )
             ).all()
-        for order_id, created_at, strategies in exits:
-            if "eod_flatten" in strategies and created_at >= minute:
+        for order_id, created_at in exits:
+            # Flatten legs retain their original strategy owners, not an eod_flatten label.
+            # Preserve every fresh exit for this minute; reprice only on the next tick minute.
+            if created_at >= minute:
                 continue
             self.cancel(order_id, reason="FLATTEN_REPLACE")
         self.sync_fills()

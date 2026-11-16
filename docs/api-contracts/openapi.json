@@ -419,6 +419,38 @@
         "title": "ConfigField",
         "type": "object"
       },
+      "Contribution": {
+        "properties": {
+          "note": {
+            "default": "No validated agent-specific paired portfolio comparison is available. Legacy consensus and strategy entry-count experiments do not establish agent value added.",
+            "title": "Note",
+            "type": "string"
+          },
+          "paired_sessions": {
+            "default": 0,
+            "title": "Paired Sessions",
+            "type": "integer"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "status": {
+            "default": "not_measured",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "Contribution",
+        "type": "object"
+      },
       "ControlRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1014,6 +1046,82 @@
         "title": "LedgerList",
         "type": "object"
       },
+      "Observability": {
+        "properties": {
+          "completion_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completion Tokens"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "known_cost_runs": {
+            "title": "Known Cost Runs",
+            "type": "integer"
+          },
+          "known_usage_runs": {
+            "title": "Known Usage Runs",
+            "type": "integer"
+          },
+          "latency_sample": {
+            "title": "Latency Sample",
+            "type": "integer"
+          },
+          "median_latency_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Latency Seconds"
+          },
+          "prompt_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Tokens"
+          },
+          "unknown_latency_runs": {
+            "title": "Unknown Latency Runs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "median_latency_seconds",
+          "latency_sample",
+          "unknown_latency_runs",
+          "known_usage_runs",
+          "prompt_tokens",
+          "completion_tokens",
+          "known_cost_runs",
+          "cost_usd"
+        ],
+        "title": "Observability",
+        "type": "object"
+      },
       "OrderOut": {
         "properties": {
           "avg_fill_price": {
@@ -1158,6 +1266,107 @@
         "title": "OrderPage",
         "type": "object"
       },
+      "PerformanceCard": {
+        "properties": {
+          "cohorts": {
+            "items": {
+              "$ref": "#/components/schemas/PerformanceCohort"
+            },
+            "title": "Cohorts",
+            "type": "array"
+          },
+          "current": {
+            "$ref": "#/components/schemas/PerformanceCohort"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "legacy_runs": {
+            "title": "Legacy Runs",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "other_model_runs": {
+            "title": "Other Model Runs",
+            "type": "integer"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "enabled",
+          "role",
+          "current",
+          "cohorts",
+          "legacy_runs",
+          "other_model_runs"
+        ],
+        "title": "PerformanceCard",
+        "type": "object"
+      },
+      "PerformanceCohort": {
+        "properties": {
+          "contribution": {
+            "$ref": "#/components/schemas/Contribution"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/RunCounts"
+          },
+          "error_categories": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Error Categories",
+            "type": "object"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "observability": {
+            "$ref": "#/components/schemas/Observability"
+          },
+          "observed_days": {
+            "title": "Observed Days",
+            "type": "integer"
+          },
+          "prompt_version": {
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/Quality"
+          },
+          "reliability": {
+            "$ref": "#/components/schemas/Reliability"
+          }
+        },
+        "required": [
+          "prompt_version",
+          "model",
+          "is_current",
+          "observed_days",
+          "counts",
+          "reliability",
+          "quality",
+          "contribution",
+          "observability",
+          "error_categories"
+        ],
+        "title": "PerformanceCohort",
+        "type": "object"
+      },
       "PerformanceOut": {
         "properties": {
           "benchmark": {
@@ -1288,6 +1497,49 @@
           "notes"
         ],
         "title": "PerformanceOut",
+        "type": "object"
+      },
+      "PerformanceReport": {
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "days": {
+            "title": "Days",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PerformanceCard"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "methodology_version": {
+            "default": "agent-scorecard-v1",
+            "title": "Methodology Version",
+            "type": "string"
+          },
+          "note": {
+            "default": "Descriptive evidence, no overall ranking or automatic changes. Cohorts separate prompt version and model; configuration matching and statistical confidence are not inferred. Observed days are calendar dates in Eastern time, not independent trial counts.",
+            "title": "Note",
+            "type": "string"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "since",
+          "days",
+          "items"
+        ],
+        "title": "PerformanceReport",
         "type": "object"
       },
       "PortfolioOut": {
@@ -1538,6 +1790,57 @@
         "title": "ProposeRequest",
         "type": "object"
       },
+      "Quality": {
+        "properties": {
+          "acceptance_note": {
+            "default": "Schema/domain acceptance proxy only; it does not establish factual correctness. Infrastructure failures are excluded.",
+            "title": "Acceptance Note",
+            "type": "string"
+          },
+          "accepted": {
+            "title": "Accepted",
+            "type": "integer"
+          },
+          "evaluated_outputs": {
+            "title": "Evaluated Outputs",
+            "type": "integer"
+          },
+          "factual_accuracy_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Factual Accuracy Score"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "output_acceptance_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Acceptance Score"
+          }
+        },
+        "required": [
+          "output_acceptance_score",
+          "accepted",
+          "evaluated_outputs",
+          "note"
+        ],
+        "title": "Quality",
+        "type": "object"
+      },
       "ReleaseStatus": {
         "properties": {
           "config_sha256": {
@@ -1583,6 +1886,93 @@
           "schema_applied"
         ],
         "title": "ReleaseStatus",
+        "type": "object"
+      },
+      "Reliability": {
+        "properties": {
+          "denominator": {
+            "title": "Denominator",
+            "type": "integer"
+          },
+          "label": {
+            "default": "Recorded-run completion (%)",
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "default": "Completed / terminal attempts. Skipped and in-progress runs are separate. Missing scheduled jobs and on-time delivery are not scored.",
+            "title": "Note",
+            "type": "string"
+          },
+          "numerator": {
+            "title": "Numerator",
+            "type": "integer"
+          },
+          "on_time_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Time Score"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          }
+        },
+        "required": [
+          "score",
+          "numerator",
+          "denominator"
+        ],
+        "title": "Reliability",
+        "type": "object"
+      },
+      "RunCounts": {
+        "properties": {
+          "completed": {
+            "default": 0,
+            "title": "Completed",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "inflight": {
+            "default": 0,
+            "title": "Inflight",
+            "type": "integer"
+          },
+          "invalid": {
+            "default": 0,
+            "title": "Invalid",
+            "type": "integer"
+          },
+          "skipped": {
+            "default": 0,
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "RunCounts",
         "type": "object"
       },
       "SessionList": {
@@ -3153,6 +3543,67 @@
           }
         },
         "summary": "List Agents",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/v1/agents/performance": {
+      "get": {
+        "operationId": "get_agent_performance_v1_agents_performance_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PerformanceReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agent Performance",
         "tags": [
           "agents"
         ]

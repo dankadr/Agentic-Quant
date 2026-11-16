@@ -21,7 +21,7 @@ x-app: &app
   # Tagged by release revision, so a deployment names exactly the code it runs. `:local` is only
   # the fallback for an unversioned build.
   image: robinhood-trading:${TRADING_RELEASE_REVISION:-local}
-  build:
+  build: &revision-build
     context: .
     args:
       TRADING_RELEASE_REVISION: ${TRADING_RELEASE_REVISION:-unknown}
@@ -53,7 +53,7 @@ services:
 
   migrate:
     image: robinhood-trading:${TRADING_RELEASE_REVISION:-local}
-    build: .
+    build: *revision-build
     command: ["migrate"]
     restart: "no"
     environment:

@@ -415,11 +415,13 @@ def test_agent_scorecards_separate_unknown_quality_and_trade_contribution(
     assert "Current version" in technical.inner_text()
     assert "Recorded-run completion" in page.inner_text("#view")
     assert "Overall score" not in page.inner_text("#view")
-    page.locator(".evidence-cards").screenshot(path="/tmp/agent-scorecards-desktop.png")
+    page.locator(".evidence-cards").screenshot(
+        path=".superpowers/sdd/2026-11-14-agent-performance/scorecards-desktop.png"
+    )
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.locator(".agent-scorecard[data-agent=macro]").screenshot(
-        path="/tmp/agent-scorecard-mobile.png"
+        path=".superpowers/sdd/2026-11-14-agent-performance/scorecard-mobile.png"
     )
 
 
