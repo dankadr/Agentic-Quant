@@ -1,3 +1,4 @@
+# High-risk PAPER_ONLY profile approved by the owner on 2026-11-16.
 # Allocation percentages are planning sleeves: the MAXIMUM notional a strategy may hold
 # (pct x equity). Global risk limits always win (decision C1). Shadow sleeves never deploy capital.
 # The 65% technical sleeve is split ORB 35% / VWAP 30% (raised on 2026-10-28 from 20% / 15%,
@@ -9,33 +10,33 @@ strategies:
     allocation_pct: '0.35'
     params:
       symbols: [SPY, QQQ, IWM, DIA, AAPL, MSFT, NVDA, GOOGL, META, AMZN]
-      opening_range_minutes: 15
-      volume_confirm_ratio: '1.2'      # breakout bar volume vs the opening-range average
+      opening_range_minutes: 10
+      volume_confirm_ratio: '1.0'
       breakout_buffer_bps: '1'
       target_r: '1.5'                   # target = entry + 1.5 x (entry - stop)
       max_hold_minutes: 120             # time stop
       max_spread_bps: '10'
       min_avg_volume: '1000'
-      trade_notional: '12000'           # preserve operating size (2026-11-11)
+      trade_notional: '20000'
       signal_ttl_seconds: 60
-      max_entries_per_symbol_per_day: 1  # activate 2 via a reviewed proposal
-      reentry_cooldown_minutes: 30
+      max_entries_per_symbol_per_day: 2
+      reentry_cooldown_minutes: 15
   vwap_v1:
     enabled: true
     allocation_pct: '0.30'
     params:
       symbols: [SPY, QQQ, IWM, DIA]
-      lookback_bars: 30
-      min_bars: 35
-      z_entry: '2.0'
+      lookback_bars: 20
+      min_bars: 25
+      z_entry: '1.5'
       z_stop: '3.0'
-      max_slope_bps: '8'                # reject strongly trending tape
+      max_slope_bps: '12'
       max_hold_minutes: 60
       max_spread_bps: '10'
-      trade_notional: '12000'           # preserve operating size (2026-11-11)
+      trade_notional: '20000'
       signal_ttl_seconds: 60
-      max_entries_per_symbol_per_day: 1  # activate 2 via a reviewed proposal
-      reentry_cooldown_minutes: 30
+      max_entries_per_symbol_per_day: 2
+      reentry_cooldown_minutes: 15
   eod_flatten:
     enabled: true
     allocation_pct: '0.00'

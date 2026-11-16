@@ -187,6 +187,17 @@ for scratch provisioning, activation, interpretation and rollback.
 
 ## Paper run
 
+The owner-approved **high-risk paper profile** (2026-11-16) targets $20,000 per ORB/VWAP entry,
+with up to 20 new entries per day, 8 held symbols, 20% per-symbol and 40% per-sector exposure.
+The daily-loss halt is 5% and the drawdown halt is 10%; these are halt thresholds, not guaranteed
+maximum realized losses. Gross exposure remains capped at 80%, with a 20% minimum cash reserve.
+The ORB/VWAP capital sleeves remain 35%/30%, so targets are still constrained by available capital.
+ORB uses a 10-minute opening range and 1.0 volume confirmation. VWAP uses a 20-bar lookback,
+25 minimum bars, 1.5 entry z-score and a 12 bps slope limit. Both permit two entries per symbol
+per day with a 15-minute cooldown. Exits and market-data quality requirements are unchanged.
+Existing stored strategy parameters change only through approved proposals at the next session
+start; editing YAML or restarting a worker does not apply them mid-session.
+
 ```bash
 KEY=...   # operator key from create-api-key
 curl -s -H "Authorization: Bearer $KEY" localhost:8000/v1/system/status          # note "version"

@@ -1,11 +1,12 @@
+# High-risk PAPER_ONLY profile approved by the owner on 2026-11-16.
 risk:
   max_gross_exposure_pct: '0.80'
-  max_symbol_exposure_pct: '0.15'   # was 0.10 (raised 2026-10-28)
-  max_sector_exposure_pct: '0.30'
-  max_daily_loss_pct: '0.025'       # was 0.01 (raised 2026-10-28): the daily stop
-  max_drawdown_pct: '0.05'
-  max_new_entries_per_day: 10
-  max_open_symbols: 6                # was 3 (raised 2026-10-28)
+  max_symbol_exposure_pct: '0.20'
+  max_sector_exposure_pct: '0.40'
+  max_daily_loss_pct: '0.05'
+  max_drawdown_pct: '0.10'
+  max_new_entries_per_day: 20
+  max_open_symbols: 8
   min_cash_reserve_pct: '0.20'
   allow_margin: false
   allow_short: false

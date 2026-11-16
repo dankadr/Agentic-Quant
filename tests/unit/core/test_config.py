@@ -29,10 +29,12 @@ def test_loads_repo_configs() -> None:
     cfg = load_config(Path("configs"))
     assert cfg.system.mode == "PAPER_ONLY"
     assert cfg.system.starting_cash_usd == Decimal("100000.00")
-    assert cfg.risk.max_symbol_exposure_pct == Decimal("0.15")  # raised from 10% on 2026-10-28
-    assert cfg.risk.max_daily_loss_pct == Decimal("0.025")  # raised from 1% on 2026-10-28
-    assert cfg.risk.max_new_entries_per_day == 10
-    assert cfg.risk.max_open_symbols == 6  # raised from 3 on 2026-10-28
+    assert cfg.risk.max_symbol_exposure_pct == Decimal(
+        "0.20"
+    )  # owner-approved high-risk paper profile
+    assert cfg.risk.max_daily_loss_pct == Decimal("0.05")  # owner-approved daily loss limit
+    assert cfg.risk.max_new_entries_per_day == 20
+    assert cfg.risk.max_open_symbols == 8
     assert len(cfg.limits_version) == 16
     assert {u.symbol for u in cfg.universe} == {
         "SPY",
@@ -129,9 +131,9 @@ def test_strategy_params_and_sleeves_in_repo_config() -> None:
     assert (orb.allocation_pct, vwap.allocation_pct) == (
         Decimal("0.35"),
         Decimal("0.30"),
-    )  # technical sleeve 65% (was 20% + 15%) so 12%-of-equity trades can fill several symbols
-    assert orb.params["opening_range_minutes"] == 15
-    assert vwap.params["lookback_bars"] == 30
+    )  # technical sleeve remains 65% under the high-risk paper profile
+    assert orb.params["opening_range_minutes"] == 10
+    assert vwap.params["lookback_bars"] == 20
     assert cfg.strategies["eod_flatten"].params["flatten_minutes_before_close"] == 10
     assert cfg.strategies["eod_flatten"].enabled and not cfg.strategies["eod_flatten"].shadow_only
     assert sum(s.allocation_pct for s in cfg.strategies.values()) == Decimal(1)  # spec sleeves
