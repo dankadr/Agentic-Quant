@@ -144,6 +144,10 @@ function runItem(run, open, compact) {
 
 // ---------- overview ----------
 
+function beforeMarketOpen(ctx) {
+  return !ctx.explicit && !!ctx.session && Date.now() < new Date(ctx.session.open_at).getTime();
+}
+
 function deriveAlerts(ctx, data) {
   const out = [];
   const st = ctx.status;
@@ -151,6 +155,7 @@ function deriveAlerts(ctx, data) {
   for (const name of data.loadErrors || []) out.push(["warn", name + " unavailable", "Retry to refresh this section."]);
   if (!ctx.ready) out.push(["warn", "Readiness unavailable", "Lease and market data health could not be verified."]);
   if (!st) return out;
+  if (beforeMarketOpen(ctx)) out.push(["", "Market opens at " + fmtTime(ctx.session.open_at) + " ET", "Waiting for today’s session. The account baseline is recorded 30 minutes before the open; market data and intraday results begin after the first tick."]);
   if (st.mode !== "PAPER_ONLY") out.push(["bad", "Mode is " + st.mode, "The system must only ever run PAPER_ONLY."]);
   if (st.risk_state !== "NORMAL") out.push(["bad", "Risk state " + st.risk_state, st.risk_reason || "New entries are blocked until this clears."]);
   if (st.trading_state !== "PAPER_RUNNING") out.push(["warn", "Trading is " + st.trading_state, "No new orders will be placed."]);
@@ -237,17 +242,21 @@ function mountOverview(root, ctx) {
     sessionLabel.replaceChildren(el("span", ctx.explicit ? "Selected session" : "Current session", "muted small"), el("strong", ctx.day), el("span", "Eastern time", "muted small"));
     const p = data.portfolio, r = data.report;
     const eq = r && r.equity;
+    const premarket = beforeMarketOpen(ctx);
+    const waiting = premarket && r;
     const missing = r ? "No session snapshot" : "Report unavailable";
+    const pendingValue = waiting ? "Awaiting open" : "Unavailable";
     const present = (v) => v !== null && v !== undefined;
-    setKpi("equity", eq && present(eq.end) ? usd(eq.end) : "Unavailable", eq && eq.end, eq && present(eq.end) ? "selected session end" : missing);
+    const latestEquity = waiting && p && present(p.equity);
+    setKpi("equity", eq && present(eq.end) ? usd(eq.end) : latestEquity ? usd(p.equity) : "Unavailable", eq && present(eq.end) ? eq.end : latestEquity ? p.equity : null, eq && present(eq.end) ? "selected session end" : latestEquity ? "Latest account snapshot · " + fmtDateTime(p.as_of) + " ET" : missing);
     const dayPnl = eq && eq.pnl;
-    setKpi("day", present(dayPnl) ? glyph(dayPnl) + signedUsd(dayPnl) : "Unavailable", dayPnl, "selected session · excludes capital flows");
+    setKpi("day", present(dayPnl) ? glyph(dayPnl) + signedUsd(dayPnl) : pendingValue, dayPnl, "selected session · excludes capital flows");
     const spy = r && r.benchmark && r.benchmark.return_pct;
-    setKpi("spy", present(spy) ? glyph(spy) + fmtPct(spy) : "Unavailable", spy, "buy-and-hold benchmark");
+    setKpi("spy", present(spy) ? glyph(spy) + fmtPct(spy) : pendingValue, spy, "buy-and-hold benchmark");
     setKpi("exposure", !ctx.explicit && p ? usd(p.exposure) : "Unavailable", !ctx.explicit && p && p.exposure, ctx.explicit ? "unavailable for historical date" : p ? "latest portfolio snapshot" : "Portfolio unavailable");
     for (const [key, field] of [["realized", "realized_pnl_change"], ["unreal", "unrealized_pnl_change"]]) {
       const value = eq && eq[field];
-      setKpi(key, present(value) ? signedUsd(value) : "Unavailable", value, "change during selected session");
+      setKpi(key, present(value) ? signedUsd(value) : pendingValue, value, "change during selected session");
     }
 
     alerts.set(deriveAlerts(ctx, data), (items) => {
@@ -267,8 +276,9 @@ function mountOverview(root, ctx) {
       return box;
     });
 
-    equity.set({ pts: data.equity && data.equity.points, s: ctx.session, available: !!data.equity }, () => {
+    equity.set({ pts: data.equity && data.equity.points, s: ctx.session, premarket, available: !!data.equity }, () => {
       if (!data.equity) return empty("Equity chart unavailable");
+      if (premarket && !(data.equity.points || []).length) return empty("Awaiting the first market tick after " + fmtTime(ctx.session.open_at) + " ET.");
       const node = equityChart(data.equity && data.equity.points, ctx.session, firstChart);
       if (data.equity && data.equity.points && data.equity.points.length > 1) firstChart = false;
       return node;

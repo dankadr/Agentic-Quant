@@ -438,3 +438,54 @@ def test_scorecard_failure_is_visible_and_retry_restores_cards(new_page, demo: D
     page.get_by_role("button", name="Retry performance evidence").click()
     page.wait_for_selector(".agent-scorecard", timeout=10000)
     assert page.locator(".agent-scorecard").count() == 8
+
+
+@pytest.mark.parametrize("before_open", [True, False])
+def test_missing_session_data_distinguishes_premarket_from_open_market(
+    new_page, demo: Demo, before_open: bool
+) -> None:  # type: ignore[no-untyped-def]
+    import json
+    from datetime import UTC, datetime
+
+    page = new_page(viewport={"width": 375, "height": 800})
+    page.clock.install(time=datetime(2026, 10, 19, 12 if before_open else 15, tzinfo=UTC))
+
+    headers = {"Authorization": "Bearer " + demo.viewer_key}
+    status = page.request.get(demo.url + "/v1/system/status", headers=headers).json()
+    status["session"]["is_open"] = not before_open
+    report = page.request.get(demo.url + "/v1/report/daily?date=2026-10-19", headers=headers).json()
+    report["ticks"] = 0
+    report["equity"] = dict.fromkeys(report["equity"])
+    report["benchmark"]["return_pct"] = None
+    page.route("**/v1/system/status", lambda route: route.fulfill(json=status))
+    page.route("**/v1/report/daily?*", lambda route: route.fulfill(json=report))
+    page.route(
+        "**/v1/equity?*",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps({"points": []})
+        ),
+    )
+    login(page, demo)
+    page.wait_for_function(
+        "() => document.querySelector('#view').getAttribute('aria-busy') === 'false'"
+    )
+    cards = page.locator(".kpi")
+    if before_open:
+        assert "Market opens" in page.inner_text(".attention-panel")
+        assert "Latest account snapshot" in cards.nth(0).inner_text()
+        assert "$" in cards.nth(0).locator(".value").inner_text()
+        assert cards.nth(1).locator(".value").inner_text() == "Awaiting open"
+        assert "Awaiting the first market tick" in page.inner_text("#view")
+        # Selecting a date must never substitute a current account value for missing history.
+        page.fill("#date", "2026-10-19")
+        page.dispatch_event("#date", "change")
+        page.wait_for_function(
+            "() => document.querySelector('.session-label').innerText.includes('Selected session') && "
+            "document.querySelector('#view').getAttribute('aria-busy') === 'false'"
+        )
+        assert cards.nth(0).locator(".value").inner_text() == "Unavailable"
+    else:
+        assert cards.nth(0).locator(".value").inner_text() == "Unavailable"
+        assert "Market is open but no ticks yet" in page.inner_text(".attention-panel")
+        assert "Awaiting open" not in page.inner_text("#view")
+    assert page.evaluate("document.documentElement.scrollWidth - innerWidth") <= 1
