@@ -214,7 +214,9 @@ class StrategyIntentSource:
                 open_cover_qty=exposure.open_cover_qty_by_symbol,
                 open_sell_qty=exposure.open_sell_qty_by_symbol,
                 in_flight=load_in_flight(session, self._account_id),
-                open_buy_by_strategy=load_open_buy_by_strategy(session, self._account_id),
+                open_buy_by_strategy=load_open_buy_by_strategy(
+                    session, self._account_id, asks=asks
+                ),
                 instruments=self._instruments,
                 sleeves={n: c.allocation_pct for n, c in self._config.strategies.items()},
                 max_symbol_pct=self._config.risk.max_symbol_exposure_pct,

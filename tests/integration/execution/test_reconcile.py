@@ -277,9 +277,12 @@ def _evaluate_halts(env: Env, equity: str, day=None):  # type: ignore[no-untyped
     from tests.integration.risk.helpers import pf_for
     from trading.risk.halts import evaluate_halts
 
+    policy = CFG.risk.model_copy(
+        update={"max_drawdown_pct": D("0.05"), "max_daily_loss_pct": D("0.025")}
+    )
     with env.sf.begin() as s:
         return evaluate_halts(s, account_id=env.account_id, state=pf_for(env.account_id, equity),
-                              session_date=day or DAY, policy=CFG.risk, now=env.clock.now())  # fmt: skip
+                              session_date=day or DAY, policy=policy, now=env.clock.now())  # fmt: skip
 
 
 def _risk(env: Env) -> RiskState:

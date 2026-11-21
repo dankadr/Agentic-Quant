@@ -1,5 +1,6 @@
 """What each strategy holds and has done, from recorded fills and orders (never from memory)."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -8,8 +9,10 @@ from uuid import UUID
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
+from trading.core.enums import PositionEffect, Side, effective_effect
 from trading.execution.state_machine import TERMINAL
 from trading.portfolio.adjustments import applied_splits, split_factor
+from trading.portfolio.balances import MissingMark
 from trading.quant.models import EntryHistory, Holding
 
 _TERMINAL = tuple(s.value for s in TERMINAL)
@@ -96,21 +99,44 @@ def load_in_flight(session: Session, account_id: UUID) -> frozenset[tuple[str, s
     return frozenset((r.strategy_id, r.symbol, r.side) for r in rows)
 
 
-def load_open_buy_by_strategy(session: Session, account_id: UUID) -> dict[str, Decimal]:
-    """Unfilled BUY notional resting per strategy (split equally across a netted order's owners)."""
+def load_open_buy_by_strategy(
+    session: Session, account_id: UUID, *, asks: Mapping[str, Decimal] | None = None
+) -> dict[str, Decimal]:
+    """Unfilled entry notional reserved against each contributing strategy's sleeve."""
     rows = session.execute(
         text(
-            "SELECT s.strategy_id,"
-            " sum((o.qty - o.filled_qty) * coalesce(o.limit_price, 0)"
-            " / cardinality(n.strategy_ids)) AS notional"
+            "SELECT o.side, o.position_effect, o.limit_price, o.qty - o.filled_qty AS remaining,"
+            " i.symbol, n.strategy_ids, d.proposal_json->'attribution' AS weights"
             " FROM orders o JOIN order_intents n ON n.id = o.intent_id"
-            " CROSS JOIN LATERAL unnest(n.strategy_ids) AS s(strategy_id)"
-            " WHERE o.account_id = :acct AND n.is_entry AND o.status NOT IN :terminal"
-            " GROUP BY s.strategy_id"
+            " JOIN risk_decisions d ON d.id = n.risk_decision_id"
+            " JOIN instruments i ON i.id = o.instrument_id"
+            " WHERE o.account_id = :acct AND o.status NOT IN :terminal"
         ).bindparams(bindparam("terminal", expanding=True)),
         {"acct": account_id, "terminal": list(_TERMINAL)},
-    ).all()
-    return {r.strategy_id: Decimal(r.notional) for r in rows}
+    )
+    totals: dict[str, Decimal] = {}
+    for row in rows:
+        effect = effective_effect(
+            Side(row.side), PositionEffect(row.position_effect) if row.position_effect else None
+        )
+        if not effect.is_entry:
+            continue
+        ask = (asks or {}).get(row.symbol)
+        price = row.limit_price or ask
+        if price is None or (effect.is_short and ask is None):
+            raise MissingMark(f"missing reservation quote for {row.symbol}")
+        if effect.is_short and ask is not None:
+            price = max(price, ask)
+        owners = row.strategy_ids
+        weights = {owner: abs(Decimal(str((row.weights or {}).get(owner, 0)))) for owner in owners}
+        if not all(weights.values()):
+            weights = dict.fromkeys(owners, Decimal(1))
+        denominator = sum(weights.values(), Decimal(0))
+        for owner, weight in weights.items():
+            totals[owner] = (
+                totals.get(owner, Decimal(0)) + row.remaining * price * weight / denominator
+            )
+    return totals
 
 
 def load_entry_history(

@@ -101,3 +101,26 @@ def test_unfilled_cancellation_does_not_consume_but_open_order_blocks(db: Sessio
     db.flush()
     h = holdings.load_entry_history(db, acct, T0, T0 + timedelta(minutes=5))[("orb_v1", "SPY")]
     assert (h.entries, h.last_exit_at, h.pending) == (0, None, True)
+
+
+def test_pending_short_sleeves_use_ask_and_attribution(db: Session) -> None:
+    from trading.quant.holdings import load_open_buy_by_strategy
+
+    seed_strategies(db, CFG, now=T0)
+    acct = open_account(db)
+    row = new_order(
+        db,
+        acct,
+        "short",
+        side="SELL",
+        qty="2",
+        limit="90",
+        strategy_ids=["orb_v1", "vwap_v1"],
+        attribution={"orb_v1": "-1.5", "vwap_v1": "-0.5"},
+    )
+    row.position_effect = "OPEN_SHORT"
+    db.flush()
+    assert load_open_buy_by_strategy(db, acct, asks={"SPY": D("100")}) == {
+        "orb_v1": D("150"),
+        "vwap_v1": D("50"),
+    }

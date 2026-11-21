@@ -46,7 +46,7 @@ def test_bearish_orb_through_reconciliation(db, session_factory, tmp_path, rally
 
 
 def test_adverse_short_deficit_partial_cover_and_restart(db, session_factory, tmp_path):
-    fixtures = write_orb_day(tmp_path / "day", bearish=True, rally_to=None, adverse_price=D("950"))
+    fixtures = write_orb_day(tmp_path / "day", bearish=True, rally_to=None, adverse_price=D("850"))
     config = orb_config(max_hold_minutes=900, max_entries_per_symbol_per_day=1)
     config = config.model_copy(
         update={"risk": config.risk.model_copy(update={"allow_short": True})}
@@ -55,6 +55,29 @@ def test_adverse_short_deficit_partial_cover_and_restart(db, session_factory, tm
     replay_session(session_factory, **params, stop_after=datetime(2026, 10, 19, 13, 48, tzinfo=UTC))
     held, basis = rows_of(session_factory, "SELECT qty, average_cost FROM positions")[0]
     assert held < 0
+    from datetime import date
+
+    from trading.portfolio.valuation import value_portfolio
+
+    with session_factory() as session:
+        account_id = scalar(session_factory, "SELECT id FROM accounts")
+        state = value_portfolio(
+            session,
+            account_id,
+            marks={"SPY": D("99.70")},
+            ask_by_symbol={"SPY": D("99.71")},
+            cfg=config.paper_broker,
+            session_date=date(2026, 10, 19),
+            as_of=datetime(2026, 10, 19, 13, 48, tzinfo=UTC),
+        )
+        assert state.restricted_short_proceeds == (-held * basis).quantize(D(".0001"))
+        assert state.short_collateral == max(
+            state.restricted_short_proceeds, (-held * D("99.71")).quantize(D(".0001"))
+        )
+        assert (
+            state.buying_power
+            == state.settled_cash - state.short_collateral - state.restricted_short_proceeds
+        )
     # A reconstructed runtime can cover an existing short even after disabling new shorts.
     params["config"] = config.model_copy(
         update={"risk": config.risk.model_copy(update={"allow_short": False})}
@@ -72,14 +95,17 @@ def test_adverse_short_deficit_partial_cover_and_restart(db, session_factory, tm
         )
         == 1
     )
+    assert scalar(session_factory, "SELECT min(equity) FROM equity_snapshots") > 0
     fills = rows_of(
         session_factory,
         "SELECT o.position_effect,f.qty,f.price,f.fees FROM orders o JOIN fills f ON f.order_id=o.id ORDER BY f.ts",
     )
     assert [r[0] for r in fills] == ["OPEN_SHORT", "CLOSE_SHORT", "CLOSE_SHORT"]
     assert fills[1][1] == D("0.4") and sum(r[1] for r in fills[1:]) == -held
-    realized = sum(((basis - r[2]) * r[1]).quantize(D(".0001")) for r in fills[1:]) - sum(
-        r[3] for r in fills
+    realized = (
+        (fills[0][1] * fills[0][2]).quantize(D(".0001"))
+        - sum((r[1] * r[2]).quantize(D(".0001")) for r in fills[1:])
+        - sum(r[3] for r in fills)
     )
     assert rows_of(session_factory, "SELECT qty, realized_pnl FROM positions") == [(D(0), realized)]
     assert (

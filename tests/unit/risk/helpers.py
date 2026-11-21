@@ -107,6 +107,8 @@ def evaluate(
     enabled: frozenset[str] = frozenset({"orb_v1"}),
     open_buy_by_symbol: dict[str, Decimal] | None = None,
     open_buy_by_sector: dict[str, Decimal] | None = None,
+    open_short_by_symbol: dict[str, Decimal] | None = None,
+    open_cover_qty: dict[str, Decimal] | None = None,
     open_sell_qty: dict[str, Decimal] | None = None,
     inst: InstrumentInfo | None = None,
     policy: dict[str, Any] | None = None,
@@ -128,6 +130,8 @@ def evaluate(
         portfolio=state, trading_state=trading_state, risk_state=risk_state,
         open_buy_notional_by_symbol=open_buy_by_symbol or {},
         open_buy_notional_by_sector=open_buy_by_sector or {},
+        open_short_notional_by_symbol=open_short_by_symbol or {},
+        open_cover_qty_by_symbol=open_cover_qty or {},
         open_sell_qty_by_symbol=open_sell_qty or {}, new_entries_today=new_entries,
         consumed_dedupe_keys=consumed, enabled_strategies=enabled,
     )  # fmt: skip

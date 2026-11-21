@@ -12,7 +12,14 @@ D = Decimal
 
 def orb_config(**params: object) -> AppConfig:
     orb = CFG.strategies["orb_v1"]
-    merged = {**orb.params, "symbols": ["SPY"], **params}
+    merged = {
+        **orb.params,
+        "symbols": ["SPY"],
+        "opening_range_minutes": 15,
+        "volume_confirm_ratio": "1.2",
+        "max_entries_per_symbol_per_day": 1,
+        **params,
+    }
     return CFG.model_copy(
         update={
             "strategies": {**CFG.strategies, "orb_v1": orb.model_copy(update={"params": merged})}

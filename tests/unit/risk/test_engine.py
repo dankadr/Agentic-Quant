@@ -420,3 +420,27 @@ def test_cover_under_halt_checks_remaining_shares(calendar) -> None:  # type: ig
     )
     assert result.allowed and not result.is_entry
     assert not evaluate(calendar, effect=PositionEffect.CLOSE_SHORT, pf=held, qty="2").allowed
+
+
+def test_pending_short_blocks_opposite_entry_and_consumes_symbol_cap(calendar) -> None:
+    pending = {"SPY": D("60")}
+    assert "SHORT_NOT_ALLOWED" in codes(evaluate(calendar, open_short_by_symbol=pending))
+    result = evaluate(
+        calendar,
+        open_short_by_symbol=pending,
+        side=Side.SELL,
+        effect=PositionEffect.OPEN_SHORT,
+        qty="0.5",
+        policy={"allow_short": True},
+    )
+    assert ("EXPOSURE_LIMIT", "symbol") in reasons(result)
+
+
+def test_cover_requires_fresh_quote_and_unreserved_short(calendar) -> None:
+    book = portfolio(positions=[("SPY", "-1", "100")])
+    args = dict(effect=PositionEffect.CLOSE_SHORT, pf=book, open_cover_qty={"SPY": D("0.6")})
+    assert evaluate(calendar, qty="0.4", **args).allowed
+    assert "SHORT_NOT_ALLOWED" in codes(evaluate(calendar, qty="0.5", **args))
+    assert "STALE_MARKET_DATA" in codes(
+        evaluate(calendar, qty="0.4", **args, views={"SPY": symbol_view("SPY", stale=True)})
+    )

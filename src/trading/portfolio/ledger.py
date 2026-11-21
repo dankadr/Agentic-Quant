@@ -163,12 +163,18 @@ def apply_fill(
             updated_at=now,
         )
         session.add(position)
+    previous_basis = quantize_cash(abs(held) * position.average_cost)
     if effect.is_entry:
         position.average_cost = quantize_price(
             (abs(held) * position.average_cost + fill.qty * fill.price) / (abs(held) + fill.qty)
         )
-    else:
+    elif not effect.is_short:
         realized += (position.average_cost - fill.price) * delta
+    if effect.is_short:
+        # Release the difference of the rounded basis balances. Each partial cover then
+        # reconciles to its separately booked cash leg, including the final cash quantum.
+        remaining_basis = quantize_cash(abs(held + delta) * position.average_cost)
+        realized += amount + previous_basis - remaining_basis
     position.qty = held + delta
     position.realized_pnl = quantize_cash(position.realized_pnl + realized)
     position.updated_at = now

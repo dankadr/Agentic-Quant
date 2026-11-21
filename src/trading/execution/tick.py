@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.alerts.store import CRITICAL, raise_incident, resolve_incident
@@ -28,10 +28,11 @@ from trading.data.snapshot import MarketSnapshot, build_snapshot
 from trading.db.models.market import Instrument, MarketBar, MarketQuote
 from trading.db.models.portfolio import Account, Position, TradingSession
 from trading.db.models.research import Strategy
-from trading.db.models.trading import Order, RiskDecisionRow
+from trading.db.models.trading import Order, OrderIntent, RiskDecisionRow
 from trading.execution.intents import IntentSource, ProposalRequest
 from trading.execution.manager import ExecutionManager
 from trading.execution.reconcile import ReconciliationReport, reconcile_account
+from trading.execution.state_machine import TERMINAL
 from trading.jobs.lease import Lease, LeaseLost, assert_fence
 from trading.monitoring.audit import record_audit
 from trading.monitoring.logging import get_logger
@@ -191,6 +192,7 @@ class PaperTickProcessor:
                     now=now,
                     provider=self._provider_name,
                 )
+                resolve_incident(session, key=f"corporate_action:{self._account_id}", now=now)
         except LeaseLost:
             raise
         except TradingError as exc:
@@ -225,6 +227,48 @@ class PaperTickProcessor:
             elif view.last_bar is not None and view.last_bar.close > 0:
                 marks[symbol] = view.last_bar.close
         return marks, asks
+
+    def _cancel_underfunded_entries(self, snapshot: MarketSnapshot, session_date: date) -> None:
+        """Revalue resting entries before letting the venue match this minute's quotes."""
+        with self._sf.begin() as session:
+            now = self._fence(session)
+            pending = session.scalar(
+                select(Order.id)
+                .join(OrderIntent, OrderIntent.id == Order.intent_id)
+                .where(
+                    Order.account_id == self._account_id,
+                    OrderIntent.is_entry.is_(True),
+                    (Order.position_effect == "OPEN_SHORT")
+                    | exists().where(Position.account_id == self._account_id, Position.qty < 0),
+                    Order.status.not_in([status.value for status in TERMINAL]),
+                )
+                .limit(1)
+            )
+            if pending is None:
+                return
+            marks, asks = self._snapshot_marks(snapshot)
+            try:
+                state = self._value(
+                    session, marks=marks, asks=asks, now=now, session_date=session_date
+                )
+            except MissingMark:
+                reason = "UNPRICED_ENTRY_RESERVATION"
+            else:
+                if state.buying_power >= 0:
+                    return
+                self._deficit_incident(session, state, now)
+                reason = "COLLATERAL_DEFICIT"
+        self._manager.cancel_entries(account_id=self._account_id, reason=reason)
+
+    def _deficit_incident(self, session: Session, state: PortfolioState, now: datetime) -> None:
+        raise_incident(
+            session,
+            key=f"collateral_deficit:{self._account_id}",
+            severity=CRITICAL,
+            title="Paper account collateral deficit",
+            detail=f"Available capital {state.buying_power} USD",
+            now=now,
+        )
 
     def _set_risk(self, state: RiskState, reason: str) -> None:
         with self._sf.begin() as session:
@@ -362,6 +406,18 @@ class PaperTickProcessor:
                     .where(Position.account_id == self._account_id, Position.qty != 0)
                 )
             }
+            incident_key = f"session_end_positions:{self._account_id}"
+            if held:
+                raise_incident(
+                    session,
+                    key=incident_key,
+                    severity=CRITICAL,
+                    title="Paper positions remained open at session close",
+                    detail=", ".join(f"{symbol} {qty}" for symbol, qty in sorted(held.items())),
+                    now=now,
+                )
+            else:
+                resolve_incident(session, key=incident_key, now=now)
             valued = True
             try:
                 state = self._value(
@@ -431,6 +487,8 @@ class PaperTickProcessor:
             flatten_due = self._flatten_due(now)
             if flatten_due:
                 self._manager.cancel_entries(account_id=self._account_id, reason="SESSION_FLATTEN")
+            else:
+                self._cancel_underfunded_entries(snapshot, session_date)
             self._broker.process_tick(quotes=quotes, bars=bars)
             fills_applied = self._manager.sync_fills()
             self._manager.cancel_stale_entries(
@@ -472,14 +530,7 @@ class PaperTickProcessor:
             incident_key = f"collateral_deficit:{self._account_id}"
             deficit = state.buying_power < 0
             if deficit:
-                raise_incident(
-                    session,
-                    key=incident_key,
-                    severity=CRITICAL,
-                    title="Paper account collateral deficit",
-                    detail=f"Available capital {state.buying_power} USD",
-                    now=now,
-                )
+                self._deficit_incident(session, state, now)
             else:
                 resolve_incident(session, key=incident_key, now=now)
             risk = evaluate_halts(
