@@ -27,7 +27,13 @@ from trading.brokers.paper.fill_model import VenueOrderView, estimate_fees, eval
 from trading.core.clock import Clock
 from trading.core.config import PaperBrokerConfig
 from trading.core.enums import OrderType, PositionEffect, Side, effective_effect
-from trading.core.money import is_multiple_of, quantize_cash, quantize_price, trade_cash_amount
+from trading.core.money import (
+    is_multiple_of,
+    quantize_cash,
+    quantize_price,
+    split_position,
+    trade_cash_amount,
+)
 from trading.data.calendar import NEW_YORK, MarketCalendar, XnysCalendar, settlement_date
 from trading.data.instruments import InstrumentInfo, qty_increment
 from trading.data.models import Bar, Quote
@@ -127,6 +133,9 @@ class PaperBroker:
             positions[fill.symbol] = held + (adjusted_qty if side is Side.BUY else -adjusted_qty)
         return cash, {s: q for s, q in positions.items() if q != 0}, costs
 
+    def quantity_step(self, symbol: str) -> Decimal:
+        return qty_increment(self._instruments[symbol], self._cfg)
+
     def apply_action(
         self, session: Session, *, action: CorporateAction, symbol: str, expected_qty: Decimal
     ) -> None:
@@ -144,9 +153,20 @@ class PaperBroker:
         )
         if open_order:
             raise BrokerRejected("CORPORATE_ACTION_OPEN_ORDER")
-        _, positions, _ = self._ledger(session)
+        _, positions, costs = self._ledger(session)
         if positions.get(symbol, Decimal(0)) != expected_qty:
             raise BrokerRejected("CORPORATE_ACTION_POSITION_MISMATCH")
+        if expected_qty and action.action_type == "SPLIT":
+            if action.ratio_from is None or action.ratio_to is None:
+                raise BrokerRejected("split missing ratio")
+            split_position(
+                expected_qty,
+                costs.get(symbol, Decimal(0)) if expected_qty < 0 else Decimal(0),
+                action.ratio_from,
+                action.ratio_to,
+                self.quantity_step(symbol),
+            )
+            self._quotes.pop(symbol, None)
         seq = session.scalar(
             select(func.max(VenueFill.seq)).where(VenueFill.account_ref == self._ref)
         )

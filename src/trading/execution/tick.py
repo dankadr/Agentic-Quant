@@ -36,6 +36,7 @@ from trading.execution.state_machine import TERMINAL
 from trading.jobs.lease import Lease, LeaseLost, assert_fence
 from trading.monitoring.audit import record_audit
 from trading.monitoring.logging import get_logger
+from trading.portfolio.adjustments import applied_splits, split_factor
 from trading.portfolio.corporate_actions import apply_due_actions
 from trading.portfolio.valuation import (
     MissingMark,
@@ -154,20 +155,26 @@ class PaperTickProcessor:
             .join(Position, Position.instrument_id == Instrument.id)
             .where(Position.account_id == self._account_id, Position.qty != 0)
         ).all()
+        splits = applied_splits(session, self._account_id, as_of)
         for instrument_id, symbol in held:
-            close = session.scalar(
-                select(MarketBar.close)
-                .where(MarketBar.instrument_id == instrument_id, MarketBar.ts <= as_of)
+            row = session.execute(
+                select(MarketBar.close, MarketBar.ts)
+                .where(
+                    MarketBar.instrument_id == instrument_id,
+                    MarketBar.ts <= as_of,
+                    MarketBar.ingested_at <= as_of,
+                    MarketBar.provider == self._provider_name,
+                )
                 .order_by(MarketBar.ts.desc())
                 .limit(1)
-            )
-            if close is not None:
-                marks[symbol] = close
+            ).first()
+            if row is not None:
+                marks[symbol] = row.close / split_factor(splits, symbol, row.ts)
         return marks
 
     def _db_asks(self, session: Session, now: datetime) -> dict[str, Decimal]:
         rows = session.execute(
-            select(Instrument.symbol, MarketQuote.ask)
+            select(Instrument.symbol, MarketQuote.ask, MarketQuote.ts)
             .join(MarketQuote, MarketQuote.instrument_id == Instrument.id)
             .where(
                 MarketQuote.ts <= now,
@@ -178,7 +185,8 @@ class PaperTickProcessor:
             .distinct(Instrument.symbol)
             .order_by(Instrument.symbol, MarketQuote.ts.desc())
         )
-        return {symbol: ask for symbol, ask in rows}
+        splits = applied_splits(session, self._account_id, now)
+        return {symbol: ask / split_factor(splits, symbol, ts) for symbol, ask, ts in rows}
 
     def _apply_actions(self, session_date: date) -> bool:
         try:
@@ -217,18 +225,23 @@ class PaperTickProcessor:
         return True
 
     @staticmethod
-    def _snapshot_marks(snapshot: MarketSnapshot) -> tuple[dict[str, Decimal], dict[str, Decimal]]:
+    def _snapshot_marks(
+        snapshot: MarketSnapshot, splits: dict[str, list[tuple[date, Decimal]]]
+    ) -> tuple[dict[str, Decimal], dict[str, Decimal]]:
         marks: dict[str, Decimal] = {}
         asks: dict[str, Decimal] = {}
         for symbol, view in snapshot.symbols.items():
             if view.quote is not None and view.quote.bid > 0:
-                marks[symbol] = view.quote.mid
-                asks[symbol] = view.quote.ask
+                factor = split_factor(splits, symbol, view.quote.ts)
+                marks[symbol] = view.quote.mid / factor
+                asks[symbol] = view.quote.ask / factor
             elif view.last_bar is not None and view.last_bar.close > 0:
-                marks[symbol] = view.last_bar.close
+                marks[symbol] = view.last_bar.close / split_factor(splits, symbol, view.last_bar.ts)
         return marks, asks
 
-    def _cancel_underfunded_entries(self, snapshot: MarketSnapshot, session_date: date) -> None:
+    def _cancel_underfunded_entries(
+        self, marks: dict[str, Decimal], asks: dict[str, Decimal], session_date: date
+    ) -> None:
         """Revalue resting entries before letting the venue match this minute's quotes."""
         with self._sf.begin() as session:
             now = self._fence(session)
@@ -246,7 +259,6 @@ class PaperTickProcessor:
             )
             if pending is None:
                 return
-            marks, asks = self._snapshot_marks(snapshot)
             try:
                 state = self._value(
                     session, marks=marks, asks=asks, now=now, session_date=session_date
@@ -480,15 +492,26 @@ class PaperTickProcessor:
                 provider=self._provider_name,
                 max_bar_age_seconds=self._config.risk.max_bar_age_seconds,
             )
-        quotes = {s: v.quote for s, v in snapshot.symbols.items() if v.quote is not None}
-        bars = {s: v.last_bar for s, v in snapshot.symbols.items() if v.last_bar is not None}
+            splits = applied_splits(session, self._account_id, now)
+        marks, asks = self._snapshot_marks(snapshot, splits)
+        # Pre-split quotes can be adjusted for valuation but cannot be executed.
+        quotes = {
+            s: v.quote
+            for s, v in snapshot.symbols.items()
+            if v.quote is not None and split_factor(splits, s, v.quote.ts) == 1
+        }
+        bars = {
+            s: v.last_bar
+            for s, v in snapshot.symbols.items()
+            if v.last_bar is not None and split_factor(splits, s, v.last_bar.ts) == 1
+        }
         try:
             self._assert_fenced()
             flatten_due = self._flatten_due(now)
             if flatten_due:
                 self._manager.cancel_entries(account_id=self._account_id, reason="SESSION_FLATTEN")
             else:
-                self._cancel_underfunded_entries(snapshot, session_date)
+                self._cancel_underfunded_entries(marks, asks, session_date)
             self._broker.process_tick(quotes=quotes, bars=bars)
             fills_applied = self._manager.sync_fills()
             self._manager.cancel_stale_entries(
@@ -510,7 +533,6 @@ class PaperTickProcessor:
             )
             return TickResult(minute, snapshot.id, 0, 0, 0, self._current_risk())
 
-        marks, asks = self._snapshot_marks(snapshot)
         with self._sf.begin() as session:
             now = self._fence(session)
             try:

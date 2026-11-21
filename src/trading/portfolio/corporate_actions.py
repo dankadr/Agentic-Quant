@@ -8,7 +8,7 @@ from sqlalchemy import String, cast, exists, literal, select
 from sqlalchemy.orm import Session
 
 from trading.brokers.paper.broker import PaperBroker
-from trading.core.money import quantize_cash, quantize_price
+from trading.core.money import quantize_cash, split_position
 from trading.data.calendar import NEW_YORK
 from trading.db.models.market import CorporateAction, Instrument
 from trading.db.models.ops import AuditEventRow
@@ -40,9 +40,9 @@ def apply_corporate_action(
         if action.action_type == "SPLIT":
             if action.ratio_from is None or action.ratio_to is None:
                 raise LedgerInvariantError(f"split {action.id} has no ratio")
-            factor = action.ratio_to / action.ratio_from
-            position.qty = position.qty * factor
-            position.average_cost = quantize_price(position.average_cost / factor)
+            position.qty, position.average_cost = split_position(
+                position.qty, position.average_cost, action.ratio_from, action.ratio_to
+            )
         else:
             if action.cash_amount is None:
                 raise LedgerInvariantError(f"dividend {action.id} has no cash amount")
@@ -132,6 +132,30 @@ def apply_due_actions(
             or action.cash_amount < 0
         ):
             raise LedgerInvariantError(f"invalid corporate action {action.id}")
+        later_applied = session.scalar(
+            select(CorporateAction.id)
+            .join(
+                AuditEventRow,
+                AuditEventRow.target
+                == literal(f"{account_id}:") + cast(CorporateAction.id, String),
+            )
+            .where(
+                CorporateAction.instrument_id == action.instrument_id,
+                AuditEventRow.action == _MARKER,
+                AuditEventRow.result == "ok",
+                (CorporateAction.ex_date > action.ex_date)
+                | (
+                    (CorporateAction.ex_date == action.ex_date)
+                    & (CorporateAction.action_type == "CASH_DIVIDEND")
+                    & (action.action_type == "SPLIT")
+                ),
+            )
+            .limit(1)
+        )
+        if later_applied is not None:
+            raise LedgerInvariantError(
+                f"out-of-order corporate action {action.id} precedes {later_applied}"
+            )
         cutoff = datetime.combine(action.ex_date, time.min, NEW_YORK)
         trades = (
             select(FillRow.id)
@@ -156,6 +180,16 @@ def apply_due_actions(
             )
             continue
         position = session.get(Position, (account_id, action.instrument_id), with_for_update=True)
+        if action.action_type == "SPLIT" and position is not None and position.qty:
+            if action.ratio_from is None or action.ratio_to is None:
+                raise LedgerInvariantError("split missing ratio")
+            step = broker.quantity_step(symbol)
+            split_position(
+                position.qty, position.average_cost, action.ratio_from, action.ratio_to, step
+            )
+            for owner in load_holdings(session, account_id, now):
+                if owner.symbol == symbol:
+                    split_position(owner.qty, Decimal(0), action.ratio_from, action.ratio_to, step)
         broker.apply_action(
             session,
             action=action,

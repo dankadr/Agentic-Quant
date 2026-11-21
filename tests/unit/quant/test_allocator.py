@@ -389,3 +389,23 @@ def test_short_and_reserved_partial_cover() -> None:
     )
     (order,) = alloc.allocate([cover], book).requests
     assert order.position_effect == PositionEffect.CLOSE_SHORT and order.quantity == D("0.6")
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+@pytest.mark.parametrize("outstanding", ["2", "5"])
+def test_flatten_defers_owner_with_uncertain_exit(direction: int, outstanding: str) -> None:
+    effect = PositionEffect.CLOSE_LONG if direction > 0 else PositionEffect.CLOSE_SHORT
+    exit_signal = signal("eod_flatten", side=effect.side).model_copy(
+        update={"position_effect": effect}
+    )
+    reserved = {"SPY": D(outstanding)}
+    book = ctx(
+        holdings=(hold("A", str(direction * 5)), hold("B", str(direction * 5))),
+        held_qty={"SPY": D(direction * 10)},
+        open_sell_qty=reserved if direction > 0 else {},
+        open_cover_qty=reserved if direction < 0 else {},
+        in_flight=frozenset({("A", "SPY", effect.side.value)}),
+    )
+    (order,) = alloc.allocate([exit_signal], book).requests
+    assert order.attribution == {"B": D(-direction * 5)}
+    assert order.quantity == 5
