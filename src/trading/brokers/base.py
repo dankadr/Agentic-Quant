@@ -11,7 +11,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
-from trading.core.enums import OrderType, Side, TimeInForce
+from trading.core.enums import OrderType, PositionEffect, Side, TimeInForce
 from trading.core.errors import TradingError
 
 
@@ -49,6 +49,7 @@ class BrokerOrderRequest:
     qty: Decimal
     limit_price: Decimal | None
     time_in_force: TimeInForce
+    position_effect: PositionEffect | None = None
 
 
 @dataclass(frozen=True)

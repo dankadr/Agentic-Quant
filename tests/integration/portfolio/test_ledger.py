@@ -244,3 +244,48 @@ def test_open_paper_account_name_is_unique(db: Session) -> None:
 def test_side_enum_roundtrip(db: Session) -> None:
     assert Side("BUY") is Side.BUY
     assert get_instrument(db).symbol == "SPY"
+
+
+def test_short_partial_cover_realizes_profit_and_preserves_basis(db: Session) -> None:
+    account_id = open_account(db, "2000")
+    for coid, side, effect, qty, price, fees, held, realized in (
+        ("s", "SELL", "OPEN_SHORT", "10", "100", "0", "-10", "0"),
+        ("c1", "BUY", "CLOSE_SHORT", "4", "90", "1", "-6", "39"),
+        ("c2", "BUY", "CLOSE_SHORT", "6", "110", "1", "0", "-22"),
+    ):
+        order = new_order(db, account_id, coid, side=side, qty=qty)
+        order.position_effect = effect
+        fill = broker_fill(order, coid, qty=qty, price=price, fees=fees)
+        apply_fill(db, account_id=account_id, fill=fill, settles_on=NEXT_DAY, now=T0)
+        assert _position(db) == (D(held), D("100"), D(realized))
+
+
+def test_short_liability_requires_ask_and_reserves_capital(db: Session) -> None:
+    from pathlib import Path
+
+    from trading.core.config import load_config
+    from trading.portfolio.valuation import MissingMark, value_portfolio
+
+    account_id = open_account(db, "2000")
+    order = new_order(db, account_id, "s", side="SELL", qty="10")
+    order.position_effect = "OPEN_SHORT"
+    fill = broker_fill(order, "s", qty="10", price="100")
+    apply_fill(db, account_id=account_id, fill=fill, settles_on=NEXT_DAY, now=T0)
+    cfg = load_config(Path("configs")).paper_broker
+
+    def value(asks: dict[str, Decimal]):
+        return value_portfolio(
+            db,
+            account_id,
+            marks={"SPY": D("99")},
+            ask_by_symbol=asks,
+            as_of=T0,
+            session_date=DAY,
+            cfg=cfg,
+        )
+
+    with pytest.raises(MissingMark):
+        value({})
+    state = value({"SPY": D("110")})
+    assert (state.restricted_short_proceeds, state.short_collateral) == (1000, 1100)
+    assert (state.equity, state.gross_exposure, state.buying_power) == (1900, 1100, 900)

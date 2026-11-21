@@ -46,10 +46,10 @@ def make_broker(db: Session, session_factory: sessionmaker[Session], clock: Manu
     instruments = upsert_universe(db, CFG.universe)
     db.commit()
 
-    def _make(faults: FaultPlan = NO_FAULTS) -> PaperBroker:
+    def _make(faults: FaultPlan = NO_FAULTS, *, allow_short: bool = False) -> PaperBroker:
         broker = PaperBroker(
             session_factory, account_ref=ACCOUNT, config=CFG.paper_broker,
-            instruments=instruments, clock=clock, faults=faults,
+            instruments=instruments, clock=clock, faults=faults, allow_short=allow_short,
         )  # fmt: skip
         broker.open_account(D("1000.00"))
         return broker
@@ -274,3 +274,64 @@ def test_open_account_is_idempotent(make_broker, db: Session) -> None:  # type: 
     broker = make_broker()
     broker.open_account(D("5000.00"))  # must not change existing starting cash
     assert broker.get_account().cash == D("1000.0000")
+
+
+def test_short_venue_reserves_entries_and_allows_disabled_cover(make_broker, clock) -> None:  # type: ignore[no-untyped-def]
+    from dataclasses import replace
+
+    from trading.core.enums import PositionEffect
+
+    sell = replace(
+        request("short", Side.SELL, "6", "99"), position_effect=PositionEffect.OPEN_SHORT
+    )
+    disabled = make_broker()
+    with pytest.raises(BrokerRejected):
+        disabled.submit_order(sell)
+    enabled = make_broker(allow_short=True)
+    tick(enabled, clock)
+    enabled.submit_order(sell)
+    with pytest.raises(BrokerRejected):
+        enabled.submit_order(replace(sell, client_order_id="additional", qty=D("5")))
+    assert tick(enabled, clock)
+    with pytest.raises(BrokerRejected):
+        enabled.submit_order(request("flip", qty="1"))
+    cover = replace(
+        request("cover", qty="4", limit="101"), position_effect=PositionEffect.CLOSE_SHORT
+    )
+    disabled.submit_order(cover)
+    with pytest.raises(BrokerRejected):
+        disabled.submit_order(replace(cover, client_order_id="overcover"))
+    assert tick(disabled, clock)
+    assert disabled.get_account().positions["SPY"] == -2
+
+
+def test_adverse_ask_prevents_short_fill(make_broker, clock) -> None:  # type: ignore[no-untyped-def]
+    from dataclasses import replace
+
+    from trading.core.enums import PositionEffect
+
+    broker = make_broker(allow_short=True)
+    tick(broker, clock)
+    sell = replace(
+        request("adverse", Side.SELL, "8", "99"), position_effect=PositionEffect.OPEN_SHORT
+    )
+    broker.submit_order(sell)
+    assert tick(broker, clock, bid="130", ask="131") == []
+    assert broker.get_account().positions == {}
+    assert broker.get_order("adverse").filled_qty == 0
+
+
+def test_stale_ask_for_other_short_blocks_new_entry(make_broker, clock) -> None:  # type: ignore[no-untyped-def]
+    from dataclasses import replace
+
+    from trading.core.enums import PositionEffect
+
+    broker = make_broker(allow_short=True)
+    tick(broker, clock)
+    broker.submit_order(
+        replace(request("s", Side.SELL, "1", "99"), position_effect=PositionEffect.OPEN_SHORT)
+    )
+    assert tick(broker, clock)
+    clock.advance(timedelta(seconds=CFG.paper_broker.quote_max_age_seconds + 1))
+    with pytest.raises(BrokerRejected, match="NO_REFERENCE_PRICE"):
+        broker.submit_order(request("other", symbol="QQQ"))

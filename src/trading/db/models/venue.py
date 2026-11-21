@@ -7,7 +7,7 @@ compares the two sides, which is only meaningful because they are stored indepen
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import BigInteger, ForeignKey, Identity
 from sqlalchemy.orm import Mapped, mapped_column
 
 from trading.db.base import CASH, Base
@@ -29,6 +29,7 @@ class VenueOrder(Base):
     broker_order_id: Mapped[str] = mapped_column(unique=True)
     account_ref: Mapped[str] = mapped_column(ForeignKey("paper_venue.venue_accounts.account_ref"))
     symbol: Mapped[str]
+    position_effect: Mapped[str | None]
     side: Mapped[str]
     type: Mapped[str]
     tif: Mapped[str]
@@ -45,6 +46,7 @@ class VenueOrder(Base):
 class VenueFill(Base):
     __tablename__ = "venue_fills"
     __table_args__ = _SCHEMA
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True))
     execution_id: Mapped[str] = mapped_column(primary_key=True)
     client_order_id: Mapped[str] = mapped_column(
         ForeignKey("paper_venue.venue_orders.client_order_id")

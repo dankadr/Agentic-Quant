@@ -72,3 +72,20 @@ def test_signals_are_immutable() -> None:
 def test_exit_signal_needs_no_stop() -> None:
     s = make(side=Side.SELL, stop_price=None, reason_codes=("TARGET",))
     assert s.side is Side.SELL
+
+
+def test_short_entry_stop_and_cover_signal_identity() -> None:
+    snapshot = uuid4()
+    short = make(
+        side=Side.SELL,
+        position_effect="OPEN_SHORT",
+        stop_price=D("580"),
+        market_snapshot_id=snapshot,
+    )
+    assert short.signal_id != make(side=Side.SELL, market_snapshot_id=snapshot).signal_id
+    with pytest.raises(ValueError, match="above"):
+        make(side=Side.SELL, position_effect="OPEN_SHORT", stop_price=D("570"))
+    with pytest.raises(ValueError, match="requires"):
+        make(side=Side.BUY, position_effect="OPEN_SHORT")
+    cover = make(side=Side.BUY, position_effect="CLOSE_SHORT", stop_price=D("580"))
+    assert cover.side is Side.BUY

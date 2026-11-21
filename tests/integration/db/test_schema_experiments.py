@@ -85,7 +85,7 @@ def test_upgrade_and_safe_downgrade_preserve_history_and_grants(
             text("SELECT relacl::text FROM pg_class WHERE oid = 'experiments'::regclass")
         )
     assert before is not None and "trading_app" in before
-    upgrade(url)
+    upgrade(url, "0012")
     with engine.connect() as conn:
         assert (
             conn.scalar(
@@ -103,7 +103,7 @@ def test_upgrade_and_safe_downgrade_preserve_history_and_grants(
         assert db.scalar(text("SELECT count(*) FROM experiments")) == 1
         with pytest.raises(IntegrityError):
             _record(db, "PAPER_COMPARISON", "COMPLETED")
-    upgrade(url)
+    upgrade(url, "0012")
 
 
 @pytest.mark.parametrize(
@@ -114,7 +114,7 @@ def test_downgrade_refuses_new_values_without_losing_history(
     previous_schema: tuple[str, Engine], kind: str, status: str
 ) -> None:
     url, engine = previous_schema
-    upgrade(url)
+    upgrade(url, "0012")
     with Session(engine) as db, db.begin():
         row_id = _record(db, kind, status).id
     with pytest.raises(DBAPIError, match=r"Cannot downgrade.*experiment history"):
@@ -126,3 +126,22 @@ def test_downgrade_refuses_new_values_without_losing_history(
         ).one() == (kind, status)
     with Session(engine) as db, db.begin():
         _record(db, "RESEARCH_BATCH", "SKIPPED")
+
+
+def test_short_history_prevents_lossy_downgrade(previous_schema: tuple[str, Engine]) -> None:
+    url, engine = previous_schema
+    upgrade(url)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO paper_venue.venue_accounts VALUES ('short-test', 1000)"))
+        conn.execute(
+            text(
+                "INSERT INTO paper_venue.venue_orders (client_order_id, broker_order_id, account_ref,"
+                "symbol, side, type, tif, qty, filled_qty, status, submitted_at, eligible_at, fill_seq,"
+                "updated_at, position_effect) VALUES ('s','b','short-test','SPY','SELL','MARKET','DAY',"
+                "1,0,'CANCELED',now(),now(),0,now(),'OPEN_SHORT')"
+            )
+        )
+    with pytest.raises(RuntimeError, match="explicit short history"):
+        command.downgrade(_config(url), "0012")
+    with engine.connect() as conn:
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0013"

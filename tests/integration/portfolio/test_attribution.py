@@ -128,3 +128,16 @@ def test_realized_pnl_goes_only_to_the_strategies_that_reduced_the_position(db: 
     assert total_gross == D("6.0000")  # all of the gross P&L, nothing invented or lost
     vwap = out["vwap_v1"]
     assert vwap[2] == -vwap[1]  # the transfer leg carries only its share of fees
+
+
+def test_cover_realized_pnl_and_signed_allocations(db: Session) -> None:
+    account_id = setup(db)
+    for coid, side, effect, qty, price in (
+        ("s1", "SELL", "OPEN_SHORT", "2", "100"),
+        ("s2", "SELL", "OPEN_SHORT", "2", "110"),
+        ("c", "BUY", "CLOSE_SHORT", "1", "100"),
+    ):
+        order = new_order(db, account_id, coid, side=side, qty=qty, strategy_ids=["orb_v1"])
+        order.position_effect = effect
+        fill(db, account_id, order, coid, qty, price, fees="0.01")
+    assert rows(db)["orb_v1"] == (D("-3"), D("0.03"), D("4.97"))

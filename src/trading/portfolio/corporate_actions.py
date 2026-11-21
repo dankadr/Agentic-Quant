@@ -29,7 +29,7 @@ def apply_corporate_action(
         return False
     position = session.get(Position, (account_id, action.instrument_id), with_for_update=True)
     result = "noop"
-    if position is not None and position.qty > 0:
+    if position is not None and position.qty != 0:
         if action.action_type == "SPLIT":
             if action.ratio_from is None or action.ratio_to is None:
                 raise LedgerInvariantError(f"split {action.id} has no ratio")

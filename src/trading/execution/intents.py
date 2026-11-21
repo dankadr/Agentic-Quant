@@ -15,7 +15,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from trading.core.enums import OrderType, Side
+from trading.core.enums import OrderType, PositionEffect, Side
 from trading.core.money import NoFloatDecimal
 from trading.core.time import UtcDatetime, isoformat_z
 from trading.data.snapshot import MarketSnapshot
@@ -34,6 +34,7 @@ class ProposalRequest:
     signal_expires_at: datetime | None
     strategy_ids: tuple[str, ...] = ()
     attribution: Mapping[str, Decimal] = field(default_factory=dict)
+    position_effect: PositionEffect | None = None
 
     @property
     def dedupe_key(self) -> str:

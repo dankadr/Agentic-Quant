@@ -59,7 +59,7 @@ def test_live_mode_rejected(tmp_config_dir: Path) -> None:
         load_config(tmp_config_dir)
 
 
-@pytest.mark.parametrize("flag", ["allow_margin", "allow_short", "allow_options", "allow_crypto"])
+@pytest.mark.parametrize("flag", ["allow_margin", "allow_options", "allow_crypto"])
 def test_forbidden_risk_flags_rejected(tmp_config_dir: Path, flag: str) -> None:
     edit(tmp_config_dir / "risk.yaml", ["risk", flag], True)
     with pytest.raises(ConfigError, match=r"risk\.yaml"):
@@ -142,3 +142,9 @@ def test_strategy_params_and_sleeves_in_repo_config() -> None:
     )  # shadow: no capital
     assert cfg.strategies["cash_reserve"].allocation_pct == Decimal("0.10")
     assert cfg.strategies["fundamental_watchlist"].params == {}
+
+
+def test_paper_shorts_default_off_and_can_be_enabled(tmp_config_dir: Path) -> None:
+    assert not load_config(tmp_config_dir).risk.allow_short
+    edit(tmp_config_dir / "risk.yaml", ["risk", "allow_short"], True)
+    assert load_config(tmp_config_dir).risk.allow_short

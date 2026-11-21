@@ -54,6 +54,8 @@ class PortfolioState:
     realized_pnl: Decimal
     unrealized_pnl: Decimal
     positions: tuple[PositionView, ...]
+    short_collateral: Decimal = Decimal(0)
+    restricted_short_proceeds: Decimal = Decimal(0)
 
 
 def value_portfolio(
@@ -75,14 +77,20 @@ def value_portfolio(
     ).all()
     views: list[PositionView] = []
     realized = Decimal(0)
+    restricted = Decimal(0)
+    collateral = Decimal(0)
     for position, instrument in rows:
         realized += position.realized_pnl
-        if position.qty <= 0:
+        if position.qty == 0:
             continue
-        mark = marks.get(instrument.symbol)
-        if mark is None:
+        mark = (ask_by_symbol if position.qty < 0 else marks).get(instrument.symbol)
+        if mark is None or mark <= 0:
             raise MissingMark(f"no mark for held position {instrument.symbol}")
         market_value = quantize_cash(position.qty * mark)
+        if position.qty < 0:
+            basis = quantize_cash(-position.qty * position.average_cost)
+            restricted += basis
+            collateral += max(basis, -market_value)
         views.append(
             PositionView(
                 symbol=instrument.symbol,
@@ -97,24 +105,26 @@ def value_portfolio(
         )
     balances = cash_balances(session, account_id, as_of_date=session_date)
     reserved = reserved_for_open_buys(session, account_id, ask_by_symbol=ask_by_symbol, cfg=cfg)
-    gross = sum((v.market_value for v in views), Decimal(0))
+    gross = sum((abs(v.market_value) for v in views), Decimal(0))
     by_sector: dict[str, Decimal] = {}
     for v in views:
-        by_sector[v.sector] = by_sector.get(v.sector, Decimal(0)) + v.market_value
+        by_sector[v.sector] = by_sector.get(v.sector, Decimal(0)) + abs(v.market_value)
     return PortfolioState(
         account_id=account_id,
         as_of=as_of,
         cash=balances.total,
         settled_cash=balances.settled,
         reserved_cash=reserved,
-        buying_power=balances.settled - reserved,  # unsettled funds are never used
-        equity=balances.total + gross,
+        buying_power=balances.settled - reserved - restricted - collateral,
+        equity=balances.total + sum((v.market_value for v in views), Decimal(0)),
         gross_exposure=quantize_cash(gross),
-        exposure_by_symbol={v.symbol: v.market_value for v in views},
+        exposure_by_symbol={v.symbol: abs(v.market_value) for v in views},
         exposure_by_sector={k: quantize_cash(v) for k, v in by_sector.items()},
         realized_pnl=quantize_cash(realized),
         unrealized_pnl=quantize_cash(sum((v.unrealized_pnl for v in views), Decimal(0))),
         positions=tuple(views),
+        short_collateral=collateral,
+        restricted_short_proceeds=restricted,
     )
 
 

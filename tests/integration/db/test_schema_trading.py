@@ -127,13 +127,15 @@ def test_order_status_check(db: Session) -> None:
         db.execute(text("update orders set status = 'BOGUS' where id = :i"), {"i": order.id})
 
 
-def test_negative_position_rejected(db: Session) -> None:
+def test_signed_position_preserves_basis(db: Session) -> None:
     account = make_account(db)
     inst = make_instrument(db)
     db.add(Position(account_id=account.id, instrument_id=inst.id, qty=Decimal("-1"),
                     average_cost=Decimal(1), realized_pnl=Decimal(0), updated_at=T0))  # fmt: skip
-    with pytest.raises(IntegrityError):
-        db.flush()
+    db.flush()
+    db.expire_all()
+    position = db.get(Position, (account.id, inst.id))
+    assert position is not None and (position.qty, position.average_cost) == (-1, 1)
 
 
 def test_execution_id_unique(db: Session) -> None:
@@ -244,3 +246,13 @@ def test_split_requires_ratio_and_dividend_requires_amount(db: Session) -> None:
                 db.add(CorporateAction(instrument_id=inst.id, ex_date=T0.date(), provider="p",
                                        announced_at=T0, ingested_at=T0, **kwargs))  # fmt: skip
                 db.flush()
+
+
+@pytest.mark.parametrize("effect", ["CLOSE_SHORT", "OPEN_LONG", "UNKNOWN"])
+def test_stored_effect_must_match_order_side(db: Session, effect: str) -> None:
+    _, _, _, _, order = full_chain(db)
+    with pytest.raises(IntegrityError):
+        db.execute(
+            text("update orders set side='SELL', position_effect=:effect where id=:id"),
+            {"effect": effect, "id": order.id},
+        )

@@ -170,3 +170,49 @@ def test_record_equity_snapshot_persists_state(db: Session) -> None:
 def test_instrument_helper(db: Session) -> None:
     assert get_instrument(db, "SPY").symbol == "SPY"
     assert Decimal("1") == D("1")
+
+
+def test_pending_cover_releases_no_collateral_until_filled(db: Session) -> None:
+    account_id = open_account(db, "2000")
+    sell = new_order(db, account_id, "s", side="SELL", qty="10")
+    sell.position_effect = "OPEN_SHORT"
+    apply_fill(
+        db,
+        account_id=account_id,
+        fill=broker_fill(sell, "s", qty="10", price="100"),
+        settles_on=NEXT_DAY,
+        now=T0,
+    )
+    cover = new_order(db, account_id, "c", qty="6")
+    cover.position_effect = "CLOSE_SHORT"
+
+    def state():
+        return value_portfolio(
+            db,
+            account_id,
+            marks={},
+            ask_by_symbol={"SPY": D("90")},
+            as_of=T0,
+            session_date=DAY,
+            cfg=CFG,
+        )
+
+    before = state()
+    assert (before.short_collateral, before.restricted_short_proceeds, before.buying_power) == (
+        1000,
+        1000,
+        1000,
+    )
+    apply_fill(
+        db,
+        account_id=account_id,
+        fill=broker_fill(cover, "c1", qty="4", price="90"),
+        settles_on=NEXT_DAY,
+        now=T0,
+    )
+    after = state()
+    assert (after.short_collateral, after.restricted_short_proceeds, after.buying_power) == (
+        600,
+        600,
+        1440,
+    )
