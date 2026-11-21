@@ -101,7 +101,12 @@ class StrategyIntentSource:
         return out
 
     def proposals(
-        self, *, snapshot: MarketSnapshot, portfolio: PortfolioState, now: datetime
+        self,
+        *,
+        snapshot: MarketSnapshot,
+        portfolio: PortfolioState,
+        now: datetime,
+        cover_shorts: bool = False,
     ) -> Sequence[ProposalRequest]:
         info = self._calendar.session_at(now)
         if info is None:
@@ -113,9 +118,19 @@ class StrategyIntentSource:
                 marks[symbol] = view.quote.mid
                 asks[symbol] = view.quote.ask
         for position in portfolio.positions:
-            marks.setdefault(position.symbol, position.mark)
+            marks[position.symbol] = position.mark
         with self._sf.begin() as session:
-            strategies = self._strategies(session)
+            strategies: list[SignalStrategy]
+            if cover_shorts:
+                strategies = [
+                    FlattenStrategy(
+                        strategy_id="eod_flatten",
+                        version="1.0.0",
+                        params={"flatten_minutes_before_close": 1},
+                    )
+                ]
+            else:
+                strategies = self._strategies(session)
             if not strategies:
                 return ()
             trading_state = get_system_state(session).trading_state
@@ -133,9 +148,11 @@ class StrategyIntentSource:
                 session=info,
                 entered_today=load_entered_today(session, self._account_id, info.open_at),
                 entry_history=load_entry_history(session, self._account_id, info.open_at, now),
-                positions={p.symbol: p.qty for p in portfolio.positions},
+                positions={
+                    p.symbol: p.qty for p in portfolio.positions if not cover_shorts or p.qty < 0
+                },
                 allow_short=self._config.risk.allow_short,
-                flatten_now=trading_state is TradingState.FLATTENING,
+                flatten_now=cover_shorts or trading_state is TradingState.FLATTENING,
             )
             signals: list[SignalProposal] = []
             diagnostics: list[dict[str, Any]] = []
@@ -192,6 +209,7 @@ class StrategyIntentSource:
                 held_qty=dict(data.positions),
                 open_buy_notional=exposure.open_buy_notional_by_symbol,
                 allow_short=self._config.risk.allow_short,
+                asks=asks,
                 open_short_notional=exposure.open_short_notional_by_symbol,
                 open_cover_qty=exposure.open_cover_qty_by_symbol,
                 open_sell_qty=exposure.open_sell_qty_by_symbol,
@@ -254,6 +272,7 @@ class StrategyIntentSource:
                     expires_at=sig.expires_at,
                     snapshot_id=snapshot.id,
                     side=sig.side.value,
+                    position_effect=sig.position_effect,
                     score=None,
                     target_notional=sig.target_notional_usd,
                     stop_price=sig.stop_price,

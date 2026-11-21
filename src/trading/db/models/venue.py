@@ -6,6 +6,7 @@ compares the two sides, which is only meaningful because they are stored indepen
 
 from datetime import datetime
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy import BigInteger, ForeignKey, Identity
 from sqlalchemy.orm import Mapped, mapped_column
@@ -59,3 +60,15 @@ class VenueFill(Base):
     price: Mapped[Decimal]
     fees: Mapped[Decimal] = mapped_column(CASH)
     slippage_estimate: Mapped[Decimal] = mapped_column(CASH)
+
+
+class VenueAction(Base):
+    __tablename__ = "venue_actions"
+    __table_args__ = _SCHEMA
+    account_ref: Mapped[str] = mapped_column(primary_key=True)
+    action_id: Mapped[UUID] = mapped_column(primary_key=True)
+    symbol: Mapped[str]
+    last_fill_seq: Mapped[int] = mapped_column(BigInteger)
+    ratio_from: Mapped[Decimal]
+    ratio_to: Mapped[Decimal]
+    cash_delta: Mapped[Decimal] = mapped_column(CASH)

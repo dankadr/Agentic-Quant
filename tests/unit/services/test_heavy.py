@@ -39,6 +39,7 @@ def test_fingerprint_changes_when_same_size_data_changes(tmp_path: Path) -> None
 
 def test_pair_changes_only_entry_limit_preserves_risk_and_financing(tmp_path: Path) -> None:
     config = load_config(Path("configs"))
+    original_budget = config.strategies["orb_v1"].params["max_entries_per_symbol_per_day"]
     seen = []
 
     def run(sf, **kwargs):
@@ -66,7 +67,7 @@ def test_pair_changes_only_entry_limit_preserves_risk_and_financing(tmp_path: Pa
         assert call["start"] == call["end"] == date(2026, 11, 13)
     assert result["baseline"]["trades"] == 2
     assert result["candidate"]["fees"] == "0.1"
-    assert config.strategies["orb_v1"].params["max_entries_per_symbol_per_day"] == 1
+    assert config.strategies["orb_v1"].params["max_entries_per_symbol_per_day"] == original_budget
 
 
 def test_retrospective_compares_normalized_returns_not_different_funding():

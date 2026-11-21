@@ -9,6 +9,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from trading.execution.state_machine import TERMINAL
+from trading.portfolio.adjustments import applied_splits, split_factor
 from trading.quant.models import EntryHistory, Holding
 
 _TERMINAL = tuple(s.value for s in TERMINAL)
@@ -44,13 +45,15 @@ def load_holdings(session: Session, account_id: UUID, as_of: datetime) -> tuple[
         {"acct": account_id, "as_of": as_of},
     ).all()
     lots: dict[tuple[str, str], _Lot] = {}
+    splits = applied_splits(session, account_id, as_of)
     for r in rows:
-        qty = Decimal(r.qty)
+        factor = split_factor(splits, r.symbol, r.ts)
+        qty = Decimal(r.qty) * factor
         lot = lots.setdefault((r.strategy_id, r.symbol), _Lot(r.ts))
         if abs(lot.qty) < DUST:
             lot = lots[(r.strategy_id, r.symbol)] = _Lot(r.ts)
         if lot.qty * qty >= 0 and qty:
-            lot.cost = (abs(lot.qty) * lot.cost + abs(qty) * r.price) / abs(lot.qty + qty)
+            lot.cost = (abs(lot.qty) * lot.cost + abs(qty) * r.price / factor) / abs(lot.qty + qty)
         lot.qty += qty
     return tuple(
         Holding(strategy, symbol, lot.qty, lot.cost, lot.opened_at)
@@ -130,10 +133,11 @@ def load_entry_history(
     )
     qtys: dict[tuple[str, str], Decimal] = {}
     histories: dict[tuple[str, str], EntryHistory] = {}
+    splits = applied_splits(session, account_id, as_of)
     for row in rows:
         key = (row.strategy_id, row.symbol)
         before = qtys.get(key, Decimal(0))
-        qty = Decimal(row.qty)
+        qty = Decimal(row.qty) * split_factor(splits, row.symbol, row.ts)
         after = before + qty
         qtys[key] = after
         h = histories.get(key, EntryHistory())

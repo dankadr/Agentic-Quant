@@ -2,9 +2,8 @@
 
 Sleeve semantics (decision C1): a strategy's ``allocation_pct`` is the MAXIMUM it may hold
 (``pct x equity``); the symbol cap is shared by every strategy. Sizing floors to the quantity
-increment, so rounding can never push notional above a cap. Opposing signals for one symbol net
-into ONE order whose ``attribution`` (signed intended shares per strategy) always sums to the order,
-so fills can be split back to strategies. Nothing here can create a short.
+increment. Only compatible position effects share an order. Exits take precedence over entries,
+and signed attribution splits each fill back to the owning strategies.
 """
 
 from collections import defaultdict
@@ -40,12 +39,15 @@ class AllocationContext:
     sleeves: Mapping[str, Decimal]  # strategy -> allocation_pct
     max_symbol_pct: Decimal
     paper_cfg: PaperBrokerConfig
-    open_buy_by_strategy: Mapping[str, Decimal] = field(default_factory=dict)  # resting BUY $
-    entry_scale: Mapping[str, Decimal] = field(default_factory=dict)  # macro multiplier, BUY only
+    open_buy_by_strategy: Mapping[str, Decimal] = field(
+        default_factory=dict
+    )  # resting entry notional
+    entry_scale: Mapping[str, Decimal] = field(default_factory=dict)  # macro multiplier for entries
+    entries_allowed: bool = True  # False during halts / after the entry cutoff: exits only
     allow_short: bool = False
     open_short_notional: Mapping[str, Decimal] = field(default_factory=dict)
     open_cover_qty: Mapping[str, Decimal] = field(default_factory=dict)
-    entries_allowed: bool = True  # False during halts / after the entry cutoff: exits only
+    asks: Mapping[str, Decimal] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -91,7 +93,9 @@ class SleeveAllocator:
         targets: dict[str, dict[str, object]] = {}
         sleeve_used: dict[str, Decimal] = defaultdict(Decimal)
         holder_left: dict[tuple[str, str], Decimal] = {
-            (h.strategy_id, h.symbol): abs(h.qty) for h in ctx.holdings if h.qty != 0
+            (h.strategy_id, h.symbol): abs(h.qty)
+            for h in ctx.holdings
+            if h.qty * ctx.held_qty.get(h.symbol, _ZERO) > 0
         }
 
         def drop(sig: SignalProposal, reason: str) -> None:
@@ -116,8 +120,8 @@ class SleeveAllocator:
                 elif (sig.strategy_id, symbol, sig.side.value) in ctx.in_flight:
                     drop(sig, "ORDER_IN_FLIGHT")
                 elif effect.is_entry and (
-                    (effect.is_short and (held > 0 or ctx.open_buy_notional.get(symbol))) or
-                    (not effect.is_short and (held < 0 or ctx.open_short_notional.get(symbol)))
+                    (effect.is_short and (held > 0 or ctx.open_buy_notional.get(symbol)))
+                    or (not effect.is_short and (held < 0 or ctx.open_short_notional.get(symbol)))
                 ):
                     drop(sig, "OPPOSITE_DIRECTION")
                 elif not effect.is_entry and effect.is_short != (held < 0):
@@ -129,47 +133,43 @@ class SleeveAllocator:
             inc = qty_increment(instrument, ctx.paper_cfg)
             mark = ctx.marks.get(symbol)
             reserved = ctx.open_cover_qty if held < 0 else ctx.open_sell_qty
-            sellable = max(abs(held) - reserved.get(symbol, _ZERO), _ZERO)
+            available = max(abs(held) - reserved.get(symbol, _ZERO), _ZERO)
             exits = [s for s in live if not effective_effect(s.side, s.position_effect).is_entry]
             entries = [s for s in live if effective_effect(s.side, s.position_effect).is_entry]
-            sells: list[_Leg] = []
+            exit_legs: list[_Leg] = []
             for sig in exits:
                 if sig.strategy_id == FLATTEN_STRATEGY:
-                    legs = self._flatten_legs(sig, symbol, holder_left, sellable, inc, ctx)
+                    legs = self._flatten_legs(sig, symbol, holder_left, available, inc, ctx)
                 else:
                     own = holder_left.get((sig.strategy_id, symbol), _ZERO)
-                    qty = floor_to_increment(min(own, sellable), inc)
+                    qty = floor_to_increment(min(own, available), inc)
                     legs = [_Leg(sig, sig.strategy_id, qty)] if qty > 0 else []
                 for leg in legs:
-                    sellable -= leg.qty
+                    available -= leg.qty
                     key = (leg.strategy, symbol)
                     holder_left[key] = holder_left.get(key, _ZERO) - leg.qty
-                sells.extend(legs)
+                exit_legs.extend(legs)
                 if not legs:
                     drop(sig, "NO_HOLDING")
 
-            freed = sum((leg.qty for leg in sells), _ZERO) * (mark or _ZERO)
             headroom = max(
                 ctx.max_symbol_pct * ctx.equity
                 - abs(held) * (mark or _ZERO)
                 - ctx.open_buy_notional.get(symbol, _ZERO)
-                - ctx.open_short_notional.get(symbol, _ZERO)
-                + freed,
+                - ctx.open_short_notional.get(symbol, _ZERO),
                 _ZERO,
             )
-            freed_by_strategy: dict[str, Decimal] = defaultdict(Decimal)
-            for leg in sells:
-                freed_by_strategy[leg.strategy] += leg.qty * (mark or _ZERO)
-
-            buys: list[_Leg] = []
+            entry_legs: list[_Leg] = []
             for sig in entries:
-                if sells or reserved.get(symbol):
+                if exit_legs or reserved.get(symbol):
                     drop(sig, "EXIT_PRIORITY")
                     continue
                 if len({entry.side for entry in entries}) > 1:
                     drop(sig, "OPPOSITE_DIRECTION")
                     continue
                 price = sig.limit_price or mark
+                if price is not None and sig.side is Side.SELL:
+                    price = max(price, ctx.asks.get(symbol, price))
                 pct = ctx.sleeves.get(sig.strategy_id, _ZERO)
                 if price is None or price <= 0 or pct <= 0:
                     drop(sig, "NO_BUDGET")
@@ -185,7 +185,6 @@ class SleeveAllocator:
                 sleeve_left = (
                     pct * ctx.equity - exposure - sleeve_used[sig.strategy_id]
                     - ctx.open_buy_by_strategy.get(sig.strategy_id, _ZERO)
-                    + freed_by_strategy[sig.strategy_id]
                 )  # fmt: skip
                 scale = min(ctx.entry_scale.get(sig.strategy_id, Decimal(1)), Decimal(1))
                 if scale <= 0:
@@ -201,9 +200,9 @@ class SleeveAllocator:
                     continue
                 headroom -= qty * price
                 sleeve_used[sig.strategy_id] += qty * price
-                buys.append(_Leg(sig, sig.strategy_id, qty))
+                entry_legs.append(_Leg(sig, sig.strategy_id, qty))
 
-            legs_all = [*buys, *sells]
+            legs_all = [*entry_legs, *exit_legs]
             if not legs_all:
                 continue
             first = legs_all[0].signal
@@ -259,13 +258,13 @@ class SleeveAllocator:
         sig: SignalProposal,
         symbol: str,
         holder_left: dict[tuple[str, str], Decimal],
-        sellable: Decimal,
+        available: Decimal,
         inc: Decimal,
         ctx: AllocationContext,
     ) -> list[_Leg]:
         """Sell every holder's shares; shares nobody owns are attributed to the flatten strategy."""
         legs: list[_Leg] = []
-        remaining = sellable
+        remaining = available
         owned = _ZERO
         for (strategy, sym), qty in sorted(holder_left.items()):
             if sym != symbol or qty <= 0:

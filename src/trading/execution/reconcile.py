@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from trading.brokers.base import (
@@ -354,6 +354,16 @@ def _compare_books(
                 .group_by(Instrument.symbol)
             )
         }
+        for symbol, delta in session.execute(
+            text(
+                "SELECT i.symbol, (a.details_json->>'qty_delta')::numeric FROM audit_events a "
+                "JOIN corporate_actions c ON a.target = :prefix || c.id::text "
+                "JOIN instruments i ON i.id = c.instrument_id "
+                "WHERE a.action='corporate_action.applied' AND c.action_type='SPLIT'"
+            ),
+            {"prefix": f"{account_id}:"},
+        ):
+            net_from_fills[symbol] = net_from_fills.get(symbol, Decimal(0)) + (delta or 0)
     for symbol in sorted(set(local_positions) | set(account.positions)):
         local, remote = (
             local_positions.get(symbol, Decimal(0)),

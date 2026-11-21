@@ -58,8 +58,13 @@ class DeterministicRiskEngine:
         try:
             effect = effective_effect(proposal.side, proposal.position_effect)
         except ValueError:
-            return RiskEvaluation(False, (RiskReason(RejectionCode.UNSUPPORTED_ORDER),),
-                                  self._limits_version, False, None)
+            return RiskEvaluation(
+                False,
+                (RiskReason(RejectionCode.UNSUPPORTED_ORDER),),
+                self._limits_version,
+                False,
+                None,
+            )
         is_entry = effect.is_entry
         view = market.symbols.get(symbol)
         quote = view.quote if view is not None else None
@@ -155,7 +160,11 @@ class DeterministicRiskEngine:
             deny(RejectionCode.UNSUPPORTED_ORDER)
         held = next((p.qty for p in pf.positions if p.symbol == symbol), _ZERO) if pf else _ZERO
         if effect is PositionEffect.OPEN_SHORT:
-            if not policy.allow_short or held > 0 or account.open_buy_notional_by_symbol.get(symbol):
+            if (
+                not policy.allow_short
+                or held > 0
+                or account.open_buy_notional_by_symbol.get(symbol)
+            ):
                 deny(RejectionCode.SHORT_NOT_ALLOWED)
         elif effect is PositionEffect.OPEN_LONG:
             if held < 0 or account.open_short_notional_by_symbol.get(symbol):
@@ -163,7 +172,8 @@ class DeterministicRiskEngine:
         else:
             available = (
                 -held - account.open_cover_qty_by_symbol.get(symbol, _ZERO)
-                if effect.is_short else held - account.open_sell_qty_by_symbol.get(symbol, _ZERO)
+                if effect.is_short
+                else held - account.open_sell_qty_by_symbol.get(symbol, _ZERO)
             )
             if proposal.quantity > available:
                 deny(RejectionCode.SHORT_NOT_ALLOWED)
@@ -218,7 +228,9 @@ class DeterministicRiskEngine:
             open_symbols = {p.symbol for p in pf.positions if p.qty != 0} | {
                 s for s, n in account.open_buy_notional_by_symbol.items() if n > 0
             }
-            open_symbols.update(s for s, n in account.open_short_notional_by_symbol.items() if n > 0)
+            open_symbols.update(
+                s for s, n in account.open_short_notional_by_symbol.items() if n > 0
+            )
             if symbol not in open_symbols and len(open_symbols) >= policy.max_open_symbols:
                 deny(RejectionCode.MAX_OPEN_SYMBOLS)
         elif is_entry and account.new_entries_today >= policy.max_new_entries_per_day:

@@ -13,6 +13,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from trading.alerts.store import CRITICAL, raise_incident, resolve_incident
 from trading.brokers.paper.broker import PaperBroker
 from trading.control.state import RiskState, TradingState, get_system_state, set_risk_state
 from trading.core.clock import Clock
@@ -24,7 +25,7 @@ from trading.data.ingest import ingest_bars, ingest_quotes
 from trading.data.instruments import InstrumentInfo
 from trading.data.provider import MarketDataProvider
 from trading.data.snapshot import MarketSnapshot, build_snapshot
-from trading.db.models.market import Instrument, MarketBar
+from trading.db.models.market import Instrument, MarketBar, MarketQuote
 from trading.db.models.portfolio import Account, Position, TradingSession
 from trading.db.models.research import Strategy
 from trading.db.models.trading import Order, RiskDecisionRow
@@ -34,6 +35,7 @@ from trading.execution.reconcile import ReconciliationReport, reconcile_account
 from trading.jobs.lease import Lease, LeaseLost, assert_fence
 from trading.monitoring.audit import record_audit
 from trading.monitoring.logging import get_logger
+from trading.portfolio.corporate_actions import apply_due_actions
 from trading.portfolio.valuation import (
     MissingMark,
     PortfolioState,
@@ -162,6 +164,56 @@ class PaperTickProcessor:
                 marks[symbol] = close
         return marks
 
+    def _db_asks(self, session: Session, now: datetime) -> dict[str, Decimal]:
+        rows = session.execute(
+            select(Instrument.symbol, MarketQuote.ask)
+            .join(MarketQuote, MarketQuote.instrument_id == Instrument.id)
+            .where(
+                MarketQuote.ts <= now,
+                MarketQuote.ingested_at <= now,
+                MarketQuote.provider == self._provider_name,
+                MarketQuote.ask > 0,
+            )
+            .distinct(Instrument.symbol)
+            .order_by(Instrument.symbol, MarketQuote.ts.desc())
+        )
+        return {symbol: ask for symbol, ask in rows}
+
+    def _apply_actions(self, session_date: date) -> bool:
+        try:
+            with self._sf.begin() as session:
+                now = self._fence(session)
+                apply_due_actions(
+                    session,
+                    account_id=self._account_id,
+                    broker=self._broker,
+                    session_date=session_date,
+                    now=now,
+                    provider=self._provider_name,
+                )
+        except LeaseLost:
+            raise
+        except TradingError as exc:
+            with self._sf.begin() as session:
+                now = self._fence(session)
+                set_risk_state(
+                    session,
+                    risk_state=RiskState.RECONCILIATION_REQUIRED,
+                    reason="corporate_action_unresolved",
+                    actor="system",
+                    now=now,
+                )
+                raise_incident(
+                    session,
+                    key=f"corporate_action:{self._account_id}",
+                    severity=CRITICAL,
+                    title="Paper corporate action unresolved",
+                    detail=str(exc),
+                    now=now,
+                )
+            return False
+        return True
+
     @staticmethod
     def _snapshot_marks(snapshot: MarketSnapshot) -> tuple[dict[str, Decimal], dict[str, Decimal]]:
         marks: dict[str, Decimal] = {}
@@ -239,13 +291,15 @@ class PaperTickProcessor:
     def start_session(self, session_date: date) -> None:
         """Reconcile, then open the session with its start-of-day equity. Idempotent."""
         self.reconcile()
+        if not self._apply_actions(session_date):
+            return
         with self._sf.begin() as session:
             now = self._fence(session)
             try:
                 state = self._value(
                     session,
                     marks=self._db_marks(session, now),
-                    asks={},
+                    asks=self._db_asks(session, now),
                     now=now,
                     session_date=session_date,
                 )
@@ -313,7 +367,7 @@ class PaperTickProcessor:
                 state = self._value(
                     session,
                     marks=self._db_marks(session, now),
-                    asks={},
+                    asks=self._db_asks(session, now),
                     now=now,
                     session_date=session_date,
                 )
@@ -342,6 +396,8 @@ class PaperTickProcessor:
             return TickResult(minute, None, 0, 0, 0, self._current_risk())
         session_date = info.session_date
         self._ensure_session(session_date)
+        if not self._apply_actions(session_date):
+            return TickResult(minute, None, 0, 0, 0, RiskState.RECONCILIATION_REQUIRED)
 
         if self.provider is not None:
             with self._sf.begin() as session:
@@ -372,6 +428,9 @@ class PaperTickProcessor:
         bars = {s: v.last_bar for s, v in snapshot.symbols.items() if v.last_bar is not None}
         try:
             self._assert_fenced()
+            flatten_due = self._flatten_due(now)
+            if flatten_due:
+                self._manager.cancel_entries(account_id=self._account_id, reason="SESSION_FLATTEN")
             self._broker.process_tick(quotes=quotes, bars=bars)
             fills_applied = self._manager.sync_fills()
             self._manager.cancel_stale_entries(
@@ -379,7 +438,7 @@ class PaperTickProcessor:
             )
             if self._needs_reconcile():
                 self.reconcile()
-            if self._flatten_due(self._clock.now()):
+            if flatten_due:
                 self._manager.cancel_flatten_exits(
                     account_id=self._account_id,
                     minute=minute.replace(second=0, microsecond=0),
@@ -410,6 +469,19 @@ class PaperTickProcessor:
                 )
                 return TickResult(minute, snapshot.id, fills_applied, 0, 0, RiskState.UNKNOWN)
             snapshot_row_id = record_equity_snapshot(session, state, kind="INTRADAY")
+            incident_key = f"collateral_deficit:{self._account_id}"
+            deficit = state.buying_power < 0
+            if deficit:
+                raise_incident(
+                    session,
+                    key=incident_key,
+                    severity=CRITICAL,
+                    title="Paper account collateral deficit",
+                    detail=f"Available capital {state.buying_power} USD",
+                    now=now,
+                )
+            else:
+                resolve_incident(session, key=incident_key, now=now)
             risk = evaluate_halts(
                 session,
                 account_id=self._account_id,
@@ -420,7 +492,29 @@ class PaperTickProcessor:
             )
 
         decisions = submitted = 0
-        for request in self._intents.proposals(snapshot=snapshot, portfolio=state, now=now):
+        if deficit:
+            self._manager.cancel_entries(account_id=self._account_id, reason="COLLATERAL_DEFICIT")
+            self._manager.cancel_flatten_exits(
+                account_id=self._account_id, minute=minute, covers_only=True
+            )
+            source = (
+                self._intents
+                if isinstance(self._intents, StrategyIntentSource)
+                else StrategyIntentSource(
+                    self._sf,
+                    account_id=self._account_id,
+                    calendar=self._calendar,
+                    config=self._config,
+                    instruments=self._instruments,
+                    provider_name=self._provider_name,
+                )
+            )
+            requests = source.proposals(
+                snapshot=snapshot, portfolio=state, now=now, cover_shorts=True
+            )
+        else:
+            requests = self._intents.proposals(snapshot=snapshot, portfolio=state, now=now)
+        for request in requests:
             decided, order_id = self._propose(
                 request, snapshot, snapshot_row_id, session_date, marks, asks
             )

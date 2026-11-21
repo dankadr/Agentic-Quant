@@ -56,7 +56,6 @@ class AccountView:
     open_cover_qty_by_symbol: Mapping[str, Decimal] = field(default_factory=dict)
 
 
-
 @dataclass(frozen=True)
 class RiskReason:
     code: RejectionCode

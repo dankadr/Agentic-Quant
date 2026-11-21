@@ -95,7 +95,14 @@ class OrbStrategy:
             )
             if held is not None:
                 self.entry_diagnostics[symbol] = "HOLDING"
-                exit_signal = self._exit(data, symbol, held, bars[-1], view.quote, range_high if held.qty < 0 else range_low)
+                exit_signal = self._exit(
+                    data,
+                    symbol,
+                    held,
+                    bars[-1],
+                    view.quote,
+                    range_high if held.qty < 0 else range_low,
+                )
                 if exit_signal is not None:
                     signals.append(exit_signal)
                 continue
@@ -127,8 +134,16 @@ class OrbStrategy:
             return None
         if held.qty < 0:
             limit = ceil_to_increment(quote.ask * (1 + _LIMIT_PAD_BPS / _BPS), _CENT)
-            return self._signal(data, symbol, Side.BUY, -held.qty * last.close, limit, None,
-                                (reason,), PositionEffect.CLOSE_SHORT)
+            return self._signal(
+                data,
+                symbol,
+                Side.BUY,
+                -held.qty * last.close,
+                limit,
+                None,
+                (reason,),
+                PositionEffect.CLOSE_SHORT,
+            )
         limit = floor_to_increment(quote.bid * (1 - _LIMIT_PAD_BPS / _BPS), _CENT)
         if limit <= 0:
             return None
@@ -162,8 +177,16 @@ class OrbStrategy:
             limit = floor_to_increment(quote.bid * (1 - _LIMIT_PAD_BPS / _BPS), _CENT)
             if limit <= 0 or limit >= range_high:
                 return None
-            return self._signal(data, symbol, Side.SELL, p.trade_notional, limit, range_high,
-                                ("ORB_BREAK", "VOLUME_CONFIRM"), PositionEffect.OPEN_SHORT)
+            return self._signal(
+                data,
+                symbol,
+                Side.SELL,
+                p.trade_notional,
+                limit,
+                range_high,
+                ("ORB_BREAK", "VOLUME_CONFIRM"),
+                PositionEffect.OPEN_SHORT,
+            )
         if last.close <= range_high * (1 + p.breakout_buffer_bps / _BPS):
             return None
         limit = ceil_to_increment(quote.ask * (1 + _LIMIT_PAD_BPS / _BPS), _CENT)

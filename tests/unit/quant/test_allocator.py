@@ -377,11 +377,15 @@ def test_entry_scale_only_applies_to_the_named_strategies() -> None:
 def test_short_and_reserved_partial_cover() -> None:
     short = signal(side=Side.SELL).model_copy(update={"position_effect": PositionEffect.OPEN_SHORT})
     assert not alloc.allocate([short], ctx()).requests
-    order, = alloc.allocate([short], ctx(allow_short=True)).requests
+    (order,) = alloc.allocate([short], ctx(allow_short=True)).requests
     assert order.position_effect == PositionEffect.OPEN_SHORT
     assert order.attribution == {"orb_v1": -order.quantity}
     cover = signal().model_copy(update={"position_effect": PositionEffect.CLOSE_SHORT})
-    book = ctx(holdings=(hold("orb_v1", "-1"),), held_qty={"SPY": D("-1")},
-               open_cover_qty={"SPY": D("0.4")}, entries_allowed=False)
-    order, = alloc.allocate([cover], book).requests
+    book = ctx(
+        holdings=(hold("orb_v1", "-1"),),
+        held_qty={"SPY": D("-1")},
+        open_cover_qty={"SPY": D("0.4")},
+        entries_allowed=False,
+    )
+    (order,) = alloc.allocate([cover], book).requests
     assert order.position_effect == PositionEffect.CLOSE_SHORT and order.quantity == D("0.6")

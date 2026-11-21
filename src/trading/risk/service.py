@@ -79,7 +79,10 @@ def build_account_view(
     cover_qty: dict[str, Decimal] = {}
     for order, symbol, sector in open_orders:
         remaining = order.qty - order.filled_qty
-        effect = effective_effect(Side(order.side), PositionEffect(order.position_effect) if order.position_effect else None)
+        effect = effective_effect(
+            Side(order.side),
+            PositionEffect(order.position_effect) if order.position_effect else None,
+        )
         if not effect.is_entry:
             exits = cover_qty if effect.is_short else sell_qty
             exits[symbol] = exits.get(symbol, Decimal(0)) + remaining

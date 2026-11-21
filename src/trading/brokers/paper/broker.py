@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -27,11 +27,12 @@ from trading.brokers.paper.fill_model import VenueOrderView, estimate_fees, eval
 from trading.core.clock import Clock
 from trading.core.config import PaperBrokerConfig
 from trading.core.enums import OrderType, PositionEffect, Side, effective_effect
-from trading.core.money import is_multiple_of, quantize_price, trade_cash_amount
+from trading.core.money import is_multiple_of, quantize_cash, quantize_price, trade_cash_amount
 from trading.data.calendar import NEW_YORK, MarketCalendar, XnysCalendar, settlement_date
 from trading.data.instruments import InstrumentInfo, qty_increment
 from trading.data.models import Bar, Quote
-from trading.db.models.venue import VenueAccount, VenueFill, VenueOrder
+from trading.db.models.market import CorporateAction
+from trading.db.models.venue import VenueAccount, VenueAction, VenueFill, VenueOrder
 
 _OPEN = (BrokerOrderStatus.ACCEPTED.value, BrokerOrderStatus.PARTIALLY_FILLED.value)
 
@@ -89,6 +90,10 @@ class PaperBroker:
         self, session: Session, *, settled_only: bool = False
     ) -> tuple[Decimal, dict[str, Decimal], dict[str, Decimal]]:
         cash = self._account(session).starting_cash
+        actions = session.scalars(
+            select(VenueAction).where(VenueAction.account_ref == self._ref)
+        ).all()
+        cash += sum((action.cash_delta for action in actions), Decimal(0))
         positions: dict[str, Decimal] = {}
         costs: dict[str, Decimal] = {}
         fills = session.execute(
@@ -108,14 +113,57 @@ class PaperBroker:
                 <= self._settled_through(self._clock.now().astimezone(NEW_YORK).date())
             ):
                 cash += trade_cash_amount(side, fill.qty, fill.price)
+            adjusted_qty, adjusted_price = fill.qty, fill.price
+            for action in actions:
+                if fill.symbol == action.symbol and fill.seq <= action.last_fill_seq:
+                    adjusted_qty = adjusted_qty * action.ratio_to / action.ratio_from
+                    adjusted_price = adjusted_price * action.ratio_from / action.ratio_to
             held = positions.get(fill.symbol, Decimal(0))
             if side is Side.SELL and held <= 0:
                 costs[fill.symbol] = quantize_price(
-                    (abs(held) * costs.get(fill.symbol, Decimal(0)) + fill.qty * fill.price)
-                    / (abs(held) + fill.qty)
+                    (abs(held) * costs.get(fill.symbol, Decimal(0)) + adjusted_qty * adjusted_price)
+                    / (abs(held) + adjusted_qty)
                 )
-            positions[fill.symbol] = held + (fill.qty if side is Side.BUY else -fill.qty)
+            positions[fill.symbol] = held + (adjusted_qty if side is Side.BUY else -adjusted_qty)
         return cash, {s: q for s, q in positions.items() if q != 0}, costs
+
+    def apply_action(
+        self, session: Session, *, action: CorporateAction, symbol: str, expected_qty: Decimal
+    ) -> None:
+        self._account(session, lock=True)
+        if session.get(VenueAction, (self._ref, action.id)):
+            return
+        open_order = session.scalar(
+            select(VenueOrder.client_order_id)
+            .where(
+                VenueOrder.account_ref == self._ref,
+                VenueOrder.symbol == symbol,
+                VenueOrder.status.in_(_OPEN),
+            )
+            .limit(1)
+        )
+        if open_order:
+            raise BrokerRejected("CORPORATE_ACTION_OPEN_ORDER")
+        _, positions, _ = self._ledger(session)
+        if positions.get(symbol, Decimal(0)) != expected_qty:
+            raise BrokerRejected("CORPORATE_ACTION_POSITION_MISMATCH")
+        seq = session.scalar(
+            select(func.max(VenueFill.seq)).where(VenueFill.account_ref == self._ref)
+        )
+        session.add(
+            VenueAction(
+                account_ref=self._ref,
+                action_id=action.id,
+                symbol=symbol,
+                last_fill_seq=seq or 0,
+                ratio_from=action.ratio_from or Decimal(1),
+                ratio_to=action.ratio_to or Decimal(1),
+                cash_delta=quantize_cash(
+                    positions.get(symbol, Decimal(0)) * (action.cash_amount or Decimal(0))
+                ),
+            )
+        )
+        session.flush()
 
     def _state(self, session: Session, row: VenueOrder) -> BrokerOrderState:
         fills = session.scalars(

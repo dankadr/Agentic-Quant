@@ -13,6 +13,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from trading.portfolio.adjustments import applied_splits, dividend_allocations, split_factor
+
 _ZERO = Decimal(0)
 _DUST = Decimal("0.0001")
 
@@ -46,7 +48,7 @@ def roundtrips(fills: Sequence[AttributedFill]) -> list[Roundtrip]:
         entry, decision, qty, pnl = active.get(
             key, (fill.ts, fill.decision_ts or fill.ts, _ZERO, _ZERO)
         )
-        if fill.qty == 0:
+        if fill.qty == 0 and key not in active:
             continue
         qty += fill.qty
         pnl += fill.pnl
@@ -71,9 +73,20 @@ def load_roundtrips(session: Session, account_id: UUID, *, end: datetime) -> lis
         ),
         {"acct": account_id, "end": end},
     )
-    return roundtrips(
-        [
-            AttributedFill(r.strategy_id, r.symbol, r.ts, r.qty, r.pnl or _ZERO, r.decision_ts)
-            for r in rows
-        ]
+    splits = applied_splits(session, account_id, end)
+    fills = [
+        AttributedFill(
+            r.strategy_id,
+            r.symbol,
+            r.ts,
+            r.qty * split_factor(splits, r.symbol, r.ts),
+            r.pnl or _ZERO,
+            r.decision_ts,
+        )
+        for r in rows
+    ]
+    fills.extend(
+        AttributedFill(owner, symbol, ts, _ZERO, pnl)
+        for ts, symbol, owner, pnl in dividend_allocations(session, account_id, end)
     )
+    return roundtrips(sorted(fills, key=lambda f: (f.ts, f.qty != 0)))

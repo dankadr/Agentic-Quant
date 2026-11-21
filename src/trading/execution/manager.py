@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -44,7 +44,7 @@ from trading.data.calendar import NEW_YORK, MarketCalendar, settlement_date
 from trading.db.models.market import Instrument
 from trading.db.models.portfolio import TradingSession
 from trading.db.models.trading import FillRow, Order, OrderEvent, OrderIntent, RiskDecisionRow
-from trading.execution.state_machine import OPEN_AT_BROKER, OrderStatus
+from trading.execution.state_machine import OPEN_AT_BROKER, TERMINAL, OrderStatus
 from trading.execution.transitions import transition_order
 from trading.jobs.lease import Lease, assert_fence
 from trading.jobs.outbox import emit_event
@@ -299,7 +299,9 @@ class ExecutionManager:
                     client_order_id=order.client_order_id,
                     symbol=instrument.symbol,
                     side=Side(order.side),
-                    position_effect=PositionEffect(order.position_effect) if order.position_effect else None,
+                    position_effect=PositionEffect(order.position_effect)
+                    if order.position_effect
+                    else None,
                     order_type=OrderType(order.type),
                     qty=order.qty,
                     limit_price=order.limit_price,
@@ -409,6 +411,20 @@ class ExecutionManager:
                         session, order, target, reason="BROKER_" + target.value, now=now
                     )
 
+    def cancel_entries(self, *, account_id: UUID, reason: str) -> None:
+        with self._sf() as session:
+            orders = session.scalars(
+                select(Order.id)
+                .join(OrderIntent, OrderIntent.id == Order.intent_id)
+                .where(
+                    Order.account_id == account_id,
+                    OrderIntent.is_entry.is_(True),
+                    Order.status.not_in([s.value for s in TERMINAL]),
+                )
+            ).all()
+        for order_id in orders:
+            self.cancel(order_id, reason=reason)
+
     def cancel_stale_entries(self, *, ttl: timedelta) -> int:
         """Cancel entry orders still open at the broker after ``ttl``; exits are left alone."""
         with self._sf() as session:
@@ -473,7 +489,9 @@ class ExecutionManager:
                     transition_order(session, order, target, reason=reason, now=now)
             return OrderStatus(order.status)
 
-    def cancel_flatten_exits(self, *, account_id: UUID, minute: datetime) -> None:
+    def cancel_flatten_exits(
+        self, *, account_id: UUID, minute: datetime, covers_only: bool = False
+    ) -> None:
         """Supersede resting exits without releasing uncertain broker reservations.
 
         Keep this minute's flatten order: a repeated tick must not cancel an order whose
@@ -486,6 +504,7 @@ class ExecutionManager:
                 .where(
                     Order.account_id == account_id,
                     OrderIntent.is_entry.is_(False),
+                    Order.position_effect == PositionEffect.CLOSE_SHORT if covers_only else true(),
                     Order.status.in_([s.value for s in OPEN_AT_BROKER]),
                 )
             ).all()

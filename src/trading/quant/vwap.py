@@ -134,8 +134,16 @@ class VwapStrategy:
             return None
         if held.qty < 0:
             limit = ceil_to_increment(quote.ask * (1 + _LIMIT_PAD_BPS / _BPS), _CENT)
-            return self._signal(data, symbol, Side.BUY, -held.qty * last.close, limit, None,
-                                (reason,), PositionEffect.CLOSE_SHORT)
+            return self._signal(
+                data,
+                symbol,
+                Side.BUY,
+                -held.qty * last.close,
+                limit,
+                None,
+                (reason,),
+                PositionEffect.CLOSE_SHORT,
+            )
         limit = floor_to_increment(quote.bid * (1 - _LIMIT_PAD_BPS / _BPS), _CENT)
         if limit <= 0:
             return None
@@ -175,8 +183,16 @@ class VwapStrategy:
             stop = ceil_to_increment(vwap + p.z_stop * std, _CENT)
             if limit <= 0 or stop <= limit:
                 return None
-            return self._signal(data, symbol, Side.SELL, p.trade_notional, limit, stop,
-                                ("VWAP_STRETCH", "REVERSION_TURN"), PositionEffect.OPEN_SHORT)
+            return self._signal(
+                data,
+                symbol,
+                Side.SELL,
+                p.trade_notional,
+                limit,
+                stop,
+                ("VWAP_STRETCH", "REVERSION_TURN"),
+                PositionEffect.OPEN_SHORT,
+            )
         if not (-p.z_stop < z <= -p.z_entry) or bars[-1].close <= bars[-2].close:
             return None
         limit = ceil_to_increment(quote.ask * (1 + _LIMIT_PAD_BPS / _BPS), _CENT)
