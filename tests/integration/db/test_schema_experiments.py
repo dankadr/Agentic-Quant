@@ -1,6 +1,7 @@
 """Experiment values emitted by heavy services must work on the migrated schema."""
 
 from collections.abc import Iterator
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -9,8 +10,9 @@ from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
-from tests.factories import T0
+from tests.factories import T0, make_account, make_instrument
 from trading.db.migrate import _config, upgrade
+from trading.db.models.portfolio import Position
 from trading.db.models.research import Experiment
 from trading.quant.research import record_experiment
 
@@ -145,3 +147,36 @@ def test_short_history_prevents_lossy_downgrade(previous_schema: tuple[str, Engi
         command.downgrade(_config(url), "0012")
     with engine.connect() as conn:
         assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0014"
+
+
+def test_short_migrations_preserve_existing_long_quantity_and_basis(
+    previous_schema: tuple[str, Engine],
+) -> None:
+    url, engine = previous_schema
+    upgrade(url, "0012")
+    with Session(engine) as db, db.begin():
+        account = make_account(db)
+        instrument = make_instrument(db)
+        identity = (account.id, instrument.id)
+        db.add(
+            Position(
+                account_id=account.id,
+                instrument_id=instrument.id,
+                qty=Decimal("0.3125"),
+                average_cost=Decimal("99.875"),
+                realized_pnl=Decimal("1.2500"),
+                updated_at=T0,
+            )
+        )
+    upgrade(url)
+    with Session(engine) as db:
+        saved = db.get(Position, identity)
+        assert saved is not None
+        assert (saved.qty, saved.average_cost, saved.realized_pnl, saved.updated_at) == (
+            Decimal("0.3125"), Decimal("99.875"), Decimal("1.2500"), T0,
+        )
+    command.downgrade(_config(url), "0012")
+    with Session(engine) as db:
+        saved = db.get(Position, identity)
+        assert saved is not None
+        assert (saved.qty, saved.average_cost) == (Decimal("0.3125"), Decimal("99.875"))

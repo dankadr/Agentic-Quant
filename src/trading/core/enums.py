@@ -41,7 +41,7 @@ class PositionEffect(StrEnum):
         return self in (self.OPEN_SHORT, self.CLOSE_SHORT)
 
 
-def effective_effect(side: Side, effect: PositionEffect | None) -> PositionEffect:
+def effective_effect(side: Side, effect: PositionEffect | str | None) -> PositionEffect:
     if effect is None:
         return PositionEffect.OPEN_LONG if side is Side.BUY else PositionEffect.CLOSE_LONG
     effect = PositionEffect(effect)

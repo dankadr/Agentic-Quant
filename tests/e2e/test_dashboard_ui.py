@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 import pytest
 
 from tests.e2e.conftest import Demo
@@ -130,6 +133,56 @@ def test_the_layout_never_scrolls_sideways_on_a_phone(new_page, demo: Demo) -> N
         page.wait_for_timeout(250)
         overflow = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
         assert overflow <= 1, f"{route} overflows by {overflow}px"
+
+
+@pytest.mark.parametrize("demo", [True, False], indirect=True, ids=["enabled", "disabled"])
+def test_paper_shorts_on_a_phone(new_page, demo: Demo, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    from playwright.sync_api import expect
+
+    color = "light" if demo.allow_short else "dark"
+    page = new_page(viewport={"width": 375, "height": 800}, color_scheme=color, reduced_motion="reduce")
+    login(page, demo)
+
+    overview = page.locator(".position-summary")
+    state = "enabled" if demo.allow_short else "disabled"
+    expect(overview.get_by_text(f"Paper shorts {state}", exact=True)).to_be_visible()
+    expect(overview.get_by_text("Borrow fees are omitted.", exact=False)).to_be_visible()
+    for ticker, direction, size, pnl in (
+        ("QQQ", "SHORT", "2", "-$8.00"),
+        ("SPY", "LONG", "1", "+$2.00"),
+    ):
+        row = overview.get_by_role("row").filter(has_text=ticker)
+        for value in (direction, size, "$100.00", pnl):
+            expect(row.get_by_text(value, exact=True)).to_be_visible()
+    for label in ("Short liability", "Short collateral", "Restricted proceeds"):
+        expect(overview.get_by_text(label, exact=True)).to_be_visible()
+    expect(overview.get_by_text("$208.00", exact=True)).to_have_count(2)
+    expect(overview.get_by_text("$200.00", exact=True)).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth") <= 376
+    assert overview.locator(".tablewrap").evaluate("(e) => e.scrollWidth <= e.clientWidth + 1")
+    captures = Path(os.environ.get("PAPER_SHORT_SCREENSHOT_DIR", str(tmp_path)))
+    captures.mkdir(parents=True, exist_ok=True)
+    overview.screenshot(path=captures / f"paper-shorts-mobile-{state}.png", animations="disabled")
+
+    page.click("#nav a[data-route=trading]")
+    for table_name, actions in (
+        ("Orders", ["SELL to open", "BUY to cover", "BUY to open", "SELL to close"]),
+        ("Signals", ["SELL to open"]),
+    ):
+        rows = page.get_by_role("table", name=table_name, exact=True)
+        for action in actions:
+            expect(rows.get_by_text(action, exact=True).first).to_be_visible()
+    page.click("#nav a[data-route=transactions]")
+    round_trips = page.get_by_role("table", name="Round trips", exact=True)
+    closed_short = round_trips.get_by_role("row").filter(has_text="AAPL")
+    for value in ("SHORT", "CLOSED", "SELL to open", "BUY to cover"):
+        expect(closed_short.get_by_text(value, exact=True)).to_be_visible()
+    expect(closed_short.get_by_text("-$4.00")).to_be_visible()
+    fills = page.get_by_role("table", name="Fills", exact=True)
+    for action in ("SELL to open", "BUY to cover"):
+        expect(fills.get_by_text(action, exact=True).first).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth") <= 376
+    assert page.problems == []
 
 
 def test_reduced_motion_never_hides_content(new_page, demo: Demo) -> None:  # type: ignore[no-untyped-def]

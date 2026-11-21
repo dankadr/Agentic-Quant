@@ -10,10 +10,11 @@ from trading.core.errors import TradingError
 from trading.db.models.market import CorporateAction
 from trading.db.models.portfolio import Position
 from trading.jobs.lease import renew_lease
+from trading.monitoring.report import daily_report
 from trading.portfolio.corporate_actions import apply_due_actions
 from trading.quant.holdings import load_holdings
 from trading.quant.registry import seed_strategies
-from trading.quant.roundtrips import load_roundtrips
+from trading.quant.roundtrips import load_roundtrips, load_trade_episodes
 
 
 def test_carried_short_split_dividend_and_cover(db, session_factory, clock, calendar):
@@ -74,8 +75,18 @@ def test_carried_short_split_dividend_and_cover(db, session_factory, clock, cale
     assert env.broker.get_account().positions == {}
     with session_factory() as s:
         assert s.scalar(select(Position.qty)) == 0
-        (trip,) = load_roundtrips(s, env.account_id, end=clock.now() + timedelta(seconds=1))
+        end = clock.now() + timedelta(seconds=1)
+        (trip,) = load_roundtrips(s, env.account_id, end=end)
         assert trip.pnl == s.scalar(select(Position.realized_pnl))
+        (episode,) = load_trade_episodes(s, env.account_id, end=end)
+        assert episode.short and episode.exit_ts == trip.exit_ts
+        assert episode.entry_qty == episode.exit_qty == 4
+        assert episode.entry_notional == 4 * lot.avg_cost
+        daily = daily_report(s, tomorrow, config=CFG, provider="p")
+        first_day = daily_report(s, DAY, config=CFG, provider="p")
+        assert D(daily["strategies"]["orb_v1"]["net_pnl"]) + D(
+            first_day["strategies"]["orb_v1"]["net_pnl"]
+        ) == trip.pnl
     assert run(env).status == "OK"
 
 

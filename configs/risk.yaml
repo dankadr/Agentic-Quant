@@ -9,6 +9,7 @@ risk:
   max_open_symbols: 8
   min_cash_reserve_pct: '0.20'
   allow_margin: false
+  # Internal paper simulator only. Enable through a reviewed rollout.
   allow_short: false
   allow_options: false
   allow_crypto: false

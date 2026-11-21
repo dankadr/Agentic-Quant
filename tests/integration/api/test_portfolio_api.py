@@ -6,12 +6,18 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
+from tests.factories import make_snapshot
 from tests.integration.api.conftest import bearer
 from tests.integration.execution.env import CFG, DAY, NOW, Env, build_env
+from tests.integration.portfolio.helpers import broker_fill, new_order
 from trading.core.clock import ManualClock
-from trading.core.enums import Side
+from trading.core.enums import PositionEffect, Side
 from trading.data.calendar import MarketCalendar
+from trading.db.models.market import MarketQuote
+from trading.db.models.research import Signal
+from trading.portfolio.ledger import apply_fill
 from trading.portfolio.valuation import record_equity_snapshot, value_portfolio
+from trading.quant.registry import seed_strategies
 
 D = Decimal
 
@@ -64,6 +70,83 @@ def test_buying_power_subtracts_open_orders(env: Env, client: TestClient, viewer
     assert body["buying_power"] == "802.0000"
 
 
+def test_short_portfolio_reserves_proceeds_and_values_liability_at_ask(
+    env: Env, client: TestClient, viewer_key: str
+) -> None:
+    with env.sf.begin() as s:
+        seed_strategies(s, CFG, now=NOW)
+        opened = new_order(s, env.account_id, "short-open", side="SELL", qty="2", limit="99")
+        opened.position_effect = PositionEffect.OPEN_SHORT
+        apply_fill(
+            s,
+            account_id=env.account_id,
+            fill=broker_fill(opened, "short-open-1", qty="2", price="100"),
+            now=NOW,
+            settles_on=DAY,
+        )
+        pending = new_order(
+            s, env.account_id, "short-pending", side="SELL", qty="1", limit="99", symbol="QQQ"
+        )
+        pending.position_effect = PositionEffect.OPEN_SHORT
+        for symbol, ask in (("SPY", D(105)), ("QQQ", D(102))):
+            s.add(
+                MarketQuote(
+                    instrument_id=env.instruments[symbol].id,
+                    provider="replay",
+                    ts=NOW,
+                    ingested_at=NOW,
+                    bid=ask - D("0.01"),
+                    ask=ask,
+                )
+            )
+        snapshot = make_snapshot(s, now=NOW, data_hash="short-api-signal")
+        s.add(
+            Signal(
+                strategy_id="orb_v1",
+                strategy_version="1.0.0",
+                instrument_id=env.instruments["SPY"].id,
+                generated_at=NOW,
+                expires_at=NOW + timedelta(minutes=1),
+                snapshot_id=snapshot.id,
+                side="SELL",
+                position_effect="OPEN_SHORT",
+                target_notional=D(200),
+                status="ALLOCATED",
+            )
+        )
+        state = value_portfolio(
+            s,
+            env.account_id,
+            marks={"SPY": D(103)},
+            ask_by_symbol={"SPY": D(105), "QQQ": D(102)},
+            as_of=NOW,
+            session_date=DAY,
+            cfg=CFG.paper_broker,
+        )
+        record_equity_snapshot(s, state, kind="INTRADAY")
+
+    headers = bearer(viewer_key)
+    response = client.get("/v1/portfolio", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["equity"] == "990.0000"
+    assert D(body["buying_power"]) == state.buying_power
+    assert body["short_liability"] == "210.0000"
+    assert body["short_collateral"] == "210.0000"
+    assert body["restricted_short_proceeds"] == "200.0000"
+    (short,) = client.get("/v1/positions", headers=headers).json()["items"]
+    assert short["direction"] == "SHORT"
+    assert (short["qty"], short["signed_qty"], short["size"]) == ("-2", "-2", "2")
+    assert (short["mark"], short["market_value"], short["unrealized_pnl"]) == ("105", "-210", "-10")
+    assert short["short_collateral"] == short["short_liability"] == "210.0000"
+    assert short["restricted_short_proceeds"] == "200.0000"
+    (signal,) = client.get("/v1/signals", headers=headers).json()["items"]
+    assert (signal["side"], signal["position_effect"], signal["action"]) == (
+        "SELL", "OPEN_SHORT", "SELL to open",
+    )
+    assert client.get("/v1/system/status", headers=headers).json()["allow_short"] is False
+
+
 def test_portfolio_503_before_any_snapshot(client: TestClient, viewer_key: str) -> None:
     r = client.get("/v1/portfolio", headers=bearer(viewer_key))
     assert r.status_code == 503
@@ -84,6 +167,7 @@ def test_positions_with_attribution_and_filter(
     (item,) = body["items"]
     assert item["symbol"] == "SPY"
     assert item["qty"] == "0.5"
+    assert (item["direction"], item["signed_qty"], item["size"]) == ("LONG", "0.5", "0.5")
     assert item["average_cost"] == "100.02"
     assert (item["mark"], item["market_value"], item["unrealized_pnl"]) == ("102", "51", "0.99")
     assert item["strategy_ids"] == ["orb_v1"]

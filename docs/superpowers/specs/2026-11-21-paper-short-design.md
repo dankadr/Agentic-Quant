@@ -1,6 +1,6 @@
 # Short positions in paper trading
 
-Status: proposed for user review. No implementation or deployment authorized by this document alone.
+Status: implementation approved by the user on 2026-11-21. Running-stack enablement remains a separate rollout step after validation and review of results.
 
 ## Intent and current behavior
 
@@ -8,7 +8,7 @@ The user wants agents to be able to short. The existing system is PAPER_ONLY and
 
 Observed blockers include `RiskPolicy.allow_short: Literal[False]`, SELL-as-exit assumptions in risk and allocation, venue capacity checks against held shares, ledger oversell rejection, a nonnegative positions constraint, and long-only flatten/reconciliation queries. Changing a flag alone is insufficient.
 
-## Proposed scope (assistant defaults, awaiting user review)
+## Approved scope (including assistant defaults)
 
 Support simulated intraday shorts for the currently supported equities and ETFs. Use the existing supported-symbol universe. No live broker orders or actual borrowing are introduced. Shortability is a configured simulation assumption, displayed as such; this does not claim a real broker could locate stock. Retain existing strategy/agent enablement settings.
 

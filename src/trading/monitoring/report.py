@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from trading.core.config import AppConfig
+from trading.portfolio.adjustments import dividend_allocations
 from trading.quant.performance import capital_flows, load_report
 
 
@@ -110,6 +111,10 @@ def daily_report(
         strategies.setdefault(r.strategy_id, {"signals": {}, "net_pnl": "0"})["net_pnl"] = str(
             r.pnl
         )
+    for at, _, owner, pnl in dividend_allocations(session, account_id, end):
+        if at >= start:
+            stats = strategies.setdefault(owner, {"signals": {}, "net_pnl": "0"})
+            stats["net_pnl"] = str(Decimal(stats["net_pnl"]) + pnl)
 
     by_status = {
         r.status: r.n

@@ -17,6 +17,20 @@ multi-day backtest engine, performance reporting against a benchmark, walk-forwa
 research tooling, and a reviewed strategy-config proposal workflow. Research agents and the ChatGPT
 MCP come in Plans C–D.
 
+## Paper short positions
+
+`risk.allow_short` defaults to `false`. When enabled for the internal paper simulator, the
+deterministic ORB and VWAP strategies can open intraday shorts on the configured universe.
+Research agents retain their advisory role. Paper shorts assume shares are available to borrow.
+Borrow fees are omitted. Sale proceeds stay restricted, and the simulator reserves separate
+collateral equal to the greater of remaining entry proceeds or current exposure at the ask.
+Turning the flag off blocks fresh short entries and increases. Existing covers and flattening
+continue under the usual exit checks.
+
+The dashboard shows position direction, size, P&L, short collateral, liability and restricted
+proceeds. `/v1/system/status` reports the loaded flag. See the
+[paper short rollout runbook](docs/runbooks/paper-shorts.md) for migration and enablement.
+
 ## Requirements
 
 Python 3.12, [uv](https://docs.astral.sh/uv/), Docker + Docker Compose v2.

@@ -11,6 +11,10 @@
   {% if readiness.reasons %}<br><span class="muted">Why: {{ readiness.reasons|join(', ') }}</span>{% endif %}
 </div>
 <div class="card">
+  <strong>Paper shorts {{ 'enabled' if allow_short else 'disabled' }}</strong><br>
+  <span class="muted">Paper shorts assume shares are available to borrow. Borrow fees are omitted.</span>
+</div>
+<div class="card">
   <strong>Release</strong><br>
   revision <code>{{ release.revision }}</code> &middot; config <code>{{ release.config_sha256[:12] }}</code><br>
   schema shipped <code>{{ release.schema_head or 'none' }}</code> &middot; applied <code>{{ release.schema_applied or 'none' }}</code>

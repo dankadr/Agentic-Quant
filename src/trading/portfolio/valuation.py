@@ -58,6 +58,14 @@ class PortfolioState:
     restricted_short_proceeds: Decimal = Decimal(0)
 
 
+def short_reserves(
+    qty: Decimal, average_cost: Decimal, liability: Decimal
+) -> tuple[Decimal, Decimal]:
+    """Restricted proceeds and collateral for a remaining short position."""
+    proceeds = quantize_cash(-qty * average_cost)
+    return proceeds, max(proceeds, liability)
+
+
 def value_portfolio(
     session: Session,
     account_id: UUID,
@@ -88,9 +96,9 @@ def value_portfolio(
             raise MissingMark(f"no mark for held position {instrument.symbol}")
         market_value = quantize_cash(position.qty * mark)
         if position.qty < 0:
-            basis = quantize_cash(-position.qty * position.average_cost)
-            restricted += basis
-            collateral += max(basis, -market_value)
+            proceeds, reserve = short_reserves(position.qty, position.average_cost, -market_value)
+            restricted += proceeds
+            collateral += reserve
         views.append(
             PositionView(
                 symbol=instrument.symbol,

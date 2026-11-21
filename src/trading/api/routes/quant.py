@@ -19,9 +19,10 @@ from trading.api.deps import get_clock, get_config, get_session
 from trading.api.idempotency import run_idempotent
 from trading.api.pagination import decode_cursor, encode_cursor
 from trading.api.problems import ApiProblem
-from trading.api.schemas import Money, Qty
+from trading.api.schemas import Money, Qty, TradeActionOut
 from trading.core.clock import Clock
 from trading.core.config import AppConfig
+from trading.core.enums import Side, effective_effect
 from trading.core.time import UtcDatetime
 from trading.db.models.market import Instrument
 from trading.db.models.portfolio import Account, EquitySnapshot
@@ -91,12 +92,11 @@ def get_strategies(
 # ---- signals -------------------------------------------------------------------------------------
 
 
-class SignalOut(BaseModel):
+class SignalOut(TradeActionOut):
     id: str
     strategy_id: str
     strategy_version: str
     symbol: str
-    side: str
     generated_at: UtcDatetime
     expires_at: UtcDatetime
     target_notional: Money
@@ -144,6 +144,7 @@ def get_signals(
                 strategy_version=s.strategy_version,
                 symbol=symbol,
                 side=s.side,
+                position_effect=effective_effect(Side(s.side), s.position_effect),
                 generated_at=s.generated_at,
                 expires_at=s.expires_at,
                 target_notional=s.target_notional,

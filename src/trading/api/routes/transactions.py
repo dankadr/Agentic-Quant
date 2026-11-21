@@ -7,17 +7,20 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from trading.api.auth import AuthPrincipal, require_viewer
-from trading.api.deps import get_session
-from trading.api.schemas import Money, Qty
+from trading.api.deps import get_clock, get_session
+from trading.api.schemas import Direction, Money, Qty, TradeActionOut, action_label
+from trading.core.clock import Clock
+from trading.core.enums import PositionEffect, Side, effective_effect
 from trading.core.time import UtcDatetime
+from trading.db.models.portfolio import Account
+from trading.quant.roundtrips import load_trade_episodes
 
 router = APIRouter(prefix="/v1", tags=["transactions"])
 _ZERO = Decimal(0)
-_FLAT = Decimal("0.0001")
 
 
 def _day_bounds(day: date) -> tuple[datetime, datetime]:
@@ -31,10 +34,9 @@ class FillStrategy(BaseModel):
     pnl: Money | None
 
 
-class FillOut(BaseModel):
+class FillOut(TradeActionOut):
     ts: UtcDatetime
     symbol: str
-    side: str
     qty: Qty
     price: Qty
     notional: Money
@@ -60,7 +62,8 @@ def get_fills(
     rows = session.execute(
         text(
             "SELECT f.id, f.ts, i.symbol, o.side, f.qty, f.price, f.fees, f.slippage_estimate,"
-            " f.execution_id, o.status FROM fills f JOIN orders o ON o.id = f.order_id"
+            " f.execution_id, o.status, o.position_effect"
+            " FROM fills f JOIN orders o ON o.id = f.order_id"
             " JOIN accounts a ON a.id = o.account_id"
             " JOIN instruments i ON i.id = o.instrument_id"
             " WHERE a.name NOT LIKE 'replay-%' AND a.name NOT LIKE 'backtest%'"
@@ -88,6 +91,7 @@ def get_fills(
                 ts=r.ts,
                 symbol=r.symbol,
                 side=r.side,
+                position_effect=effective_effect(Side(r.side), r.position_effect),
                 qty=r.qty,
                 price=r.price,
                 notional=r.qty * r.price,
@@ -115,6 +119,9 @@ class TradeOut(BaseModel):
     fees: Money
     net_pnl: Money
     hold_minutes: int | None
+    direction: Direction
+    opening_action: str
+    closing_action: str
 
 
 class TradeSummary(BaseModel):
@@ -135,61 +142,49 @@ def get_trades(
     days: int = Query(default=30, ge=1, le=365),
     _: AuthPrincipal = Depends(require_viewer),
     session: Session = Depends(get_session),
+    clock: Clock = Depends(get_clock),
 ) -> TradeList:
-    """Round trips per (strategy, symbol, UTC day), built from the fill attribution."""
+    """Attributed episodes opened or closed in the requested UTC window."""
     if day is not None:
         start, end = _day_bounds(day)
     else:
-        end = datetime.now(UTC) + timedelta(days=1)
-        start = end - timedelta(days=days + 1)
-    rows = session.execute(
-        text(
-            "SELECT s.strategy_id, i.symbol, f.ts, f.price, s.allocated_qty,"
-            " s.allocated_fees, s.pnl FROM strategy_attribution s"
-            " JOIN fills f ON f.id = s.fill_id JOIN orders o ON o.id = f.order_id"
-            " JOIN accounts a ON a.id = o.account_id"
-            " JOIN instruments i ON i.id = o.instrument_id"
-            " WHERE a.name NOT LIKE 'replay-%' AND a.name NOT LIKE 'backtest%'"
-            " AND f.ts >= :s AND f.ts < :e ORDER BY f.ts, f.id"
-        ),
-        {"s": start, "e": end},
-    )
-    groups: dict[tuple[str, str, date], list[Any]] = defaultdict(list)
-    for r in rows:
-        groups[(r.strategy_id, r.symbol, r.ts.astimezone(UTC).date())].append(r)
-    items: list[TradeOut] = []
-    for (strategy, symbol, _day), legs in groups.items():
-        buys = [x for x in legs if x.allocated_qty > 0]
-        sells = [x for x in legs if x.allocated_qty < 0]
-        if not buys:
-            continue  # an exit with no entry in this window (overnight carry) is not a round trip
-        bought = sum((x.allocated_qty for x in buys), _ZERO)
-        sold = sum((-x.allocated_qty for x in sells), _ZERO)
-        entry = sum((x.allocated_qty * x.price for x in buys), _ZERO) / bought
-        exit_ = sum((-x.allocated_qty * x.price for x in sells), _ZERO) / sold if sold > 0 else None
-        net = sum((x.pnl or _ZERO for x in legs), _ZERO)
-        fees = sum((x.allocated_fees for x in legs), _ZERO)
-        closed = abs(bought - sold) < _FLAT
-        opened_at = buys[0].ts
-        closed_at = sells[-1].ts if closed and sells else None
-        items.append(
-            TradeOut(
-                strategy_id=strategy,
-                symbol=symbol,
-                status="CLOSED" if closed else "OPEN",
-                opened_at=opened_at,
-                closed_at=closed_at,
-                qty=bought,
-                avg_entry=entry,
-                avg_exit=exit_,
-                gross_pnl=net + fees,
-                fees=fees,
-                net_pnl=net,
-                hold_minutes=int((closed_at - opened_at).total_seconds() // 60)
-                if closed_at
-                else None,
-            )
+        now = clock.now()
+        start, end = now - timedelta(days=days), now + timedelta(microseconds=1)
+    account_ids = session.scalars(
+        select(Account.id).where(
+            Account.name.not_like("replay-%"), Account.name.not_like("backtest%")
         )
+    )
+    items: list[TradeOut] = []
+    for account_id in account_ids:
+        for episode in load_trade_episodes(session, account_id, end=end):
+            closed_at = episode.exit_ts
+            if (closed_at or episode.entry_ts) < start:
+                continue
+            opened_at = episode.entry_ts
+            opening = PositionEffect.OPEN_SHORT if episode.short else PositionEffect.OPEN_LONG
+            closing = PositionEffect.CLOSE_SHORT if episode.short else PositionEffect.CLOSE_LONG
+            items.append(
+                TradeOut(
+                    strategy_id=episode.strategy_id,
+                    symbol=episode.symbol,
+                    status="CLOSED" if closed_at else "OPEN",
+                    opened_at=opened_at,
+                    closed_at=closed_at,
+                    qty=episode.entry_qty,
+                    avg_entry=episode.entry_notional / episode.entry_qty,
+                    avg_exit=episode.exit_notional / episode.exit_qty if episode.exit_qty else None,
+                    gross_pnl=episode.pnl + episode.fees,
+                    fees=episode.fees,
+                    net_pnl=episode.pnl,
+                    hold_minutes=int((closed_at - opened_at).total_seconds() // 60)
+                    if closed_at
+                    else None,
+                    direction="SHORT" if episode.short else "LONG",
+                    opening_action=action_label(opening),
+                    closing_action=action_label(closing),
+                )
+            )
     items.sort(key=lambda t: t.opened_at, reverse=True)
     summary = TradeSummary(
         trades=len(items),

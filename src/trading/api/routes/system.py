@@ -6,9 +6,10 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from trading.api.auth import AuthPrincipal, require_viewer
-from trading.api.deps import get_clock, get_session
+from trading.api.deps import get_clock, get_config, get_session
 from trading.control.state import get_system_state
 from trading.core.clock import Clock
+from trading.core.config import AppConfig
 from trading.core.time import UtcDatetime, isoformat_z
 from trading.data.calendar import NEW_YORK, CalendarUnavailable, MarketCalendar
 from trading.db.models.market import MarketBar
@@ -27,6 +28,7 @@ class ReleaseStatus(BaseModel):
 class SystemStatus(BaseModel):
     mode: str
     trading_enabled: bool
+    allow_short: bool
     trading_state: str
     risk_state: str
     risk_reason: str | None
@@ -63,12 +65,14 @@ def system_status(
     _: AuthPrincipal = Depends(require_viewer),
     session: Session = Depends(get_session),
     clock: Clock = Depends(get_clock),
+    config: AppConfig = Depends(get_config),
 ) -> SystemStatus:
     state = get_system_state(session)
     release = request.app.state.release
     return SystemStatus(
         mode=state.mode,
         trading_enabled=state.trading_enabled,
+        allow_short=config.risk.allow_short,
         trading_state=state.trading_state.value,
         risk_state=state.risk_state.value,
         risk_reason=state.risk_reason,

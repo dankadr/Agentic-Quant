@@ -21,8 +21,10 @@ from trading.alerts.store import acknowledge
 from trading.api.auth import hash_api_key
 from trading.api.deps import get_clock, get_session
 from trading.api.routes.health import compute_trading_readiness
+from trading.api.schemas import action_label
 from trading.control.state import get_system_state
 from trading.core.clock import Clock
+from trading.core.enums import Side, effective_effect
 from trading.db.models.documents import ResearchReportRow
 from trading.db.models.market import Instrument
 from trading.db.models.ops import OperationalCommandRow, Principal
@@ -149,6 +151,7 @@ def overview(
         request, "overview.html", user,
         state=state, readiness=readiness, release=request.app.state.release,
         incidents=incidents, csrf=user.csrf_token,
+        allow_short=request.app.state.config.risk.allow_short,
     )  # fmt: skip
 
 
@@ -174,10 +177,17 @@ def orders(
             .limit(100)
         )
         out = [
-            [sym, o.side, str(o.qty), str(o.filled_qty), o.status, o.status_reason or ""]
+            [
+                sym,
+                action_label(effective_effect(Side(o.side), o.position_effect)),
+                str(o.qty),
+                str(o.filled_qty),
+                o.status,
+                o.status_reason or "",
+            ]
             for o, sym in session.execute(stmt).all()
         ]
-        return ["Symbol", "Side", "Qty", "Filled", "Status", "Reason"], out
+        return ["Symbol", "Action", "Qty", "Filled", "Status", "Reason"], out
 
     return _table(request, "Orders", session, clock, rows)
 
