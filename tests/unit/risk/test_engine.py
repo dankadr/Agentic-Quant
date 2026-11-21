@@ -13,7 +13,7 @@ from tests.unit.risk.helpers import (
     symbol_view,
 )
 from trading.control.state import RiskState, TradingState
-from trading.core.enums import AssetType, OrderType, Side
+from trading.core.enums import AssetType, OrderType, PositionEffect, Side
 
 
 def test_baseline_allowed(calendar) -> None:  # type: ignore[no-untyped-def]
@@ -403,3 +403,18 @@ def test_a_disabled_strategy_can_still_be_exited(calendar) -> None:  # type: ign
     sell = evaluate(calendar, side=Side.SELL, qty="1", pf=held, enabled=frozenset())
     assert sell.allowed
     assert codes(evaluate(calendar, side=Side.BUY, enabled=frozenset())) == ["STRATEGY_DISABLED"]
+
+
+def test_open_short_is_a_flagged_entry(calendar) -> None:  # type: ignore[no-untyped-def]
+    result = evaluate(calendar, side=Side.SELL, effect=PositionEffect.OPEN_SHORT,
+                      policy={"allow_short": True})
+    assert result.allowed and result.is_entry
+    assert not evaluate(calendar, side=Side.SELL, effect=PositionEffect.OPEN_SHORT).allowed
+
+
+def test_cover_under_halt_checks_remaining_shares(calendar) -> None:  # type: ignore[no-untyped-def]
+    held = portfolio(positions=[("SPY", "-1", "100")])
+    result = evaluate(calendar, effect=PositionEffect.CLOSE_SHORT, pf=held,
+                      risk_state=RiskState.HALTED_DRAWDOWN)
+    assert result.allowed and not result.is_entry
+    assert not evaluate(calendar, effect=PositionEffect.CLOSE_SHORT, pf=held, qty="2").allowed

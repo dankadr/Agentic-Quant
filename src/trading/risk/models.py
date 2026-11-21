@@ -51,6 +51,10 @@ class AccountView:
     consumed_dedupe_keys: frozenset[str]
     enabled_strategies: frozenset[str]
     open_buy_notional_by_sector: Mapping[str, Decimal] = field(default_factory=dict)
+    open_short_notional_by_symbol: Mapping[str, Decimal] = field(default_factory=dict)
+    open_short_notional_by_sector: Mapping[str, Decimal] = field(default_factory=dict)
+    open_cover_qty_by_symbol: Mapping[str, Decimal] = field(default_factory=dict)
+
 
 
 @dataclass(frozen=True)

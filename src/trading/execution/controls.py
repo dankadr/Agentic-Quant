@@ -119,7 +119,7 @@ class ControlSupervisor:
     ) -> None:
         remaining_entries = len(_open_order_ids(session, entries_only=True))
         remaining_all = len(_open_order_ids(session, entries_only=False))
-        held = sum(1 for h in load_holdings(session, self._account_id, now) if h.qty > 0)
+        held = sum(1 for h in load_holdings(session, self._account_id, now) if h.qty != 0)
         progress = {
             "open_entry_orders": remaining_entries,
             "open_orders": remaining_all,

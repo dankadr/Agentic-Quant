@@ -134,6 +134,7 @@ class StrategyIntentSource:
                 entered_today=load_entered_today(session, self._account_id, info.open_at),
                 entry_history=load_entry_history(session, self._account_id, info.open_at, now),
                 positions={p.symbol: p.qty for p in portfolio.positions},
+                allow_short=self._config.risk.allow_short,
                 flatten_now=trading_state is TradingState.FLATTENING,
             )
             signals: list[SignalProposal] = []

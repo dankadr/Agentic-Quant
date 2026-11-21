@@ -66,6 +66,8 @@ def build_runtime(
         instruments=instruments,
         clock=clock,
         faults=faults or FaultPlan(),
+        allow_short=config.risk.allow_short,
+        calendar=calendar,
     )
     broker.open_account(config.system.starting_cash_usd)
     intent_source = intents or StrategyIntentSource(

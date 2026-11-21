@@ -320,7 +320,7 @@ def _compare_books(
             for symbol, qty in session.execute(
                 select(Instrument.symbol, Position.qty)
                 .join(Instrument, Instrument.id == Position.instrument_id)
-                .where(Position.account_id == account_id, Position.qty > 0)
+                .where(Position.account_id == account_id, Position.qty != 0)
             )
         }
         local_cash = session.scalar(

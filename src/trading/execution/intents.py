@@ -59,6 +59,7 @@ class _ScriptEntry(BaseModel):
     at: UtcDatetime
     symbol: str
     side: Side
+    position_effect: PositionEffect | None = None
     quantity: NoFloatDecimal
     order_type: OrderType
     limit_price: NoFloatDecimal | None = None
@@ -97,6 +98,7 @@ class ScriptedIntentSource:
                 ProposalRequest(
                     symbol=entry.symbol,
                     side=entry.side,
+                    position_effect=entry.position_effect,
                     quantity=entry.quantity,
                     order_type=entry.order_type,
                     limit_price=entry.limit_price,

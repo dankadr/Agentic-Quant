@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from trading.control.state import RiskState, TradingState
 from trading.core.config import load_config
-from trading.core.enums import AssetType, OrderType, Side, TimeInForce
+from trading.core.enums import AssetType, OrderType, PositionEffect, Side, TimeInForce
 from trading.data.calendar import MarketCalendar
 from trading.data.instruments import InstrumentInfo
 from trading.data.models import Bar, Quote
@@ -26,6 +26,8 @@ CONFIG = load_config(Path("configs"))
 ENGINE_BASELINE: dict[str, Any] = {
     "max_symbol_exposure_pct": Decimal("0.10"),
     "max_open_symbols": 3,
+    "max_sector_exposure_pct": Decimal("0.30"),
+    "max_new_entries_per_day": 10,
     "max_daily_loss_pct": Decimal("0.01"),
 }
 NOW = datetime(2026, 10, 19, 15, 0, tzinfo=UTC)
@@ -86,6 +88,7 @@ def evaluate(
     *,
     symbol: str = "SPY",
     side: Side = Side.BUY,
+    effect: PositionEffect | None = None,
     qty: str = "1",
     limit: str | None = "100.00",
     otype: OrderType = OrderType.LIMIT,
@@ -117,7 +120,7 @@ def evaluate(
         quality_status="OK", data_hash="h",
     )  # fmt: skip
     proposal = ProposedOrder(
-        account_id=ACCOUNT_ID, instrument=instr, side=side, quantity=D(qty), order_type=otype,
+        account_id=ACCOUNT_ID, instrument=instr, side=side, position_effect=effect, quantity=D(qty), order_type=otype,
         limit_price=D(limit) if limit else None, time_in_force=TimeInForce.DAY, strategy_id=strategy_id, strategy_ids=strategy_ids,
         signal_id=None, signal_expires_at=expires, dedupe_key=dedupe_key,
     )  # fmt: skip

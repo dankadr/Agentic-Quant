@@ -36,7 +36,7 @@ from trading.control.state import (
 )
 from trading.core.clock import Clock
 from trading.core.config import AppConfig
-from trading.core.enums import OrderType, Side, TimeInForce
+from trading.core.enums import OrderType, PositionEffect, Side, TimeInForce, effective_effect
 from trading.core.errors import TradingError
 from trading.core.hashing import canonical_json
 from trading.core.ids import make_client_order_id
@@ -181,11 +181,13 @@ class ExecutionManager:
         client_order_id = make_client_order_id(
             proposal.strategy_id, session_date, (existing or 0) + 1
         )
-        is_entry = proposal.side is Side.BUY
+        effect = effective_effect(proposal.side, proposal.position_effect)
+        is_entry = effect.is_entry
         intent = OrderIntent(
             account_id=proposal.account_id,
             instrument_id=proposal.instrument.id,
             side=proposal.side.value,
+            position_effect=effect.value,
             quantity=proposal.quantity,
             order_type=proposal.order_type.value,
             limit_price=proposal.limit_price,
@@ -220,6 +222,7 @@ class ExecutionManager:
             client_order_id=client_order_id,
             broker_order_id=None,
             side=proposal.side.value,
+            position_effect=effect.value,
             type=proposal.order_type.value,
             time_in_force=proposal.time_in_force.value,
             limit_price=proposal.limit_price,
@@ -296,6 +299,7 @@ class ExecutionManager:
                     client_order_id=order.client_order_id,
                     symbol=instrument.symbol,
                     side=Side(order.side),
+                    position_effect=PositionEffect(order.position_effect) if order.position_effect else None,
                     order_type=OrderType(order.type),
                     qty=order.qty,
                     limit_price=order.limit_price,

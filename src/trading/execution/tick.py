@@ -149,7 +149,7 @@ class PaperTickProcessor:
         held = session.execute(
             select(Instrument.id, Instrument.symbol)
             .join(Position, Position.instrument_id == Instrument.id)
-            .where(Position.account_id == self._account_id, Position.qty > 0)
+            .where(Position.account_id == self._account_id, Position.qty != 0)
         ).all()
         for instrument_id, symbol in held:
             close = session.scalar(
@@ -305,7 +305,7 @@ class PaperTickProcessor:
                 for symbol, qty in session.execute(
                     select(Instrument.symbol, Position.qty)
                     .join(Position, Position.instrument_id == Instrument.id)
-                    .where(Position.account_id == self._account_id, Position.qty > 0)
+                    .where(Position.account_id == self._account_id, Position.qty != 0)
                 )
             }
             valued = True
@@ -470,6 +470,7 @@ class PaperTickProcessor:
                 account_id=self._account_id,
                 instrument=instrument,
                 side=request.side,
+                position_effect=request.position_effect,
                 quantity=request.quantity,
                 order_type=request.order_type,
                 limit_price=request.limit_price,

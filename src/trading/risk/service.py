@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from trading.control.state import get_system_state
 from trading.core.config import AppConfig
-from trading.core.enums import Side
+from trading.core.enums import PositionEffect, Side, effective_effect
 from trading.core.hashing import canonical_json
 from trading.core.money import quantize_cash
 from trading.data.snapshot import MarketSnapshot
@@ -41,6 +41,7 @@ def proposal_terms(proposal: ProposedOrder) -> dict[str, object]:
     return {
         "symbol": proposal.instrument.symbol,
         "side": proposal.side,
+        "position_effect": proposal.position_effect,
         "quantity": proposal.quantity,
         "order_type": proposal.order_type,
         "limit_price": proposal.limit_price,
@@ -73,17 +74,26 @@ def build_account_view(
     buy_by_symbol: dict[str, Decimal] = {}
     buy_by_sector: dict[str, Decimal] = {}
     sell_qty: dict[str, Decimal] = {}
+    short_by_symbol: dict[str, Decimal] = {}
+    short_by_sector: dict[str, Decimal] = {}
+    cover_qty: dict[str, Decimal] = {}
     for order, symbol, sector in open_orders:
         remaining = order.qty - order.filled_qty
-        if order.side == Side.SELL.value:
-            sell_qty[symbol] = sell_qty.get(symbol, Decimal(0)) + remaining
+        effect = effective_effect(Side(order.side), PositionEffect(order.position_effect) if order.position_effect else None)
+        if not effect.is_entry:
+            exits = cover_qty if effect.is_short else sell_qty
+            exits[symbol] = exits.get(symbol, Decimal(0)) + remaining
             continue
         price = order.limit_price if order.limit_price is not None else asks.get(symbol)
         if price is None:
             raise MissingMark(f"no reference price for open market buy of {symbol}")
+        if effect.is_short:
+            price = max(price, asks.get(symbol, price))
+        by_symbol = short_by_symbol if effect.is_short else buy_by_symbol
+        by_sector = short_by_sector if effect.is_short else buy_by_sector
         notional = quantize_cash(remaining * price)
-        buy_by_symbol[symbol] = buy_by_symbol.get(symbol, Decimal(0)) + notional
-        buy_by_sector[sector] = buy_by_sector.get(sector, Decimal(0)) + notional
+        by_symbol[symbol] = by_symbol.get(symbol, Decimal(0)) + notional
+        by_sector[sector] = by_sector.get(sector, Decimal(0)) + notional
     entries = session.scalar(
         select(TradingSession.new_entries).where(
             TradingSession.account_id == account_id, TradingSession.session_date == session_date
@@ -109,6 +119,9 @@ def build_account_view(
         open_buy_notional_by_symbol=buy_by_symbol,
         open_buy_notional_by_sector=buy_by_sector,
         open_sell_qty_by_symbol=sell_qty,
+        open_short_notional_by_symbol=short_by_symbol,
+        open_short_notional_by_sector=short_by_sector,
+        open_cover_qty_by_symbol=cover_qty,
         new_entries_today=entries or 0,
         consumed_dedupe_keys=consumed,
         enabled_strategies=enabled,

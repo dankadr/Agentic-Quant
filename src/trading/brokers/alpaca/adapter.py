@@ -141,6 +141,8 @@ class AlpacaPaperAdapter:
     # ---- orders --------------------------------------------------------------------------
 
     def submit_order(self, req: BrokerOrderRequest) -> BrokerOrderState:
+        if req.position_effect is not None and req.position_effect.is_short:
+            raise BrokerRejected("SHORT_EFFECT_UNSUPPORTED")
         body: dict[str, Any] = {
             "symbol": req.symbol,
             "qty": str(req.qty),
