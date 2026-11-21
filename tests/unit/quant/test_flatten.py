@@ -62,3 +62,11 @@ def test_window_is_configurable(calendar: MarketCalendar) -> None:
 def test_deterministic(calendar: MarketCalendar) -> None:
     d = data(calendar, 5, {"SPY": "0.5"})
     assert strategy().evaluate(d) == strategy().evaluate(d)
+
+
+def test_covers_short_with_flag_off(calendar: MarketCalendar) -> None:
+    signal, = strategy().evaluate(data(calendar, 5, {"SPY": "-2"}))
+    assert signal.side == Side.BUY
+    assert signal.position_effect == "CLOSE_SHORT"
+    assert signal.target_notional_usd == D("200")
+    assert signal.limit_price == D("100.22")

@@ -11,8 +11,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from trading.core.enums import Side
-from trading.core.money import floor_to_increment
+from trading.core.enums import PositionEffect
+from trading.core.money import ceil_to_increment, floor_to_increment
 from trading.quant.models import SignalProposal, StrategyInput
 
 _CENT = Decimal("0.01")
@@ -42,9 +42,14 @@ class FlattenStrategy:
         signals: list[SignalProposal] = []
         for symbol, qty in sorted(data.positions.items()):
             view = data.snapshot.symbols.get(symbol)
-            if qty <= 0 or view is None or view.quote is None or view.quote.bid <= 0:
+            if qty == 0 or view is None or not view.tradable or view.quote is None:
                 continue
-            limit = floor_to_increment(view.quote.bid * (1 - _PAD_BPS / _BPS), _CENT)
+            if qty < 0:
+                effect = PositionEffect.CLOSE_SHORT
+                limit = ceil_to_increment(view.quote.ask * (1 + _PAD_BPS / _BPS), _CENT)
+            else:
+                effect = PositionEffect.CLOSE_LONG
+                limit = floor_to_increment(view.quote.bid * (1 - _PAD_BPS / _BPS), _CENT)
             if limit <= 0:
                 continue
             signals.append(
@@ -52,11 +57,12 @@ class FlattenStrategy:
                     strategy_id=self.strategy_id,
                     strategy_version=self.version,
                     symbol=symbol,
-                    side=Side.SELL,
+                    side=effect.side,
+                    position_effect=effect,
                     generated_at=data.now,
                     expires_at=data.now + timedelta(seconds=_TTL_SECONDS),
                     market_snapshot_id=data.snapshot.id,
-                    target_notional_usd=qty * view.quote.mid,
+                    target_notional_usd=abs(qty) * view.quote.mid,
                     stop_price=None,
                     limit_price=limit,
                     reason_codes=("EOD_FLATTEN",),
