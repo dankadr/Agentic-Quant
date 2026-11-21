@@ -36,6 +36,13 @@ class MarketCalendar(Protocol):
     def add_sessions(self, d: date, n: int) -> date: ...
 
 
+def settlement_date(calendar: MarketCalendar, trade_day: date, settlement_days: int) -> date:
+    day = trade_day
+    for _ in range(settlement_days):
+        day = calendar.next_session_after(day).session_date
+    return day
+
+
 class XnysCalendar:
     def __init__(self, start: date, end: date) -> None:
         self._start = start

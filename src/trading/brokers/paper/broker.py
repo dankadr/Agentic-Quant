@@ -5,7 +5,7 @@ the application ledger, so reconciliation compares two independent records.
 """
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select, update
@@ -28,6 +28,7 @@ from trading.core.clock import Clock
 from trading.core.config import PaperBrokerConfig
 from trading.core.enums import OrderType, PositionEffect, Side, effective_effect
 from trading.core.money import is_multiple_of, quantize_price, trade_cash_amount
+from trading.data.calendar import NEW_YORK, MarketCalendar, XnysCalendar, settlement_date
 from trading.data.instruments import InstrumentInfo, qty_increment
 from trading.data.models import Bar, Quote
 from trading.db.models.venue import VenueAccount, VenueFill, VenueOrder
@@ -45,6 +46,7 @@ class PaperBroker:
         instruments: Mapping[str, InstrumentInfo],
         clock: Clock,
         allow_short: bool = False,
+        calendar: MarketCalendar | None = None,
         faults: FaultPlan = FaultPlan(),  # noqa: B008  (frozen, immutable default)
     ) -> None:
         self._sf = session_factory
@@ -52,6 +54,8 @@ class PaperBroker:
         self._cfg = config
         self._instruments = instruments
         self._clock = clock
+        self._calendar = calendar
+        self._settlement_cutoff: tuple[date, date] | None = None
         self._allow_short = allow_short
         self._faults = faults
         self._quotes: dict[str, Quote] = {}
@@ -68,16 +72,42 @@ class PaperBroker:
             raise BrokerRejected("UNKNOWN_ACCOUNT")
         return account
 
-    def _ledger(self, session: Session) -> tuple[Decimal, dict[str, Decimal], dict[str, Decimal]]:
+    def _settled_through(self, today: date) -> date:
+        """Latest sale date whose proceeds have settled by this exchange-local day."""
+        if self._settlement_cutoff is not None and self._settlement_cutoff[0] == today:
+            return self._settlement_cutoff[1]
+        days = self._cfg.settlement_days
+        span = timedelta(days=30 + 3 * days)
+        calendar = self._calendar or XnysCalendar(today - span, today + span)
+        trade_day = today
+        while settlement_date(calendar, trade_day, days) > today:
+            trade_day -= timedelta(days=1)
+        self._settlement_cutoff = (today, trade_day)
+        return trade_day
+
+    def _ledger(
+        self, session: Session, *, settled_only: bool = False
+    ) -> tuple[Decimal, dict[str, Decimal], dict[str, Decimal]]:
         cash = self._account(session).starting_cash
         positions: dict[str, Decimal] = {}
         costs: dict[str, Decimal] = {}
-        fills = session.scalars(
-            select(VenueFill).where(VenueFill.account_ref == self._ref).order_by(VenueFill.seq)
+        fills = session.execute(
+            select(VenueFill, VenueOrder.position_effect)
+            .join(VenueOrder, VenueOrder.client_order_id == VenueFill.client_order_id)
+            .where(VenueFill.account_ref == self._ref)
+            .order_by(VenueFill.seq)
         )
-        for fill in fills:
+        for fill, raw_effect in fills:
             side = Side(fill.side)
-            cash += trade_cash_amount(side, fill.qty, fill.price) - fill.fees
+            effect = effective_effect(side, PositionEffect(raw_effect) if raw_effect else None)
+            cash -= fill.fees
+            if (
+                not settled_only
+                or effect is not PositionEffect.CLOSE_LONG
+                or fill.ts.astimezone(NEW_YORK).date()
+                <= self._settled_through(self._clock.now().astimezone(NEW_YORK).date())
+            ):
+                cash += trade_cash_amount(side, fill.qty, fill.price)
             held = positions.get(fill.symbol, Decimal(0))
             if side is Side.SELL and held <= 0:
                 costs[fill.symbol] = quantize_price(
@@ -198,7 +228,7 @@ class PaperBroker:
         filling: VenueOrder | None = None,
         fee: Decimal | None = None,
     ) -> None:
-        cash, positions, costs = self._ledger(session)
+        cash, positions, costs = self._ledger(session, settled_only=effect.is_entry)
         held = positions.get(symbol, Decimal(0))
         directed = -held if effect.is_short else held
         if effect is PositionEffect.OPEN_SHORT and not self._allow_short:
@@ -295,7 +325,7 @@ class PaperBroker:
             select(VenueFill, VenueOrder.broker_order_id)
             .join(VenueOrder, VenueOrder.client_order_id == VenueFill.client_order_id)
             .where(VenueFill.account_ref == self._ref)
-            .order_by(VenueFill.ts, VenueFill.execution_id)
+            .order_by(VenueFill.seq)
         )
         if since is not None:
             stmt = stmt.where(VenueFill.ts >= since)

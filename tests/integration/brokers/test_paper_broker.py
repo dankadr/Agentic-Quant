@@ -1,4 +1,5 @@
-from datetime import timedelta
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from trading.brokers.paper.broker import PaperBroker
 from trading.brokers.paper.faults import FaultPlan
 from trading.core.clock import ManualClock
 from trading.core.config import load_config
-from trading.core.enums import OrderType, Side, TimeInForce
+from trading.core.enums import OrderType, PositionEffect, Side, TimeInForce
 from trading.data.instruments import upsert_universe
 from trading.data.models import Bar, Quote
 
@@ -46,9 +47,14 @@ def make_broker(db: Session, session_factory: sessionmaker[Session], clock: Manu
     instruments = upsert_universe(db, CFG.universe)
     db.commit()
 
-    def _make(faults: FaultPlan = NO_FAULTS, *, allow_short: bool = False) -> PaperBroker:
+    def _make(
+        faults: FaultPlan = NO_FAULTS,
+        *,
+        allow_short: bool = False,
+        latency_ms: int = CFG.paper_broker.latency_ms,
+    ) -> PaperBroker:
         broker = PaperBroker(
-            session_factory, account_ref=ACCOUNT, config=CFG.paper_broker,
+            session_factory, account_ref=ACCOUNT, config=CFG.paper_broker.model_copy(update={"latency_ms": latency_ms}),
             instruments=instruments, clock=clock, faults=faults, allow_short=allow_short,
         )  # fmt: skip
         broker.open_account(D("1000.00"))
@@ -277,10 +283,6 @@ def test_open_account_is_idempotent(make_broker, db: Session) -> None:  # type: 
 
 
 def test_short_venue_reserves_entries_and_allows_disabled_cover(make_broker, clock) -> None:  # type: ignore[no-untyped-def]
-    from dataclasses import replace
-
-    from trading.core.enums import PositionEffect
-
     sell = replace(
         request("short", Side.SELL, "6", "99"), position_effect=PositionEffect.OPEN_SHORT
     )
@@ -306,10 +308,6 @@ def test_short_venue_reserves_entries_and_allows_disabled_cover(make_broker, clo
 
 
 def test_adverse_ask_prevents_short_fill(make_broker, clock) -> None:  # type: ignore[no-untyped-def]
-    from dataclasses import replace
-
-    from trading.core.enums import PositionEffect
-
     broker = make_broker(allow_short=True)
     tick(broker, clock)
     sell = replace(
@@ -322,10 +320,6 @@ def test_adverse_ask_prevents_short_fill(make_broker, clock) -> None:  # type: i
 
 
 def test_stale_ask_for_other_short_blocks_new_entry(make_broker, clock) -> None:  # type: ignore[no-untyped-def]
-    from dataclasses import replace
-
-    from trading.core.enums import PositionEffect
-
     broker = make_broker(allow_short=True)
     tick(broker, clock)
     broker.submit_order(
@@ -335,3 +329,84 @@ def test_stale_ask_for_other_short_blocks_new_entry(make_broker, clock) -> None:
     clock.advance(timedelta(seconds=CFG.paper_broker.quote_max_age_seconds + 1))
     with pytest.raises(BrokerRejected, match="NO_REFERENCE_PRICE"):
         broker.submit_order(request("other", symbol="QQQ"))
+
+
+def test_long_sale_proceeds_fund_shorts_only_after_holiday_settlement(make_broker, clock) -> None:
+    broker = make_broker(allow_short=True)
+    clock.set(datetime(2026, 11, 25, 16, tzinfo=UTC))
+    broker.submit_order(request("buy", qty="9"))
+    assert tick(broker, clock)
+    broker.submit_order(request("sell", Side.SELL, "9", "99"))
+    assert tick(broker, clock)
+    assert broker.get_account().cash > 990
+    short = replace(
+        request("short", Side.SELL, "5", "99"), position_effect=PositionEffect.OPEN_SHORT
+    )
+    for day in (25, 26):
+        clock.set(datetime(2026, 11, day, 17, tzinfo=UTC))
+        tick(broker, clock)
+        with pytest.raises(BrokerRejected, match="INSUFFICIENT_FUNDS"):
+            broker.submit_order(short)
+    clock.set(datetime(2026, 11, 27, 16, tzinfo=UTC))
+    tick(broker, clock)
+    broker.submit_order(short)
+    assert tick(broker, clock)
+
+
+def test_adverse_fill_cannot_use_other_symbols_unsettled_sale(make_broker, clock) -> None:
+    broker = make_broker(allow_short=True)
+    broker.submit_order(request("buy", qty="8"))
+    assert tick(broker, clock)
+    tick(broker, clock, symbol="QQQ")
+    short = replace(
+        request("short", Side.SELL, "1.5", "99", symbol="QQQ"),
+        position_effect=PositionEffect.OPEN_SHORT,
+    )
+    broker.submit_order(short)
+    broker.submit_order(request("sell", Side.SELL, "8", "99"))
+    assert tick(broker, clock)
+    assert tick(broker, clock, symbol="QQQ", bid="150", ask="151") == []
+    assert broker.get_account().positions == {}
+
+
+def test_restart_recovers_same_time_open_and_cover_in_venue_sequence(
+    make_broker, clock, db
+) -> None:
+    from tests.integration.portfolio.helpers import DAY, new_order, open_account
+    from trading.portfolio.ledger import apply_fill
+
+    broker = make_broker(allow_short=True, latency_ms=0)
+    tick(broker, clock)
+    short = replace(
+        request("z-open", Side.SELL, "2", "99"), position_effect=PositionEffect.OPEN_SHORT
+    )
+    cover = replace(request("a-cover", qty="2"), position_effect=PositionEffect.CLOSE_SHORT)
+    for order in (short, cover):
+        broker.submit_order(order)
+        assert tick(broker, clock, advance=0)
+    restarted = make_broker()
+    fills = restarted.list_fills(since=clock.now())
+    assert [f.client_order_id for f in fills] == ["z-open", "a-cover"]
+    account = open_account(db)
+    for req in (short, cover):
+        row = new_order(db, account, req.client_order_id, side=req.side.value, qty="2")
+        row.position_effect = req.position_effect.value
+    for fill in fills:
+        result = apply_fill(db, account_id=account, fill=fill, settles_on=DAY, now=clock.now())
+    assert result.position_qty == 0
+
+
+def test_cover_can_reduce_short_even_when_cash_cannot_pay_entire_loss(make_broker, clock) -> None:
+    broker = make_broker(allow_short=True)
+    tick(broker, clock)
+    broker.submit_order(
+        replace(request("s", Side.SELL, "8", "99"), position_effect=PositionEffect.OPEN_SHORT)
+    )
+    assert tick(broker, clock)
+    disabled = make_broker()
+    cover = replace(request("c", qty="8", limit="260"), position_effect=PositionEffect.CLOSE_SHORT)
+    disabled.submit_order(cover)
+    assert tick(disabled, clock, bid="250", ask="251")
+    state = disabled.get_account()
+    assert not state.positions
+    assert state.cash < 0

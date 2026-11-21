@@ -40,7 +40,7 @@ from trading.core.enums import OrderType, Side, TimeInForce
 from trading.core.errors import TradingError
 from trading.core.hashing import canonical_json
 from trading.core.ids import make_client_order_id
-from trading.data.calendar import NEW_YORK, MarketCalendar
+from trading.data.calendar import NEW_YORK, MarketCalendar, settlement_date
 from trading.db.models.market import Instrument
 from trading.db.models.portfolio import TradingSession
 from trading.db.models.trading import FillRow, Order, OrderEvent, OrderIntent, RiskDecisionRow
@@ -341,9 +341,7 @@ class ExecutionManager:
     def _settles_on(self, ts: datetime) -> date:
         info = self._calendar.session_at(ts)
         day = info.session_date if info is not None else ts.astimezone(NEW_YORK).date()
-        for _ in range(self._config.paper_broker.settlement_days):
-            day = self._calendar.next_session_after(day).session_date
-        return day
+        return settlement_date(self._calendar, day, self._config.paper_broker.settlement_days)
 
     def sync_fills(self) -> int:
         """Import broker fills (idempotent) and pick up broker-side cancels/expiries."""

@@ -72,8 +72,11 @@ def reserved_for_open_buys(
         if effect is PositionEffect.CLOSE_LONG:
             continue
         price = order.limit_price if order.limit_price is not None else ask_by_symbol.get(symbol)
-        if effect.is_short:
-            price = max(price or Decimal(0), ask_by_symbol.get(symbol, Decimal(0)))
+        if effect is PositionEffect.OPEN_SHORT:
+            ask = ask_by_symbol.get(symbol)
+            if ask is None or ask <= 0:
+                raise MissingMark(f"no ask to reserve short collateral for {symbol} order")
+            price = max(order.limit_price or ask, ask)
         if price is None or price <= 0:
             raise MissingMark(f"no reference price to reserve cash for {symbol} order")
         remaining = order.qty - order.filled_qty

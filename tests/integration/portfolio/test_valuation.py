@@ -216,3 +216,13 @@ def test_pending_cover_releases_no_collateral_until_filled(db: Session) -> None:
         600,
         1440,
     )
+
+
+@pytest.mark.parametrize("asks", [{}, {"SPY": D(0)}])
+def test_pending_short_limit_requires_positive_ask(db: Session, asks: dict[str, Decimal]) -> None:
+    account = open_account(db)
+    order = new_order(db, account, "pending", side="SELL", qty="2", limit="99")
+    order.position_effect = "OPEN_SHORT"
+    with pytest.raises(MissingMark):
+        reserved_for_open_buys(db, account, ask_by_symbol=asks, cfg=CFG)
+    assert reserved_for_open_buys(db, account, ask_by_symbol={"SPY": D(101)}, cfg=CFG) > 202
