@@ -99,6 +99,7 @@ class StrategyInput:
     positions: Mapping[str, Decimal] = field(default_factory=dict)  # symbol -> total shares held
     # True while the system is FLATTENING: liquidate now, not only inside the pre-close window.
     flatten_now: bool = False
+    allow_short: bool = False
 
 
 class SignalStrategy(Protocol):

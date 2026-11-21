@@ -1,4 +1,4 @@
-"""Opening Range Breakout (long only). A research hypothesis, not validated edge.
+"""Opening Range Breakout. A research hypothesis, not validated edge.
 
 Entry: after the opening range completes, a closed bar above range-high (plus a buffer) on
 volume well above the range's average, with a sane spread and a bounded daily entry budget.
@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from trading.core.enums import Side
+from trading.core.enums import PositionEffect, Side, effective_effect
 from trading.core.money import NoFloatDecimal, ceil_to_increment, floor_to_increment
 from trading.data.models import Bar
 from trading.quant.models import Holding, SignalProposal, StrategyInput, entry_block_reason
@@ -48,13 +48,14 @@ class OrbStrategy:
 
     def _signal(
         self, data: StrategyInput, symbol: str, side: Side, notional: Decimal, limit: Decimal,
-        stop: Decimal | None, reasons: tuple[str, ...],
+        stop: Decimal | None, reasons: tuple[str, ...], effect: PositionEffect | None = None,
     ) -> SignalProposal:  # fmt: skip
         return SignalProposal(
             strategy_id=self.strategy_id,
             strategy_version=self.version,
             symbol=symbol,
             side=side,
+            position_effect=effective_effect(side, effect),
             generated_at=data.now,
             expires_at=data.now + timedelta(seconds=self.p.signal_ttl_seconds),
             market_snapshot_id=data.snapshot.id,
@@ -88,13 +89,13 @@ class OrbStrategy:
                 (
                     h
                     for h in data.holdings
-                    if h.strategy_id == self.strategy_id and h.symbol == symbol and h.qty > 0
+                    if h.strategy_id == self.strategy_id and h.symbol == symbol and h.qty != 0
                 ),
                 None,
             )
             if held is not None:
                 self.entry_diagnostics[symbol] = "HOLDING"
-                exit_signal = self._exit(data, symbol, held, bars[-1], view.quote.bid, range_low)
+                exit_signal = self._exit(data, symbol, held, bars[-1], view.quote, range_high if held.qty < 0 else range_low)
                 if exit_signal is not None:
                     signals.append(exit_signal)
                 continue
@@ -110,20 +111,25 @@ class OrbStrategy:
         symbol: str,
         held: Holding,
         last: Bar,
-        bid: Decimal,
-        range_low: Decimal,
+        quote: Any,
+        stop: Decimal,
     ) -> SignalProposal | None:
-        risk = held.avg_cost - range_low
-        target = held.avg_cost + self.p.target_r * risk if risk > 0 else None
-        if last.close <= range_low:
+        direction = 1 if held.qty > 0 else -1
+        risk = direction * (held.avg_cost - stop)
+        target = held.avg_cost + direction * self.p.target_r * risk if risk > 0 else None
+        if direction * (last.close - stop) <= 0:
             reason = "STOP"
-        elif target is not None and last.close >= target:
+        elif target is not None and direction * (last.close - target) >= 0:
             reason = "TARGET"
         elif data.now - held.opened_at >= timedelta(minutes=self.p.max_hold_minutes):
             reason = "TIME_STOP"
         else:
             return None
-        limit = floor_to_increment(bid * (1 - _LIMIT_PAD_BPS / _BPS), _CENT)
+        if held.qty < 0:
+            limit = ceil_to_increment(quote.ask * (1 + _LIMIT_PAD_BPS / _BPS), _CENT)
+            return self._signal(data, symbol, Side.BUY, -held.qty * last.close, limit, None,
+                                (reason,), PositionEffect.CLOSE_SHORT)
+        limit = floor_to_increment(quote.bid * (1 - _LIMIT_PAD_BPS / _BPS), _CENT)
         if limit <= 0:
             return None
         return self._signal(data, symbol, Side.SELL, held.qty * last.close, limit, None, (reason,))
@@ -150,9 +156,15 @@ class OrbStrategy:
         average_volume = sum((b.volume for b in range_bars), Decimal(0)) / len(range_bars)
         if average_volume < p.min_avg_volume or quote.spread_bps > p.max_spread_bps:
             return None
-        if last.close <= range_high * (1 + p.breakout_buffer_bps / _BPS):
-            return None
         if last.volume < p.volume_confirm_ratio * average_volume:
+            return None
+        if data.allow_short and last.close < range_low * (1 - p.breakout_buffer_bps / _BPS):
+            limit = floor_to_increment(quote.bid * (1 - _LIMIT_PAD_BPS / _BPS), _CENT)
+            if limit <= 0 or limit >= range_high:
+                return None
+            return self._signal(data, symbol, Side.SELL, p.trade_notional, limit, range_high,
+                                ("ORB_BREAK", "VOLUME_CONFIRM"), PositionEffect.OPEN_SHORT)
+        if last.close <= range_high * (1 + p.breakout_buffer_bps / _BPS):
             return None
         limit = ceil_to_increment(quote.ask * (1 + _LIMIT_PAD_BPS / _BPS), _CENT)
         if range_low >= limit:
