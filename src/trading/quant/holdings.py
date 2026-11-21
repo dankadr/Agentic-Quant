@@ -22,7 +22,6 @@ DUST = Decimal("0.0001")
 class _Lot:
     opened_at: datetime
     qty: Decimal = Decimal(0)
-    bought: Decimal = Decimal(0)
     cost: Decimal = Decimal(0)
 
 
@@ -48,16 +47,15 @@ def load_holdings(session: Session, account_id: UUID, as_of: datetime) -> tuple[
     for r in rows:
         qty = Decimal(r.qty)
         lot = lots.setdefault((r.strategy_id, r.symbol), _Lot(r.ts))
-        if qty > 0:
-            if lot.qty < DUST:  # flat before this buy: a new lot
-                lot = lots[(r.strategy_id, r.symbol)] = _Lot(r.ts)
-            lot.bought += qty
-            lot.cost += qty * Decimal(r.price)
+        if abs(lot.qty) < DUST:
+            lot = lots[(r.strategy_id, r.symbol)] = _Lot(r.ts)
+        if lot.qty * qty >= 0 and qty:
+            lot.cost = (abs(lot.qty) * lot.cost + abs(qty) * r.price) / abs(lot.qty + qty)
         lot.qty += qty
     return tuple(
-        Holding(strategy, symbol, lot.qty, lot.cost / lot.bought, lot.opened_at)
+        Holding(strategy, symbol, lot.qty, lot.cost, lot.opened_at)
         for (strategy, symbol), lot in sorted(lots.items())
-        if lot.qty >= DUST and lot.bought > 0
+        if abs(lot.qty) >= DUST
     )
 
 
@@ -72,7 +70,7 @@ def load_entered_today(
             " JOIN orders o ON o.intent_id = n.id"
             " JOIN instruments i ON i.id = o.instrument_id"
             " CROSS JOIN LATERAL unnest(n.strategy_ids) AS s(strategy_id)"
-            " WHERE o.account_id = :acct AND n.side = 'BUY' AND n.created_at >= :since"
+            " WHERE o.account_id = :acct AND n.is_entry AND n.created_at >= :since"
             " AND (o.status NOT IN ('REJECTED', 'CANCELED', 'EXPIRED') OR o.filled_qty > 0)"
         ),
         {"acct": account_id, "since": since},
@@ -104,7 +102,7 @@ def load_open_buy_by_strategy(session: Session, account_id: UUID) -> dict[str, D
             " / cardinality(n.strategy_ids)) AS notional"
             " FROM orders o JOIN order_intents n ON n.id = o.intent_id"
             " CROSS JOIN LATERAL unnest(n.strategy_ids) AS s(strategy_id)"
-            " WHERE o.account_id = :acct AND o.side = 'BUY' AND o.status NOT IN :terminal"
+            " WHERE o.account_id = :acct AND n.is_entry AND o.status NOT IN :terminal"
             " GROUP BY s.strategy_id"
         ).bindparams(bindparam("terminal", expanding=True)),
         {"acct": account_id, "terminal": list(_TERMINAL)},
@@ -139,10 +137,10 @@ def load_entry_history(
         after = before + qty
         qtys[key] = after
         h = histories.get(key, EntryHistory())
-        if qty > 0 and before < DUST and after >= DUST:
+        if abs(before) < DUST and abs(after) >= DUST:
             if row.ts >= since:
                 h = EntryHistory(h.entries + 1, None)
-        elif before >= DUST and after < DUST and row.ts >= since:
+        elif abs(before) >= DUST and abs(after) < DUST and row.ts >= since:
             h = EntryHistory(h.entries, row.ts)
         # Do not carry yesterday's closed episodes into today's limits or cooldown.
         if h.entries or h.last_exit_at is not None:
@@ -153,7 +151,7 @@ def load_entry_history(
             " JOIN order_intents n ON n.id=o.intent_id"
             " JOIN instruments i ON i.id=o.instrument_id"
             " CROSS JOIN LATERAL unnest(n.strategy_ids) AS s(strategy_id)"
-            " WHERE o.account_id=:acct AND o.created_at <= :at"
+            " WHERE o.account_id=:acct AND n.is_entry AND o.created_at <= :at"
             " AND o.status NOT IN :terminal"
         ).bindparams(bindparam("terminal", expanding=True)),
         {"acct": account_id, "at": as_of, "terminal": list(_TERMINAL)},

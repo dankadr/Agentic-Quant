@@ -46,11 +46,11 @@ def roundtrips(fills: Sequence[AttributedFill]) -> list[Roundtrip]:
         entry, decision, qty, pnl = active.get(
             key, (fill.ts, fill.decision_ts or fill.ts, _ZERO, _ZERO)
         )
-        if qty < _DUST and fill.qty <= 0:
-            continue  # unowned exit cannot establish a complete episode
+        if fill.qty == 0:
+            continue
         qty += fill.qty
         pnl += fill.pnl
-        if qty < _DUST:
+        if abs(qty) < _DUST:
             closed.append(Roundtrip(*key, entry, fill.ts, pnl, decision))
             active.pop(key, None)
         else:

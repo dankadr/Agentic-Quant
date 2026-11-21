@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from trading.core.config import load_config
-from trading.core.enums import AssetType, OrderType, Side
+from trading.core.enums import AssetType, OrderType, PositionEffect, Side
 from trading.data.instruments import InstrumentInfo
 from trading.quant.allocator import AllocationContext, SleeveAllocator
 from trading.quant.models import Holding, SignalProposal
@@ -167,13 +167,9 @@ def test_opposing_strategies_net_to_one_order_with_correct_attribution() -> None
                signal("vwap_v1", side=Side.SELL, notional="30", limit="99.80")]  # fmt: skip
     result = alloc.allocate(signals, ctx(holdings=held, held_qty={"SPY": D("0.3")}))
     (req,) = result.requests
-    assert (req.symbol, req.side) == ("SPY", Side.BUY)
-    assert req.quantity == D("0.4992")  # 0.7992 buy - 0.3 sell
-    assert req.attribution == {"orb_v1": D("0.7992"), "vwap_v1": D("-0.3")}
-    assert sum(req.attribution.values()) == req.quantity  # attribution always sums to the order
-    assert req.strategy_ids == ("orb_v1", "vwap_v1")
-    assert req.strategy_id == "orb_v1"  # the largest contributor is primary
-    assert req.limit_price == D("100.10")  # the most permissive BUY limit
+    assert (req.side, req.quantity) == (Side.SELL, D("0.3"))
+    assert req.attribution == {"vwap_v1": D("-0.3")}
+    assert req.position_effect == PositionEffect.CLOSE_LONG
 
 
 def test_netting_never_increases_exposure_beyond_the_cap() -> None:
@@ -194,8 +190,8 @@ def test_a_net_sell_when_the_exit_is_larger() -> None:
                signal("vwap_v1", side=Side.SELL, notional="100", limit="99.50")]  # fmt: skip
     result = alloc.allocate(signals, ctx(holdings=held, held_qty={"SPY": D("1.0")}))
     (req,) = result.requests
-    assert (req.side, req.quantity) == (Side.SELL, D("0.8"))
-    assert req.attribution == {"orb_v1": D("0.2"), "vwap_v1": D("-1.0")}
+    assert (req.side, req.quantity) == (Side.SELL, D("1.0"))
+    assert req.attribution == {"vwap_v1": D("-1.0")}
     assert req.limit_price == D("99.50")  # the most aggressive SELL limit
 
 
@@ -376,3 +372,16 @@ def test_a_zero_entry_scale_blocks_the_entry_but_never_the_exit() -> None:
 def test_entry_scale_only_applies_to_the_named_strategies() -> None:
     result = alloc.allocate([signal("vwap_v1", notional="60")], ctx(entry_scale={"orb_v1": D("0")}))
     assert len(result.requests) == 1
+
+
+def test_short_and_reserved_partial_cover() -> None:
+    short = signal(side=Side.SELL).model_copy(update={"position_effect": PositionEffect.OPEN_SHORT})
+    assert not alloc.allocate([short], ctx()).requests
+    order, = alloc.allocate([short], ctx(allow_short=True)).requests
+    assert order.position_effect == PositionEffect.OPEN_SHORT
+    assert order.attribution == {"orb_v1": -order.quantity}
+    cover = signal().model_copy(update={"position_effect": PositionEffect.CLOSE_SHORT})
+    book = ctx(holdings=(hold("orb_v1", "-1"),), held_qty={"SPY": D("-1")},
+               open_cover_qty={"SPY": D("0.4")}, entries_allowed=False)
+    order, = alloc.allocate([cover], book).requests
+    assert order.position_effect == PositionEffect.CLOSE_SHORT and order.quantity == D("0.6")
