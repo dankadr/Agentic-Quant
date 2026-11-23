@@ -264,22 +264,25 @@ class SleeveAllocator:
     ) -> list[_Leg]:
         """Sell every holder's shares; shares nobody owns are attributed to the flatten strategy."""
         legs: list[_Leg] = []
-        remaining = available
         total = ctx.held_qty.get(symbol, _ZERO)
         owned = sum(
             (abs(h.qty) for h in ctx.holdings if h.symbol == symbol and h.qty * total > 0), _ZERO
         )
-        for (strategy, sym), qty in sorted(holder_left.items()):
-            if sym != symbol or qty <= 0:
-                continue
-            if (strategy, symbol, sig.side.value) in ctx.in_flight:
-                # An uncertain cancellation or partial exit still owns these shares.
-                continue
-            take = floor_to_increment(min(qty, remaining), inc)
+        unowned = max(abs(total) - owned, _ZERO)
+        # An uncertain cancellation or partial exit still reserves its owner's shares.
+        eligible = [
+            (strategy, qty)
+            for (strategy, sym), qty in sorted(holder_left.items())
+            if sym == symbol and qty > 0 and (strategy, symbol, sig.side.value) not in ctx.in_flight
+        ]
+        combined = unowned + sum((qty for _, qty in eligible), _ZERO)
+        remaining = floor_to_increment(min(available, combined), inc)
+        for strategy, qty in eligible:
+            take = min(qty, remaining)
             if take > 0:
                 legs.append(_Leg(sig, strategy, take))
                 remaining -= take
-        unowned = floor_to_increment(min(max(abs(total) - owned, _ZERO), remaining), inc)
+        unowned = min(unowned, remaining)
         if unowned > 0:
             legs.append(_Leg(sig, FLATTEN_STRATEGY, unowned))
         return legs

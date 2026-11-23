@@ -42,6 +42,7 @@ def test_status_initial(client: TestClient, viewer_key: str) -> None:
     assert len(release["config_sha256"]) == 64
     assert body == {
         "mode": "PAPER_ONLY",
+        "allow_short": False,
         "trading_enabled": False,
         "trading_state": "PAUSED",
         "risk_state": "UNKNOWN",

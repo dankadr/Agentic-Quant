@@ -183,6 +183,12 @@ class CsvReplayProvider:
                 raise DataFormatError(f"{where}: invalid ex_date {row['ex_date']!r}") from exc
             if not start <= ex_date <= end:
                 continue
+            announced = self._ts(row["announced_at"], where)
+            available = (
+                self._ts(row["available_at"], where) if row.get("available_at") else announced
+            )
+            if self._availability_clock and max(announced, available) > self._availability_clock():
+                continue
             try:
                 yield CorporateActionRecord(
                     symbol=row["symbol"],
@@ -192,7 +198,7 @@ class CsvReplayProvider:
                     ratio_to=self._opt_dec(row, "ratio_to", where),
                     cash_amount=self._opt_dec(row, "cash_amount", where),
                     provider=self.name,
-                    announced_at=self._ts(row["announced_at"], where),
+                    announced_at=announced,
                 )
             except ValidationError as exc:
                 raise DataFormatError(f"{where}: {exc.errors()[0]['msg']}") from exc

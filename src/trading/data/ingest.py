@@ -5,7 +5,7 @@ exactly what arrived) but blocking flags keep it out of tradable snapshots; a co
 re-delivery never overwrites what is stored, it flags the stored row.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
@@ -280,11 +280,22 @@ def ingest_corporate_actions(
     end: date,
     clock: Clock,
 ) -> IngestReport:
-    instruments = load_instruments(session)
+    return store_corporate_actions(
+        session, provider.fetch_corporate_actions(symbols, start, end), clock.now()
+    )
+
+
+def store_corporate_actions(
+    session: Session,
+    actions: Iterable[CorporateActionRecord],
+    now: datetime,
+) -> IngestReport:
     report = IngestReport()
-    now = clock.now()
-    action: CorporateActionRecord
-    for action in provider.fetch_corporate_actions(symbols, start, end):
+    records = list(actions)
+    if not records:
+        return report
+    instruments = load_instruments(session)
+    for action in records:
         instrument = instruments.get(action.symbol)
         if instrument is None:
             report.unknown_symbols.add(action.symbol)

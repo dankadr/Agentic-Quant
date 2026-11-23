@@ -35,6 +35,7 @@ from trading.documents.blobs import BlobStore
 from trading.jobs.lease import Lease
 from trading.monitoring.logging import configure_logging
 from trading.monitoring.metrics import start_metrics_server
+from trading.portfolio.corporate_actions import verify_paper_actions
 from trading.risk.halts import NotInHaltError, clear_drawdown_halt
 from trading.services.health import check_health, new_holder_id
 
@@ -614,6 +615,33 @@ def ingest_csv(
 ) -> None:
     """Load CSV bars, quotes and corporate actions for the configured universe."""
     _ingest(CsvReplayProvider(path), start, end)
+
+
+@app.command("verify-paper-actions")
+def verify_actions(
+    path: Path = typer.Option(..., help="Directory containing the reviewed corporate_actions.csv."),
+    day: str = typer.Option(
+        ..., "--date", help="Verified ex-date for the configured universe (YYYY-MM-DD)."
+    ),
+) -> None:
+    """Verify a complete daily online paper corporate-action file, including an empty action day."""
+
+    settings = Settings()
+    config = load_config(settings.config_dir)
+    engine = make_engine(settings.resolved_database_url())
+    try:
+        with make_session_factory(engine).begin() as session:
+            upsert_universe(session, config.universe)
+            verify_paper_actions(
+                session,
+                path,
+                date.fromisoformat(day),
+                [u.symbol for u in config.universe],
+                SystemClock().now(),
+            )
+    finally:
+        engine.dispose()
+    typer.echo(f"Verified alpaca-iex paper action coverage for {day}.")
 
 
 @app.command("collect-data")

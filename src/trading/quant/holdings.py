@@ -10,16 +10,13 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from trading.core.enums import PositionEffect, Side, effective_effect
+from trading.core.money import quantize_price
 from trading.execution.state_machine import TERMINAL
 from trading.portfolio.adjustments import applied_splits, split_factor
 from trading.portfolio.balances import MissingMark
 from trading.quant.models import EntryHistory, Holding
 
 _TERMINAL = tuple(s.value for s in TERMINAL)
-
-
-# Anything below the smallest tradable increment is rounding residue, not a position.
-DUST = Decimal("0.0001")
 
 
 @dataclass
@@ -42,8 +39,10 @@ def load_holdings(session: Session, account_id: UUID, as_of: datetime) -> tuple[
             " JOIN fills f ON f.id = a.fill_id"
             " JOIN orders o ON o.id = f.order_id"
             " JOIN instruments i ON i.id = o.instrument_id"
+            " LEFT JOIN order_events e ON e.order_id = o.id AND e.reason = 'fill'"
+            " AND e.payload_json->>'execution_id' = f.execution_id"
             " WHERE o.account_id = :acct AND f.ts <= :as_of"
-            " ORDER BY a.strategy_id, i.symbol, f.ts, f.execution_id"
+            " ORDER BY a.strategy_id, i.symbol, f.ts, e.seq, f.execution_id"
         ),
         {"acct": account_id, "as_of": as_of},
     ).all()
@@ -53,15 +52,17 @@ def load_holdings(session: Session, account_id: UUID, as_of: datetime) -> tuple[
         factor = split_factor(splits, r.symbol, r.ts)
         qty = Decimal(r.qty) * factor
         lot = lots.setdefault((r.strategy_id, r.symbol), _Lot(r.ts))
-        if abs(lot.qty) < DUST:
+        if lot.qty == 0:
             lot = lots[(r.strategy_id, r.symbol)] = _Lot(r.ts)
         if lot.qty * qty >= 0 and qty:
-            lot.cost = (abs(lot.qty) * lot.cost + abs(qty) * r.price / factor) / abs(lot.qty + qty)
+            lot.cost = quantize_price(
+                (abs(lot.qty) * lot.cost + abs(qty) * r.price / factor) / abs(lot.qty + qty)
+            )
         lot.qty += qty
     return tuple(
         Holding(strategy, symbol, lot.qty, lot.cost, lot.opened_at)
         for (strategy, symbol), lot in sorted(lots.items())
-        if abs(lot.qty) >= DUST
+        if lot.qty != 0
     )
 
 
@@ -167,10 +168,10 @@ def load_entry_history(
         after = before + qty
         qtys[key] = after
         h = histories.get(key, EntryHistory())
-        if abs(before) < DUST and abs(after) >= DUST:
+        if before == 0 and after != 0:
             if row.ts >= since:
                 h = EntryHistory(h.entries + 1, None)
-        elif abs(before) >= DUST and abs(after) < DUST and row.ts >= since:
+        elif before != 0 and after == 0 and row.ts >= since:
             h = EntryHistory(h.entries, row.ts)
         # Do not carry yesterday's closed episodes into today's limits or cooldown.
         if h.entries or h.last_exit_at is not None:

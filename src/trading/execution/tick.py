@@ -20,10 +20,12 @@ from trading.core.clock import Clock
 from trading.core.config import AppConfig
 from trading.core.enums import TimeInForce
 from trading.core.errors import TradingError
+from trading.data.alpaca_provider import PROVIDER_NAME as ALPACA_PROVIDER
 from trading.data.calendar import MarketCalendar
-from trading.data.ingest import ingest_bars, ingest_quotes
+from trading.data.ingest import ingest_bars, ingest_corporate_actions, ingest_quotes
 from trading.data.instruments import InstrumentInfo
 from trading.data.provider import MarketDataProvider
+from trading.data.replay_provider import CsvReplayProvider
 from trading.data.snapshot import MarketSnapshot, build_snapshot
 from trading.db.models.market import Instrument, MarketBar, MarketQuote
 from trading.db.models.portfolio import Account, Position, TradingSession
@@ -37,7 +39,7 @@ from trading.jobs.lease import Lease, LeaseLost, assert_fence
 from trading.monitoring.audit import record_audit
 from trading.monitoring.logging import get_logger
 from trading.portfolio.adjustments import applied_splits, split_factor
-from trading.portfolio.corporate_actions import apply_due_actions
+from trading.portfolio.corporate_actions import apply_due_actions, require_action_coverage
 from trading.portfolio.valuation import (
     MissingMark,
     PortfolioState,
@@ -192,6 +194,19 @@ class PaperTickProcessor:
         try:
             with self._sf.begin() as session:
                 now = self._fence(session)
+                if isinstance(self.provider, CsvReplayProvider):
+                    ingest_corporate_actions(
+                        session,
+                        self.provider,
+                        symbols=self._symbols,
+                        start=date.min,
+                        end=session_date,
+                        clock=self._clock,
+                    )
+                if self._provider_name == ALPACA_PROVIDER:
+                    require_action_coverage(
+                        session, self._account_id, session_date, now, self._calendar
+                    )
                 apply_due_actions(
                     session,
                     account_id=self._account_id,

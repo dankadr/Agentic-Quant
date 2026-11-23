@@ -278,3 +278,44 @@ def test_session_start_adjusts_marks_and_rejects_late_actions(
             == 1
         )
     assert env.broker.get_account().cash == after.cash
+
+
+@pytest.mark.parametrize("cash_amount", [None, "1"])
+def test_online_carry_requires_visible_verified_symbol_coverage(db, session_factory, clock, calendar, tmp_path, cash_amount):
+    from tests.integration.execution.env import REF
+    from trading.data.alpaca_provider import PROVIDER_NAME
+    from trading.portfolio.corporate_actions import require_action_coverage, verify_paper_actions
+    from trading.services.bootstrap import build_runtime
+
+    env = build_env(db, session_factory, clock, calendar, allow_short=True)
+    env.tick()
+    order = env.place(side=Side.SELL, effect=PositionEffect.OPEN_SHORT, qty="2", limit="98")
+    env.manager.submit(order)
+    env.tick()
+    env.manager.sync_fills()
+    tomorrow = DAY + timedelta(days=1)
+    now = clock.now() + timedelta(days=1)
+    before = env.broker.get_account()
+    with session_factory.begin() as s:
+        assert renew_lease(s, env.lease, now=clock.now(), ttl=timedelta(days=2))
+    runtime = build_runtime(session_factory=session_factory, config=CFG, clock=clock,
+                            lease=env.lease, calendar=calendar, provider=None,
+                            provider_name=PROVIDER_NAME, account_name=REF)
+    clock.set(now)
+    result = runtime.processor.run_tick(now)
+    assert result.risk_state.value == "RECONCILIATION_REQUIRED"
+    assert result.fills_applied == result.orders_submitted == 0
+    held = env.broker.get_account()
+    assert (held.cash, held.positions) == (before.cash, before.positions)
+    header = "symbol,action_type,ex_date,announced_at,cash_amount"
+    row = f"SPY,CASH_DIVIDEND,{tomorrow},{now.isoformat()},{cash_amount}" if cash_amount else ""
+    (tmp_path / "corporate_actions.csv").write_text(f"{header}\n{row}\n")
+    with session_factory.begin() as s:
+        verify_paper_actions(s, tmp_path, tomorrow, ["SPY"], now)
+        with pytest.raises(TradingError, match="SPY"):
+            require_action_coverage(s, env.account_id, tomorrow, now - timedelta(seconds=1), calendar)
+        require_action_coverage(s, env.account_id, tomorrow, now, calendar)
+    runtime.processor.start_session(tomorrow)
+    assert env.broker.get_account().cash == before.cash - (2 if cash_amount else 0)
+    with session_factory() as s:
+        assert s.scalar(text("SELECT count(*) FROM paper_venue.venue_actions")) == int(bool(cash_amount))

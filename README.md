@@ -241,8 +241,17 @@ trading additionally needs a market data provider adapter.
 ## Known limitations
 
 - Market data comes from Alpaca's free IEX feed only (see above); there is no consolidated (SIP) data.
-- Corporate actions are ingested and the ledger can apply them, but the paper venue does not model
-  them, so they are not applied automatically (it would break reconciliation).
+- Fixture replays ingest visible splits and cash dividends from `corporate_actions.csv`. The
+  paper venue and account ledger apply them together. The online Alpaca market-data integration
+  lacks a corporate-action feed. Before a carried short can trade, verify every intervening session
+  against an independent authoritative corporate-action source for the entire configured universe.
+  Put the reviewed ex-date's actions in `DIR/corporate_actions.csv` with the header
+  `symbol,action_type,ex_date,announced_at,ratio_from,ratio_to,cash_amount`. Use `SPLIT` or
+  `CASH_DIVIDEND` and supply timestamps with UTC offsets. For a verified no-action day, provide
+  just the header. Run `uv run trading verify-paper-actions --path DIR --date YYYY-MM-DD` for each
+  session. The command records the file digest and provider/date/symbol verification atomically
+  with its actions. The worker checks coverage before processing orders and raises a reconciliation
+  incident when coverage is missing. After verification, reconcile the paper account.
 - Synthetic backtests prove plumbing, not profitability; the scripted intent source remains for tests.
 - TQQQ (leveraged) is in the universe at the owner's request, in its own sector bucket; it is
   outside the spec's "no leverage" intent and is capped by the same risk limits.

@@ -17,7 +17,6 @@ from trading.core.enums import PositionEffect, Side, effective_effect
 from trading.portfolio.adjustments import applied_splits, dividend_allocations, split_factor
 
 _ZERO = Decimal(0)
-_DUST = Decimal("0.0001")
 
 
 @dataclass(frozen=True)
@@ -72,15 +71,15 @@ def trade_episodes(fills: Sequence[AttributedFill]) -> list[TradeEpisode]:
         short = (
             fill.effect.is_short
             if fill.effect is not None
-            else episode.short if episode is not None else fill.qty < 0
+            else episode.short
+            if episode is not None
+            else fill.qty < 0
         )
         entry = fill.effect.is_entry if fill.effect is not None else (fill.qty < 0) == short
         if episode is None:
             if not entry:
                 continue  # An unattributed entry cannot form a strategy episode.
-            episode = active[key] = TradeEpisode(
-                *key, fill.ts, fill.decision_ts or fill.ts, short
-            )
+            episode = active[key] = TradeEpisode(*key, fill.ts, fill.decision_ts or fill.ts, short)
         if episode.short != short:
             continue
         episode.pnl += fill.pnl
@@ -92,7 +91,7 @@ def trade_episodes(fills: Sequence[AttributedFill]) -> list[TradeEpisode]:
         else:
             episode.exit_qty += qty
             episode.exit_notional += qty * fill.price
-            if abs(episode.entry_qty - episode.exit_qty) < _DUST:
+            if episode.entry_qty == episode.exit_qty:
                 episode.exit_ts = fill.ts
                 closed.append(episode)
                 del active[key]
@@ -130,6 +129,8 @@ def load_trade_episodes(session: Session, account_id: UUID, *, end: datetime) ->
     fills: list[AttributedFill] = []
     for r in rows:
         factor = split_factor(splits, r.symbol, r.ts)
+        # A legacy netted order can contain long-only legs opposite to its venue side.
+        side = Side(r.side) if r.position_effect else (Side.BUY if r.qty > 0 else Side.SELL)
         fills.append(
             AttributedFill(
                 r.strategy_id,
@@ -140,7 +141,7 @@ def load_trade_episodes(session: Session, account_id: UUID, *, end: datetime) ->
                 r.decision_ts,
                 r.price / factor,
                 r.allocated_fees,
-                effective_effect(Side(r.side), r.position_effect),
+                effective_effect(side, r.position_effect),
             )
         )
     fills.extend(

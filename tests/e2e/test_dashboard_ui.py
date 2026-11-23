@@ -500,6 +500,8 @@ def test_missing_session_data_distinguishes_premarket_from_open_market(
     import json
     from datetime import UTC, datetime
 
+    from playwright.sync_api import expect
+
     page = new_page(viewport={"width": 375, "height": 800})
     page.clock.install(time=datetime(2026, 10, 19, 12 if before_open else 15, tzinfo=UTC))
 
@@ -530,13 +532,11 @@ def test_missing_session_data_distinguishes_premarket_from_open_market(
         assert cards.nth(1).locator(".value").inner_text() == "Awaiting open"
         assert "Awaiting the first market tick" in page.inner_text("#view")
         # Selecting a date must never substitute a current account value for missing history.
-        page.fill("#date", "2026-10-19")
-        page.dispatch_event("#date", "change")
-        page.wait_for_function(
-            "() => document.querySelector('.session-label').innerText.includes('Selected session') && "
-            "document.querySelector('#view').getAttribute('aria-busy') === 'false'"
+        page.locator("#date").evaluate(
+            "(el) => { el.value = '2026-10-19'; el.dispatchEvent(new Event('change', {bubbles:true})); }"
         )
-        assert cards.nth(0).locator(".value").inner_text() == "Unavailable"
+        expect(page.locator(".session-label")).to_contain_text("Selected session")
+        expect(cards.nth(0).locator(".value")).to_have_text("Unavailable")
     else:
         assert cards.nth(0).locator(".value").inner_text() == "Unavailable"
         assert "Market is open but no ticks yet" in page.inner_text(".attention-panel")

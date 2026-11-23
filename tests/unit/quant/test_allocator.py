@@ -409,3 +409,13 @@ def test_flatten_defers_owner_with_uncertain_exit(direction: int, outstanding: s
     (order,) = alloc.allocate([exit_signal], book).requests
     assert order.attribution == {"B": D(-direction * 5)}
     assert order.quantity == 5
+
+@pytest.mark.parametrize(("fractional", "each"), [(False, "0.5"), (True, "1.00005")])
+def test_flatten_combines_owner_fragments(fractional: bool, each: str) -> None:
+    cover = signal("eod_flatten").model_copy(update={"position_effect": PositionEffect.CLOSE_SHORT})
+    book = ctx(
+        instruments=instruments(fractional), held_qty={"SPY": -2 * D(each)},
+        holdings=(hold("A", "-" + each), hold("B", "-" + each)),
+    )
+    (order,) = alloc.allocate([cover], book).requests
+    assert order.attribution == {"A": D(each), "B": D(each)}

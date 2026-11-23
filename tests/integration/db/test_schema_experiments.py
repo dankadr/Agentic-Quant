@@ -146,7 +146,7 @@ def test_short_history_prevents_lossy_downgrade(previous_schema: tuple[str, Engi
     with pytest.raises(RuntimeError, match="explicit short history"):
         command.downgrade(_config(url), "0012")
     with engine.connect() as conn:
-        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0014"
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0015"
 
 
 def test_short_migrations_preserve_existing_long_quantity_and_basis(

@@ -11,7 +11,7 @@ It reserves collateral in addition to the restricted sale proceeds.
    status from `GET /v1/system/status`, the image tag, and the deployment configuration. Confirm
    `configs/risk.yaml` has `allow_short: false` and the executor uses the internal paper simulator.
 2. Rehearse the upgrade on an isolated restore using the current deployed schema. Confirm the
-   migration graph applies revisions `0013` and `0014`, and that existing long quantities, basis,
+   migration graph applies revisions `0013` through `0015`, and that existing long quantities, basis,
    settled cash, and the independent paper venue balance are identical across the migration.
 3. Schedule an off-session maintenance window. With an operator key, use
    `POST /v1/control/stop-entries` with `Idempotency-Key`, the current `expected_version`, and an
@@ -51,7 +51,7 @@ It reserves collateral in addition to the restricted sale proceeds.
 
 - `GET /v1/health/ready` returns `database: ok` and `executor_lease: held`.
   `GET /v1/system/status` with a viewer key reports `PAPER_ONLY`, the approved revision and
-  configuration fingerprint, `schema_applied == schema_head` including `0014`, and
+  configuration fingerprint, `schema_applied == schema_head` including `0015`, and
   `allow_short: false`. Confirm startup reconciliation is current and clean.
 - Compare accounting cash, equity, open long quantities and basis to the pre-migration capture.
   `GET /v1/positions` keeps signed `qty` and adds `direction`, absolute `size` and `signed_qty`.
