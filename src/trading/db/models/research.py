@@ -32,6 +32,7 @@ class Signal(Base):
     expires_at: Mapped[datetime]
     snapshot_id: Mapped[UUID] = mapped_column(ForeignKey("market_snapshots.id"))
     side: Mapped[str]
+    position_effect: Mapped[str | None]
     score: Mapped[Decimal | None]
     target_notional: Mapped[Decimal] = mapped_column(CASH)
     stop_price: Mapped[Decimal | None]

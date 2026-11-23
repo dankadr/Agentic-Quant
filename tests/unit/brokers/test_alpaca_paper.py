@@ -18,7 +18,7 @@ from trading.brokers.base import (
     BrokerUnavailable,
 )
 from trading.brokers.capital import deployable_cash, risk_equity, strategy_equity
-from trading.core.enums import OrderType, Side, TimeInForce
+from trading.core.enums import OrderType, PositionEffect, Side, TimeInForce
 
 NOW = datetime(2026, 10, 29, 14, 0, tzinfo=UTC)
 
@@ -275,3 +275,10 @@ def test_capital_is_the_lower_of_strategy_and_broker_and_never_buying_power() ->
     assert risk_equity(strategy, Decimal("300.00")) == Decimal("300.00")
     assert deployable_cash(Decimal("960"), Decimal("50000"), Decimal("200")) == Decimal("760")
     assert deployable_cash(Decimal("100"), Decimal("50000"), Decimal("500")) == Decimal(0)
+
+
+@pytest.mark.parametrize("effect", [PositionEffect.OPEN_SHORT, PositionEffect.CLOSE_SHORT])
+def test_simulated_short_effect_never_reaches_alpaca(effect: PositionEffect) -> None:
+    adapter = _adapter(lambda req: pytest.fail(f"unexpected HTTP request {req.method}"))
+    with pytest.raises(BrokerRejected, match="SHORT_EFFECT_UNSUPPORTED"):
+        adapter.submit_order(_req(side=effect.side, position_effect=effect))

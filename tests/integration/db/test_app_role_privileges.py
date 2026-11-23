@@ -54,3 +54,17 @@ def test_application_role_reads_the_schema_version_and_never_writes_it(migrated:
 def test_application_role_can_use_agent_config_proposals(migrated: Engine) -> None:
     for privilege in ("SELECT", "INSERT", "UPDATE"):
         assert _can(migrated, "agent_config_proposals", privilege)
+
+
+def test_venue_actions_are_append_only(migrated: Engine) -> None:
+    for privilege in ("SELECT", "INSERT"):
+        assert _can(migrated, "paper_venue.venue_actions", privilege)
+    for privilege in ("UPDATE", "DELETE"):
+        assert not _can(migrated, "paper_venue.venue_actions", privilege)
+    with migrated.connect() as c:
+        assert (
+            c.scalar(
+                text("SELECT count(*) FROM pg_trigger WHERE tgname='venue_actions_append_only'")
+            )
+            == 1
+        )

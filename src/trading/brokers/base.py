@@ -11,7 +11,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
-from trading.core.enums import OrderType, Side, TimeInForce
+from trading.core.enums import OrderType, PositionEffect, Side, TimeInForce
 from trading.core.errors import TradingError
 
 
@@ -49,6 +49,7 @@ class BrokerOrderRequest:
     qty: Decimal
     limit_price: Decimal | None
     time_in_force: TimeInForce
+    position_effect: PositionEffect | None = None
 
 
 @dataclass(frozen=True)
@@ -93,7 +94,7 @@ class BrokerAdapter(Protocol):
     def list_open_orders(self) -> Sequence[BrokerOrderState]: ...
 
     def list_fills(self, *, since: datetime | None = None) -> Sequence[BrokerFill]:
-        """Fills ordered by ``(ts, execution_id)``."""
+        """Fills in execution order, including equal timestamps. The since filter is inclusive."""
         ...
 
     def get_account(self) -> BrokerAccountState: ...

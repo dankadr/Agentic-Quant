@@ -33,6 +33,7 @@ class OrderIntent(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     account_id: Mapped[UUID] = mapped_column(ForeignKey("accounts.id"))
     instrument_id: Mapped[UUID] = mapped_column(ForeignKey("instruments.id"))
+    position_effect: Mapped[str | None]
     side: Mapped[str]
     quantity: Mapped[Decimal]
     order_type: Mapped[str]
@@ -55,6 +56,7 @@ class Order(Base):
     instrument_id: Mapped[UUID] = mapped_column(ForeignKey("instruments.id"))
     client_order_id: Mapped[str] = mapped_column(unique=True)
     broker_order_id: Mapped[str | None]
+    position_effect: Mapped[str | None]
     side: Mapped[str]
     type: Mapped[str]
     time_in_force: Mapped[str]

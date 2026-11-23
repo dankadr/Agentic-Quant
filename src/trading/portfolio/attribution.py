@@ -2,22 +2,24 @@
 
 Analytics only: cash and positions are the source of truth, so a missing strategy row is logged
 and skipped, never allowed to block a fill. Per fill: quantity follows the order's recorded signed
-weights (and always sums exactly to the fill); fees and realized P&L follow weight magnitudes.
+weights and always sums to the fill. Each short owner realizes its own basis and allocated fees.
 """
 
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from trading.brokers.base import BrokerFill
-from trading.core.enums import Side
-from trading.core.money import quantize_cash
+from trading.core.enums import PositionEffect, Side
+from trading.core.money import quantize_cash, quantize_price, trade_cash_amount
 from trading.db.models.portfolio import StrategyAttribution
 from trading.db.models.research import Strategy
-from trading.db.models.trading import Order, OrderIntent, RiskDecisionRow
+from trading.db.models.trading import FillRow, Order, OrderIntent, RiskDecisionRow
 from trading.monitoring.logging import get_logger
+from trading.quant.holdings import load_holdings
 
 _log = get_logger(__name__)
 _QTY_Q = Decimal("0.00000001")
@@ -37,7 +39,13 @@ def _split(total: Decimal, weights: dict[str, Decimal], quantum: Decimal) -> dic
 
 
 def record_attribution(
-    session: Session, *, order: Order, fill_id: UUID, fill: BrokerFill, realized: Decimal
+    session: Session,
+    *,
+    order: Order,
+    fill_id: UUID,
+    fill: BrokerFill,
+    realized: Decimal,
+    as_of: datetime,
 ) -> None:
     intent = session.get(OrderIntent, order.intent_id)
     if intent is None:
@@ -52,17 +60,56 @@ def record_attribution(
     magnitudes = {s: abs(w) for s, w in weights.items()}
 
     qty = _split(sign * fill.qty, weights, _QTY_Q)
+    if order.position_effect and len(weights) > 1 and order.filled_qty:
+        # Split cumulative execution, so independently rounded partials telescope to the order.
+        cumulative = _split(sign * (order.filled_qty + fill.qty), weights, _QTY_Q)
+        previous = dict(
+            session.execute(
+                select(StrategyAttribution.strategy_id, func.sum(StrategyAttribution.allocated_qty))
+                .join(FillRow, FillRow.id == StrategyAttribution.fill_id)
+                .where(FillRow.order_id == order.id)
+                .group_by(StrategyAttribution.strategy_id)
+            ).all()
+        )
+        qty = {s: cumulative[s] - previous.get(s, Decimal(0)) for s in strategies}
     fees = _split(fill.fees, magnitudes, Decimal("0.0001"))
-    # Realized gross P&L belongs to the strategies that reduced the position; a buying leg on a net
-    # SELL is an internal transfer. Every strategy still bears its share of the fees.
+    # Only legs in the fill direction share realized gains. All legs share fees.
     gross = quantize_cash(realized + fill.fees)
-    reducers = {s: m for s, m in magnitudes.items() if weights[s] < 0}
+    reducers = {s: m for s, m in magnitudes.items() if weights[s] * sign > 0}
     gross_share = (
         _split(gross, reducers, Decimal("0.0001"))
         if reducers
         else dict.fromkeys(strategies, Decimal(0))
     )
     pnl = {s: gross_share.get(s, Decimal(0)) - fees[s] for s in strategies}
+
+    if order.position_effect in (PositionEffect.OPEN_SHORT, PositionEffect.CLOSE_SHORT):
+        holdings = {
+            h.strategy_id: h
+            for h in load_holdings(session, order.account_id, as_of)
+            if h.symbol == fill.symbol
+        }
+        cash = _split(
+            trade_cash_amount(fill.side, fill.qty, fill.price),
+            {s: abs(q) for s, q in qty.items()},
+            Decimal("0.0001"),
+        )
+        for owner, delta in qty.items():
+            lot = holdings.get(owner)
+            before = abs(lot.qty) if lot else Decimal(0)
+            cost = lot.avg_cost if lot else Decimal(0)
+            after = before - delta
+            if after < 0:
+                continue  # An externally recorded cover can lack an attributed entry.
+            new_cost = cost
+            if delta < 0:
+                new_cost = quantize_price((before * cost - delta * fill.price) / after)
+            pnl[owner] = (
+                cash[owner]
+                + quantize_cash(before * cost)
+                - quantize_cash(after * new_cost)
+                - fees[owner]
+            )
 
     known = set(session.scalars(select(Strategy.id).where(Strategy.id.in_(strategies))))
     for strategy in strategies:

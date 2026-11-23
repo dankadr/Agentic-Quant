@@ -10,6 +10,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from trading.portfolio.adjustments import dividend_allocations
 from trading.quant.roundtrips import load_roundtrips
 
 _ZERO = Decimal(0)
@@ -225,9 +226,15 @@ def load_report(
     else:
         running = _ZERO
         curve = []
-        for r in session.execute(_STRATEGY_PNL_SQL, params):
-            running += r.pnl or _ZERO
-            curve.append((r.ts, running))
+        events = [(r.ts, r.pnl or _ZERO) for r in session.execute(_STRATEGY_PNL_SQL, params)]
+        events.extend(
+            (ts, pnl)
+            for ts, _, owner, pnl in dividend_allocations(session, account_id, end)
+            if owner == strategy_id and ts >= start
+        )
+        for ts, pnl in sorted(events, key=lambda e: e[0]):
+            running += pnl
+            curve.append((ts, running))
         start_equity = end_equity = ret = None
         net = running
         kind = "cumulative_pnl"

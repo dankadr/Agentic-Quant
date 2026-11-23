@@ -9,7 +9,7 @@ from uuid import UUID
 
 from trading.control.state import RiskState, TradingState
 from trading.core.codes import RejectionCode
-from trading.core.enums import OrderType, Side, TimeInForce
+from trading.core.enums import OrderType, PositionEffect, Side, TimeInForce
 from trading.data.instruments import InstrumentInfo
 from trading.data.snapshot import MarketSnapshot
 from trading.portfolio.valuation import PortfolioState
@@ -31,6 +31,7 @@ class ProposedOrder:
     # Netted orders carry every contributing strategy (primary first) and its attribution weight.
     strategy_ids: tuple[str, ...] = ()
     attribution: Mapping[str, Decimal] = field(default_factory=dict)
+    position_effect: PositionEffect | None = None
 
     @property
     def strategies(self) -> tuple[str, ...]:
@@ -50,6 +51,9 @@ class AccountView:
     consumed_dedupe_keys: frozenset[str]
     enabled_strategies: frozenset[str]
     open_buy_notional_by_sector: Mapping[str, Decimal] = field(default_factory=dict)
+    open_short_notional_by_symbol: Mapping[str, Decimal] = field(default_factory=dict)
+    open_short_notional_by_sector: Mapping[str, Decimal] = field(default_factory=dict)
+    open_cover_qty_by_symbol: Mapping[str, Decimal] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

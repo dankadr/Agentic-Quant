@@ -12,6 +12,7 @@ from tests.factories import T0, make_account
 from tests.integration.api.conftest import bearer
 from tests.integration.portfolio.helpers import NEXT_DAY, broker_fill, new_order, open_account
 from trading.core.config import load_config
+from trading.core.enums import PositionEffect
 from trading.portfolio.ledger import apply_fill
 from trading.quant.registry import seed_strategies
 
@@ -39,6 +40,7 @@ def fill(
     strategy: str = "orb_v1",
     fees: str = "0.01",
     symbol: str = "SPY",
+    effect: PositionEffect | None = None,
 ) -> None:  # type: ignore[no-untyped-def]
     order = new_order(
         db,
@@ -50,6 +52,7 @@ def fill(
         strategy_ids=[strategy],
         symbol=symbol,
     )
+    order.position_effect = effect
     f = replace(
         broker_fill(order, f"e-{coid}", qty=qty, price=price, fees=fees, symbol=symbol), ts=at
     )
@@ -72,6 +75,7 @@ def test_fills_list_prices_fees_and_attribution_newest_first(
     round_trip(db, acct, "a", "orb_v1", "SPY", "100", "102", T0)
     body = client.get("/v1/fills?limit=10", headers=bearer(viewer_key)).json()
     assert [f["side"] for f in body["items"]] == ["SELL", "BUY"]
+    assert [f["action"] for f in body["items"]] == ["SELL to close", "BUY to open"]
     sell = body["items"][0]
     assert (sell["symbol"], sell["qty"], sell["price"], sell["fees"]) == (
         "SPY",
@@ -126,6 +130,43 @@ def test_an_open_position_is_an_open_trade(
     fill(db, acct, "o", "BUY", "1", "100", T0)
     (t,) = client.get("/v1/trades?date=2026-10-19", headers=bearer(viewer_key)).json()["items"]
     assert (t["status"], t["closed_at"], t["avg_exit"]) == ("OPEN", None, None)
+
+
+def test_short_episodes_and_long_episode_on_same_symbol(
+    client: TestClient,
+    db: Session,
+    acct,
+    viewer_key: str,
+) -> None:  # type: ignore[no-untyped-def]
+    fill(db, acct, "os", "SELL", "2", "100", T0, effect=PositionEffect.OPEN_SHORT)
+    same_day_cover = T0 + timedelta(minutes=30)
+    fill(db, acct, "cs1", "BUY", "1", "98", same_day_cover, effect=PositionEffect.CLOSE_SHORT)
+    headers = bearer(viewer_key)
+    (short,) = client.get("/v1/trades?date=2026-10-19", headers=headers).json()["items"]
+    assert (short["direction"], short["status"], short["avg_entry"], short["avg_exit"]) == (
+        "SHORT",
+        "OPEN",
+        "100",
+        "98",
+    )
+    fill(db, acct, "cs2", "BUY", "1", "99", DAY2, effect=PositionEffect.CLOSE_SHORT)
+    round_trip(db, acct, "l", "orb_v1", "SPY", "98", "101", DAY2 + timedelta(minutes=5))
+    long, short = client.get("/v1/trades?date=2026-10-20", headers=headers).json()["items"]
+    assert (long["direction"], long["qty"], long["net_pnl"]) == ("LONG", "1", "2.9800")
+    assert (short["direction"], short["qty"], short["net_pnl"]) == ("SHORT", "2", "2.9700")
+    assert (short["status"], short["avg_entry"], short["avg_exit"]) == ("CLOSED", "100", "98.5")
+    assert (short["opening_action"], short["closing_action"]) == ("SELL to open", "BUY to cover")
+    assert short["hold_minutes"] == 24 * 60
+    for route, id_key, executions in (
+        ("orders", "client_order_id", ["os", "cs2"]),
+        ("fills", "execution_id", ["e-os", "e-cs2"]),
+    ):
+        items = client.get(f"/v1/{route}", headers=headers).json()["items"]
+        looked_up = {item[id_key]: item for item in items}
+        assert [
+            (looked_up[key]["side"], looked_up[key]["position_effect"], looked_up[key]["action"])
+            for key in executions
+        ] == [("SELL", "OPEN_SHORT", "SELL to open"), ("BUY", "CLOSE_SHORT", "BUY to cover")]
 
 
 def test_ledger_lists_cash_movements_with_settlement_dates(

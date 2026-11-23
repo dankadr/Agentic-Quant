@@ -1,4 +1,4 @@
-"""VWAP mean reversion (long only). A research hypothesis, not validated edge.
+"""VWAP mean reversion. A research hypothesis, not validated edge.
 
 Entry: price stretched below session VWAP (z-score <= -z_entry but not beyond -z_stop, which
 would be a falling knife), evidence of a turn (last close above the previous), and a flat-enough
@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from trading.core.enums import Side
+from trading.core.enums import PositionEffect, Side, effective_effect
 from trading.core.money import NoFloatDecimal, ceil_to_increment, floor_to_increment
 from trading.data.models import Bar
 from trading.quant.indicators import rolling_std, slope_bps, vwap_series
@@ -52,13 +52,14 @@ class VwapStrategy:
 
     def _signal(
         self, data: StrategyInput, symbol: str, side: Side, notional: Decimal, limit: Decimal,
-        stop: Decimal | None, reasons: tuple[str, ...],
+        stop: Decimal | None, reasons: tuple[str, ...], effect: PositionEffect | None = None,
     ) -> SignalProposal:  # fmt: skip
         return SignalProposal(
             strategy_id=self.strategy_id,
             strategy_version=self.version,
             symbol=symbol,
             side=side,
+            position_effect=effective_effect(side, effect),
             generated_at=data.now,
             expires_at=data.now + timedelta(seconds=self.p.signal_ttl_seconds),
             market_snapshot_id=data.snapshot.id,
@@ -96,13 +97,13 @@ class VwapStrategy:
                 (
                     h
                     for h in data.holdings
-                    if h.strategy_id == self.strategy_id and h.symbol == symbol and h.qty > 0
+                    if h.strategy_id == self.strategy_id and h.symbol == symbol and h.qty != 0
                 ),
                 None,
             )
             if held is not None:
                 self.entry_diagnostics[symbol] = "HOLDING"
-                exit_signal = self._exit(data, symbol, held, bars[-1], view.quote.bid, vwap, z)
+                exit_signal = self._exit(data, symbol, held, bars[-1], view.quote, vwap, z)
                 if exit_signal is not None:
                     signals.append(exit_signal)
                 continue
@@ -118,19 +119,32 @@ class VwapStrategy:
         symbol: str,
         held: Holding,
         last: Bar,
-        bid: Decimal,
+        quote: Any,
         vwap: Decimal,
         z: Decimal,
     ) -> SignalProposal | None:
-        if last.close >= vwap:
+        direction = 1 if held.qty > 0 else -1
+        if direction * (last.close - vwap) >= 0:
             reason = "VWAP_REVERSION"
-        elif z <= -self.p.z_stop:
+        elif direction * z <= -self.p.z_stop:
             reason = "Z_STOP"
         elif data.now - held.opened_at >= timedelta(minutes=self.p.max_hold_minutes):
             reason = "TIME_STOP"
         else:
             return None
-        limit = floor_to_increment(bid * (1 - _LIMIT_PAD_BPS / _BPS), _CENT)
+        if held.qty < 0:
+            limit = ceil_to_increment(quote.ask * (1 + _LIMIT_PAD_BPS / _BPS), _CENT)
+            return self._signal(
+                data,
+                symbol,
+                Side.BUY,
+                -held.qty * last.close,
+                limit,
+                None,
+                (reason,),
+                PositionEffect.CLOSE_SHORT,
+            )
+        limit = floor_to_increment(quote.bid * (1 - _LIMIT_PAD_BPS / _BPS), _CENT)
         if limit <= 0:
             return None
         return self._signal(data, symbol, Side.SELL, held.qty * last.close, limit, None, (reason,))
@@ -161,12 +175,25 @@ class VwapStrategy:
             return None
         if quote.spread_bps > p.max_spread_bps:
             return None
-        if not (-p.z_stop < z <= -p.z_entry):  # stretched, but not a falling knife
-            return None
-        if bars[-1].close <= bars[-2].close:  # no evidence of a turn yet
-            return None
         slope = slope_bps(vwap_series(bars), p.lookback_bars)
-        if slope is None or abs(slope) > p.max_slope_bps:  # strongly trending tape
+        if slope is None or abs(slope) > p.max_slope_bps:
+            return None
+        if data.allow_short and p.z_entry <= z < p.z_stop and bars[-1].close < bars[-2].close:
+            limit = floor_to_increment(quote.bid * (1 - _LIMIT_PAD_BPS / _BPS), _CENT)
+            stop = ceil_to_increment(vwap + p.z_stop * std, _CENT)
+            if limit <= 0 or stop <= limit:
+                return None
+            return self._signal(
+                data,
+                symbol,
+                Side.SELL,
+                p.trade_notional,
+                limit,
+                stop,
+                ("VWAP_STRETCH", "REVERSION_TURN"),
+                PositionEffect.OPEN_SHORT,
+            )
+        if not (-p.z_stop < z <= -p.z_entry) or bars[-1].close <= bars[-2].close:
             return None
         limit = ceil_to_increment(quote.ask * (1 + _LIMIT_PAD_BPS / _BPS), _CENT)
         stop = floor_to_increment(vwap - p.z_stop * std, _CENT)

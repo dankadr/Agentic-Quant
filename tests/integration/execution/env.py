@@ -22,7 +22,7 @@ from trading.control.state import (
 )
 from trading.core.clock import ManualClock
 from trading.core.config import load_config
-from trading.core.enums import OrderType, Side, TimeInForce
+from trading.core.enums import OrderType, PositionEffect, Side, TimeInForce
 from trading.core.hashing import canonical_json
 from trading.data.calendar import MarketCalendar
 from trading.data.instruments import InstrumentInfo, upsert_universe
@@ -32,6 +32,7 @@ from trading.db.models.portfolio import Account
 from trading.execution.manager import ExecutionManager
 from trading.jobs.lease import EXECUTOR_LEASE, Lease, acquire_lease
 from trading.portfolio.ledger import open_paper_account
+from trading.quant.registry import seed_strategies
 from trading.risk.halts import start_session
 from trading.risk.models import ProposedOrder, RiskEvaluation
 from trading.risk.service import RecordedDecision, proposal_terms
@@ -87,6 +88,7 @@ class Env:
         *,
         symbol: str = "SPY",
         side: Side = Side.BUY,
+        effect: PositionEffect | None = None,
         qty: str = "0.5",
         limit: str | None = "100.05",
         strategy: str = "orb_v1",
@@ -107,7 +109,7 @@ class Env:
             assert instrument is not None
             snapshot = make_snapshot(s, now=self.clock.now(), data_hash=f"snap-{self._n}")
             terms_proposal = ProposedOrder(
-                account_id=self.account_id, instrument=info, side=side, quantity=D(qty),
+                account_id=self.account_id, instrument=info, side=side, position_effect=effect, quantity=D(qty),
                 order_type=OrderType.LIMIT if limit else OrderType.MARKET,
                 limit_price=D(limit) if limit else None, time_in_force=TimeInForce.DAY,
                 strategy_id=strategy, strategy_ids=strategy_ids, signal_id=None, signal_expires_at=expires,
@@ -121,7 +123,7 @@ class Env:
                                      dedupe_key=f"dk-{self._n}", now=self.clock.now() - decision_age,
                                      proposal_json=terms)  # fmt: skip
             proposal = ProposedOrder(
-                account_id=self.account_id, instrument=info, side=side, quantity=D(qty),
+                account_id=self.account_id, instrument=info, side=side, position_effect=effect, quantity=D(qty),
                 order_type=OrderType.LIMIT if limit else OrderType.MARKET,
                 limit_price=D(limit) if limit else None, time_in_force=TimeInForce.DAY,
                 strategy_id=strategy, strategy_ids=strategy_ids, signal_id=None, signal_expires_at=expires,
@@ -194,10 +196,12 @@ def build_env(
     *,
     faults: FaultPlan = FaultPlan(),  # noqa: B008
     running: bool = True,
+    allow_short: bool = False,
     risk: RiskState = RiskState.NORMAL,
 ) -> Env:
     clock.set(NOW)
     instruments = upsert_universe(db, CFG.universe)
+    seed_strategies(db, CFG, now=NOW)
     account_id = open_paper_account(db, name=REF, starting_cash=D("1000"), now=NOW)
     start_session(db, account_id=account_id, session_date=DAY, start_equity=D("1000"), now=NOW)
     set_risk_state(db, risk_state=risk, reason="test", actor="t", now=NOW)
@@ -208,7 +212,7 @@ def build_env(
     assert lease is not None
     db.commit()
     broker = PaperBroker(session_factory, account_ref=REF, config=CFG.paper_broker,
-                         instruments=instruments, clock=clock, faults=faults)  # fmt: skip
+                         instruments=instruments, clock=clock, faults=faults, allow_short=allow_short, calendar=calendar)  # fmt: skip
     broker.open_account(D("1000"))
     spy = SpyBroker(broker)
     manager = ExecutionManager(

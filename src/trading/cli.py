@@ -616,6 +616,34 @@ def ingest_csv(
     _ingest(CsvReplayProvider(path), start, end)
 
 
+@app.command("verify-paper-actions")
+def verify_actions(
+    path: Path = typer.Option(..., help="Directory containing the reviewed corporate_actions.csv."),
+    day: str = typer.Option(
+        ..., "--date", help="Verified ex-date for the configured universe (YYYY-MM-DD)."
+    ),
+) -> None:
+    """Verify a complete daily online paper corporate-action file, including an empty action day."""
+    from trading.portfolio.corporate_actions import verify_paper_actions  # noqa: PLC0415
+
+    settings = Settings()
+    config = load_config(settings.config_dir)
+    engine = make_engine(settings.resolved_database_url())
+    try:
+        with make_session_factory(engine).begin() as session:
+            upsert_universe(session, config.universe)
+            verify_paper_actions(
+                session,
+                path,
+                date.fromisoformat(day),
+                [u.symbol for u in config.universe],
+                SystemClock().now(),
+            )
+    finally:
+        engine.dispose()
+    typer.echo(f"Verified alpaca-iex paper action coverage for {day}.")
+
+
 @app.command("collect-data")
 def collect_data(
     days: int = typer.Option(30, min=1, help="How many completed sessions, counting back."),

@@ -10,30 +10,36 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from trading.alerts.store import CRITICAL, raise_incident, resolve_incident
 from trading.brokers.paper.broker import PaperBroker
 from trading.control.state import RiskState, TradingState, get_system_state, set_risk_state
 from trading.core.clock import Clock
 from trading.core.config import AppConfig
 from trading.core.enums import TimeInForce
 from trading.core.errors import TradingError
+from trading.data.alpaca_provider import PROVIDER_NAME as ALPACA_PROVIDER
 from trading.data.calendar import MarketCalendar
-from trading.data.ingest import ingest_bars, ingest_quotes
+from trading.data.ingest import ingest_bars, ingest_corporate_actions, ingest_quotes
 from trading.data.instruments import InstrumentInfo
 from trading.data.provider import MarketDataProvider
+from trading.data.replay_provider import CsvReplayProvider
 from trading.data.snapshot import MarketSnapshot, build_snapshot
-from trading.db.models.market import Instrument, MarketBar
+from trading.db.models.market import Instrument, MarketBar, MarketQuote
 from trading.db.models.portfolio import Account, Position, TradingSession
 from trading.db.models.research import Strategy
-from trading.db.models.trading import Order, RiskDecisionRow
+from trading.db.models.trading import Order, OrderIntent, RiskDecisionRow
 from trading.execution.intents import IntentSource, ProposalRequest
-from trading.execution.manager import ExecutionManager
+from trading.execution.manager import ExecutionManager, SymbolOwnershipConflict
 from trading.execution.reconcile import ReconciliationReport, reconcile_account
+from trading.execution.state_machine import TERMINAL
 from trading.jobs.lease import Lease, LeaseLost, assert_fence
 from trading.monitoring.audit import record_audit
 from trading.monitoring.logging import get_logger
+from trading.portfolio.adjustments import applied_splits, split_factor
+from trading.portfolio.corporate_actions import apply_due_actions, require_action_coverage
 from trading.portfolio.valuation import (
     MissingMark,
     PortfolioState,
@@ -149,30 +155,147 @@ class PaperTickProcessor:
         held = session.execute(
             select(Instrument.id, Instrument.symbol)
             .join(Position, Position.instrument_id == Instrument.id)
-            .where(Position.account_id == self._account_id, Position.qty > 0)
+            .where(Position.account_id == self._account_id, Position.qty != 0)
         ).all()
+        splits = applied_splits(session, self._account_id, as_of)
         for instrument_id, symbol in held:
-            close = session.scalar(
-                select(MarketBar.close)
-                .where(MarketBar.instrument_id == instrument_id, MarketBar.ts <= as_of)
+            row = session.execute(
+                select(MarketBar.close, MarketBar.ts)
+                .where(
+                    MarketBar.instrument_id == instrument_id,
+                    MarketBar.ts <= as_of,
+                    MarketBar.ingested_at <= as_of,
+                    MarketBar.provider == self._provider_name,
+                )
                 .order_by(MarketBar.ts.desc())
                 .limit(1)
-            )
-            if close is not None:
-                marks[symbol] = close
+            ).first()
+            if row is not None:
+                marks[symbol] = row.close / split_factor(splits, symbol, row.ts)
         return marks
 
+    def _db_asks(self, session: Session, now: datetime) -> dict[str, Decimal]:
+        rows = session.execute(
+            select(Instrument.symbol, MarketQuote.ask, MarketQuote.ts)
+            .join(MarketQuote, MarketQuote.instrument_id == Instrument.id)
+            .where(
+                MarketQuote.ts <= now,
+                MarketQuote.ingested_at <= now,
+                MarketQuote.provider == self._provider_name,
+                MarketQuote.ask > 0,
+            )
+            .distinct(Instrument.symbol)
+            .order_by(Instrument.symbol, MarketQuote.ts.desc())
+        )
+        splits = applied_splits(session, self._account_id, now)
+        return {symbol: ask / split_factor(splits, symbol, ts) for symbol, ask, ts in rows}
+
+    def _apply_actions(self, session_date: date) -> bool:
+        try:
+            with self._sf.begin() as session:
+                now = self._fence(session)
+                if isinstance(self.provider, CsvReplayProvider):
+                    ingest_corporate_actions(
+                        session,
+                        self.provider,
+                        symbols=self._symbols,
+                        start=date.min,
+                        end=session_date,
+                        clock=self._clock,
+                    )
+                if self._provider_name == ALPACA_PROVIDER:
+                    require_action_coverage(
+                        session, self._account_id, session_date, now, self._calendar
+                    )
+                apply_due_actions(
+                    session,
+                    account_id=self._account_id,
+                    broker=self._broker,
+                    session_date=session_date,
+                    now=now,
+                    provider=self._provider_name,
+                )
+                resolve_incident(session, key=f"corporate_action:{self._account_id}", now=now)
+        except LeaseLost:
+            raise
+        except TradingError as exc:
+            with self._sf.begin() as session:
+                now = self._fence(session)
+                set_risk_state(
+                    session,
+                    risk_state=RiskState.RECONCILIATION_REQUIRED,
+                    reason="corporate_action_unresolved",
+                    actor="system",
+                    now=now,
+                )
+                raise_incident(
+                    session,
+                    key=f"corporate_action:{self._account_id}",
+                    severity=CRITICAL,
+                    title="Paper corporate action unresolved",
+                    detail=str(exc),
+                    now=now,
+                )
+            return False
+        return True
+
     @staticmethod
-    def _snapshot_marks(snapshot: MarketSnapshot) -> tuple[dict[str, Decimal], dict[str, Decimal]]:
+    def _snapshot_marks(
+        snapshot: MarketSnapshot, splits: dict[str, list[tuple[date, Decimal]]]
+    ) -> tuple[dict[str, Decimal], dict[str, Decimal]]:
         marks: dict[str, Decimal] = {}
         asks: dict[str, Decimal] = {}
         for symbol, view in snapshot.symbols.items():
             if view.quote is not None and view.quote.bid > 0:
-                marks[symbol] = view.quote.mid
-                asks[symbol] = view.quote.ask
+                factor = split_factor(splits, symbol, view.quote.ts)
+                marks[symbol] = view.quote.mid / factor
+                asks[symbol] = view.quote.ask / factor
             elif view.last_bar is not None and view.last_bar.close > 0:
-                marks[symbol] = view.last_bar.close
+                marks[symbol] = view.last_bar.close / split_factor(splits, symbol, view.last_bar.ts)
         return marks, asks
+
+    def _cancel_underfunded_entries(
+        self, marks: dict[str, Decimal], asks: dict[str, Decimal], session_date: date
+    ) -> None:
+        """Revalue resting entries before letting the venue match this minute's quotes."""
+        with self._sf.begin() as session:
+            now = self._fence(session)
+            pending = session.scalar(
+                select(Order.id)
+                .join(OrderIntent, OrderIntent.id == Order.intent_id)
+                .where(
+                    Order.account_id == self._account_id,
+                    OrderIntent.is_entry.is_(True),
+                    (Order.position_effect == "OPEN_SHORT")
+                    | exists().where(Position.account_id == self._account_id, Position.qty < 0),
+                    Order.status.not_in([status.value for status in TERMINAL]),
+                )
+                .limit(1)
+            )
+            if pending is None:
+                return
+            try:
+                state = self._value(
+                    session, marks=marks, asks=asks, now=now, session_date=session_date
+                )
+            except MissingMark:
+                reason = "UNPRICED_ENTRY_RESERVATION"
+            else:
+                if state.buying_power >= 0:
+                    return
+                self._deficit_incident(session, state, now)
+                reason = "COLLATERAL_DEFICIT"
+        self._manager.cancel_entries(account_id=self._account_id, reason=reason)
+
+    def _deficit_incident(self, session: Session, state: PortfolioState, now: datetime) -> None:
+        raise_incident(
+            session,
+            key=f"collateral_deficit:{self._account_id}",
+            severity=CRITICAL,
+            title="Paper account collateral deficit",
+            detail=f"Available capital {state.buying_power} USD",
+            now=now,
+        )
 
     def _set_risk(self, state: RiskState, reason: str) -> None:
         with self._sf.begin() as session:
@@ -239,13 +362,15 @@ class PaperTickProcessor:
     def start_session(self, session_date: date) -> None:
         """Reconcile, then open the session with its start-of-day equity. Idempotent."""
         self.reconcile()
+        if not self._apply_actions(session_date):
+            return
         with self._sf.begin() as session:
             now = self._fence(session)
             try:
                 state = self._value(
                     session,
                     marks=self._db_marks(session, now),
-                    asks={},
+                    asks=self._db_asks(session, now),
                     now=now,
                     session_date=session_date,
                 )
@@ -305,15 +430,27 @@ class PaperTickProcessor:
                 for symbol, qty in session.execute(
                     select(Instrument.symbol, Position.qty)
                     .join(Position, Position.instrument_id == Instrument.id)
-                    .where(Position.account_id == self._account_id, Position.qty > 0)
+                    .where(Position.account_id == self._account_id, Position.qty != 0)
                 )
             }
+            incident_key = f"session_end_positions:{self._account_id}"
+            if held:
+                raise_incident(
+                    session,
+                    key=incident_key,
+                    severity=CRITICAL,
+                    title="Paper positions remained open at session close",
+                    detail=", ".join(f"{symbol} {qty}" for symbol, qty in sorted(held.items())),
+                    now=now,
+                )
+            else:
+                resolve_incident(session, key=incident_key, now=now)
             valued = True
             try:
                 state = self._value(
                     session,
                     marks=self._db_marks(session, now),
-                    asks={},
+                    asks=self._db_asks(session, now),
                     now=now,
                     session_date=session_date,
                 )
@@ -342,6 +479,8 @@ class PaperTickProcessor:
             return TickResult(minute, None, 0, 0, 0, self._current_risk())
         session_date = info.session_date
         self._ensure_session(session_date)
+        if not self._apply_actions(session_date):
+            return TickResult(minute, None, 0, 0, 0, RiskState.RECONCILIATION_REQUIRED)
 
         if self.provider is not None:
             with self._sf.begin() as session:
@@ -368,10 +507,26 @@ class PaperTickProcessor:
                 provider=self._provider_name,
                 max_bar_age_seconds=self._config.risk.max_bar_age_seconds,
             )
-        quotes = {s: v.quote for s, v in snapshot.symbols.items() if v.quote is not None}
-        bars = {s: v.last_bar for s, v in snapshot.symbols.items() if v.last_bar is not None}
+            splits = applied_splits(session, self._account_id, now)
+        marks, asks = self._snapshot_marks(snapshot, splits)
+        # Pre-split quotes can be adjusted for valuation but cannot be executed.
+        quotes = {
+            s: v.quote
+            for s, v in snapshot.symbols.items()
+            if v.quote is not None and split_factor(splits, s, v.quote.ts) == 1
+        }
+        bars = {
+            s: v.last_bar
+            for s, v in snapshot.symbols.items()
+            if v.last_bar is not None and split_factor(splits, s, v.last_bar.ts) == 1
+        }
         try:
             self._assert_fenced()
+            flatten_due = self._flatten_due(now)
+            if flatten_due:
+                self._manager.cancel_entries(account_id=self._account_id, reason="SESSION_FLATTEN")
+            else:
+                self._cancel_underfunded_entries(marks, asks, session_date)
             self._broker.process_tick(quotes=quotes, bars=bars)
             fills_applied = self._manager.sync_fills()
             self._manager.cancel_stale_entries(
@@ -379,7 +534,7 @@ class PaperTickProcessor:
             )
             if self._needs_reconcile():
                 self.reconcile()
-            if self._flatten_due(self._clock.now()):
+            if flatten_due:
                 self._manager.cancel_flatten_exits(
                     account_id=self._account_id,
                     minute=minute.replace(second=0, microsecond=0),
@@ -393,7 +548,6 @@ class PaperTickProcessor:
             )
             return TickResult(minute, snapshot.id, 0, 0, 0, self._current_risk())
 
-        marks, asks = self._snapshot_marks(snapshot)
         with self._sf.begin() as session:
             now = self._fence(session)
             try:
@@ -410,6 +564,12 @@ class PaperTickProcessor:
                 )
                 return TickResult(minute, snapshot.id, fills_applied, 0, 0, RiskState.UNKNOWN)
             snapshot_row_id = record_equity_snapshot(session, state, kind="INTRADAY")
+            incident_key = f"collateral_deficit:{self._account_id}"
+            deficit = state.buying_power < 0
+            if deficit:
+                self._deficit_incident(session, state, now)
+            else:
+                resolve_incident(session, key=incident_key, now=now)
             risk = evaluate_halts(
                 session,
                 account_id=self._account_id,
@@ -420,7 +580,29 @@ class PaperTickProcessor:
             )
 
         decisions = submitted = 0
-        for request in self._intents.proposals(snapshot=snapshot, portfolio=state, now=now):
+        if deficit:
+            self._manager.cancel_entries(account_id=self._account_id, reason="COLLATERAL_DEFICIT")
+            self._manager.cancel_flatten_exits(
+                account_id=self._account_id, minute=minute, covers_only=True
+            )
+            source = (
+                self._intents
+                if isinstance(self._intents, StrategyIntentSource)
+                else StrategyIntentSource(
+                    self._sf,
+                    account_id=self._account_id,
+                    calendar=self._calendar,
+                    config=self._config,
+                    instruments=self._instruments,
+                    provider_name=self._provider_name,
+                )
+            )
+            requests = source.proposals(
+                snapshot=snapshot, portfolio=state, now=now, cover_shorts=True
+            )
+        else:
+            requests = self._intents.proposals(snapshot=snapshot, portfolio=state, now=now)
+        for request in requests:
             decided, order_id = self._propose(
                 request, snapshot, snapshot_row_id, session_date, marks, asks
             )
@@ -470,6 +652,7 @@ class PaperTickProcessor:
                 account_id=self._account_id,
                 instrument=instrument,
                 side=request.side,
+                position_effect=request.position_effect,
                 quantity=request.quantity,
                 order_type=request.order_type,
                 limit_price=request.limit_price,
@@ -492,11 +675,26 @@ class PaperTickProcessor:
             )
             if not recorded.evaluation.allowed:
                 return 1, None
-            order_id = self._manager.create_order(
-                session,
-                proposal=proposal,
-                decision=recorded,
-                market_snapshot_id=snapshot.id,
-                session_date=session_date,
-            )
+            try:
+                order_id = self._manager.create_order(
+                    session,
+                    proposal=proposal,
+                    decision=recorded,
+                    market_snapshot_id=snapshot.id,
+                    session_date=session_date,
+                )
+            except SymbolOwnershipConflict:
+                record_audit(
+                    session,
+                    actor="system",
+                    action="order.ownership_blocked",
+                    target=request.symbol,
+                    request_id=None,
+                    before=None,
+                    after=None,
+                    result="SYMBOL_OWNED",
+                    now=now,
+                    details={"strategy_id": request.strategy_id},
+                )
+                return 1, None
         return 1, order_id

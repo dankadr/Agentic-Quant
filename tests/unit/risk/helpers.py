@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from trading.control.state import RiskState, TradingState
 from trading.core.config import load_config
-from trading.core.enums import AssetType, OrderType, Side, TimeInForce
+from trading.core.enums import AssetType, OrderType, PositionEffect, Side, TimeInForce
 from trading.data.calendar import MarketCalendar
 from trading.data.instruments import InstrumentInfo
 from trading.data.models import Bar, Quote
@@ -26,6 +26,8 @@ CONFIG = load_config(Path("configs"))
 ENGINE_BASELINE: dict[str, Any] = {
     "max_symbol_exposure_pct": Decimal("0.10"),
     "max_open_symbols": 3,
+    "max_sector_exposure_pct": Decimal("0.30"),
+    "max_new_entries_per_day": 10,
     "max_daily_loss_pct": Decimal("0.01"),
 }
 NOW = datetime(2026, 10, 19, 15, 0, tzinfo=UTC)
@@ -86,6 +88,7 @@ def evaluate(
     *,
     symbol: str = "SPY",
     side: Side = Side.BUY,
+    effect: PositionEffect | None = None,
     qty: str = "1",
     limit: str | None = "100.00",
     otype: OrderType = OrderType.LIMIT,
@@ -104,6 +107,8 @@ def evaluate(
     enabled: frozenset[str] = frozenset({"orb_v1"}),
     open_buy_by_symbol: dict[str, Decimal] | None = None,
     open_buy_by_sector: dict[str, Decimal] | None = None,
+    open_short_by_symbol: dict[str, Decimal] | None = None,
+    open_cover_qty: dict[str, Decimal] | None = None,
     open_sell_qty: dict[str, Decimal] | None = None,
     inst: InstrumentInfo | None = None,
     policy: dict[str, Any] | None = None,
@@ -117,7 +122,7 @@ def evaluate(
         quality_status="OK", data_hash="h",
     )  # fmt: skip
     proposal = ProposedOrder(
-        account_id=ACCOUNT_ID, instrument=instr, side=side, quantity=D(qty), order_type=otype,
+        account_id=ACCOUNT_ID, instrument=instr, side=side, position_effect=effect, quantity=D(qty), order_type=otype,
         limit_price=D(limit) if limit else None, time_in_force=TimeInForce.DAY, strategy_id=strategy_id, strategy_ids=strategy_ids,
         signal_id=None, signal_expires_at=expires, dedupe_key=dedupe_key,
     )  # fmt: skip
@@ -125,6 +130,8 @@ def evaluate(
         portfolio=state, trading_state=trading_state, risk_state=risk_state,
         open_buy_notional_by_symbol=open_buy_by_symbol or {},
         open_buy_notional_by_sector=open_buy_by_sector or {},
+        open_short_notional_by_symbol=open_short_by_symbol or {},
+        open_cover_qty_by_symbol=open_cover_qty or {},
         open_sell_qty_by_symbol=open_sell_qty or {}, new_entries_today=new_entries,
         consumed_dedupe_keys=consumed, enabled_strategies=enabled,
     )  # fmt: skip

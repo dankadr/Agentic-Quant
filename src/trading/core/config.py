@@ -54,7 +54,7 @@ class RiskPolicy(_Frozen):
     max_open_symbols: int
     min_cash_reserve_pct: Dec
     allow_margin: Literal[False]
-    allow_short: Literal[False]
+    allow_short: bool = False
     allow_options: Literal[False]
     allow_crypto: Literal[False]
     max_bar_age_seconds: int = 90

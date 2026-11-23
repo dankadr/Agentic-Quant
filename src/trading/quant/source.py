@@ -7,6 +7,7 @@ parameters are read from the ``strategies`` table, which only changes at session
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -43,6 +44,7 @@ from trading.quant.holdings import (
 )
 from trading.quant.models import SignalProposal, SignalStrategy, StrategyInput
 from trading.quant.orb import OrbStrategy
+from trading.quant.ownership import load_symbol_owners
 from trading.quant.vwap import VwapStrategy
 from trading.risk.service import build_account_view
 
@@ -101,7 +103,12 @@ class StrategyIntentSource:
         return out
 
     def proposals(
-        self, *, snapshot: MarketSnapshot, portfolio: PortfolioState, now: datetime
+        self,
+        *,
+        snapshot: MarketSnapshot,
+        portfolio: PortfolioState,
+        now: datetime,
+        cover_shorts: bool = False,
     ) -> Sequence[ProposalRequest]:
         info = self._calendar.session_at(now)
         if info is None:
@@ -113,11 +120,22 @@ class StrategyIntentSource:
                 marks[symbol] = view.quote.mid
                 asks[symbol] = view.quote.ask
         for position in portfolio.positions:
-            marks.setdefault(position.symbol, position.mark)
+            marks[position.symbol] = position.mark
         with self._sf.begin() as session:
-            strategies = self._strategies(session)
+            strategies: list[SignalStrategy]
+            if cover_shorts:
+                strategies = [
+                    FlattenStrategy(
+                        strategy_id="eod_flatten",
+                        version="1.0.0",
+                        params={"flatten_minutes_before_close": 1},
+                    )
+                ]
+            else:
+                strategies = self._strategies(session)
             if not strategies:
                 return ()
+            owners = load_symbol_owners(session, self._account_id, now)
             trading_state = get_system_state(session).trading_state
             data = StrategyInput(
                 snapshot=snapshot,
@@ -133,20 +151,47 @@ class StrategyIntentSource:
                 session=info,
                 entered_today=load_entered_today(session, self._account_id, info.open_at),
                 entry_history=load_entry_history(session, self._account_id, info.open_at, now),
-                positions={p.symbol: p.qty for p in portfolio.positions},
-                flatten_now=trading_state is TradingState.FLATTENING,
+                positions={
+                    p.symbol: p.qty for p in portfolio.positions if not cover_shorts or p.qty < 0
+                },
+                allow_short=self._config.risk.allow_short,
+                flatten_now=cover_shorts or trading_state is TradingState.FLATTENING,
             )
             signals: list[SignalProposal] = []
             diagnostics: list[dict[str, Any]] = []
             for strategy in strategies:
                 try:
-                    signals.extend(strategy.evaluate(data))
+                    strategy_data = data
+                    if strategy.strategy_id != "eod_flatten":
+                        # Preserve index features, but do not evaluate foreign tickers for trades.
+                        strategy_data = replace(
+                            data,
+                            snapshot=replace(
+                                snapshot,
+                                symbols={
+                                    symbol: (
+                                        replace(view, tradable=False)
+                                        if symbol in owners
+                                        and strategy.strategy_id not in owners[symbol]
+                                        else view
+                                    )
+                                    for symbol, view in snapshot.symbols.items()
+                                },
+                            ),
+                        )
+                    signals.extend(strategy.evaluate(strategy_data))
                     diagnostics.extend(
                         {
                             "strategy_id": strategy.strategy_id,
                             "symbol": symbol,
                             "outcome": "NO_ENTRY",
-                            "reason": reason,
+                            "reason": (
+                                "SYMBOL_OWNED"
+                                if symbol in owners
+                                and strategy.strategy_id not in owners[symbol]
+                                and strategy.strategy_id != "eod_flatten"
+                                else reason
+                            ),
                         }
                         for symbol, reason in getattr(strategy, "entry_diagnostics", {}).items()
                         if reason != "SIGNAL"
@@ -185,14 +230,21 @@ class StrategyIntentSource:
             )
             ctx = AllocationContext(
                 equity=portfolio.equity,
+                symbol_owners=owners,
                 now=now,
                 marks=marks,
                 holdings=data.holdings,
                 held_qty=dict(data.positions),
                 open_buy_notional=exposure.open_buy_notional_by_symbol,
+                allow_short=self._config.risk.allow_short,
+                asks=asks,
+                open_short_notional=exposure.open_short_notional_by_symbol,
+                open_cover_qty=exposure.open_cover_qty_by_symbol,
                 open_sell_qty=exposure.open_sell_qty_by_symbol,
                 in_flight=load_in_flight(session, self._account_id),
-                open_buy_by_strategy=load_open_buy_by_strategy(session, self._account_id),
+                open_buy_by_strategy=load_open_buy_by_strategy(
+                    session, self._account_id, asks=asks
+                ),
                 instruments=self._instruments,
                 sleeves={n: c.allocation_pct for n, c in self._config.strategies.items()},
                 max_symbol_pct=self._config.risk.max_symbol_exposure_pct,
@@ -250,6 +302,7 @@ class StrategyIntentSource:
                     expires_at=sig.expires_at,
                     snapshot_id=snapshot.id,
                     side=sig.side.value,
+                    position_effect=sig.position_effect,
                     score=None,
                     target_notional=sig.target_notional_usd,
                     stop_price=sig.stop_price,

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -36,21 +36,22 @@ from trading.control.state import (
 )
 from trading.core.clock import Clock
 from trading.core.config import AppConfig
-from trading.core.enums import OrderType, Side, TimeInForce
+from trading.core.enums import OrderType, PositionEffect, Side, TimeInForce, effective_effect
 from trading.core.errors import TradingError
 from trading.core.hashing import canonical_json
 from trading.core.ids import make_client_order_id
-from trading.data.calendar import NEW_YORK, MarketCalendar
+from trading.data.calendar import NEW_YORK, MarketCalendar, settlement_date
 from trading.db.models.market import Instrument
 from trading.db.models.portfolio import TradingSession
 from trading.db.models.trading import FillRow, Order, OrderEvent, OrderIntent, RiskDecisionRow
-from trading.execution.state_machine import OPEN_AT_BROKER, OrderStatus
+from trading.execution.state_machine import OPEN_AT_BROKER, TERMINAL, OrderStatus
 from trading.execution.transitions import transition_order
 from trading.jobs.lease import Lease, assert_fence
 from trading.jobs.outbox import emit_event
 from trading.monitoring.logging import get_logger
 from trading.monitoring.metrics import ORDERS_BY_STATUS
 from trading.portfolio.ledger import apply_fill
+from trading.quant.ownership import load_symbol_owners
 from trading.risk.models import ProposedOrder
 from trading.risk.service import RecordedDecision, proposal_terms
 
@@ -66,6 +67,10 @@ class RiskNotApproved(TradingError):
 
 class DecisionAlreadyUsed(TradingError):
     """A risk decision authorises exactly one order intent."""
+
+
+class SymbolOwnershipConflict(TradingError):
+    """An order would let another strategy act on a reserved ticker."""
 
 
 class InvalidStrategyId(TradingError):
@@ -172,6 +177,21 @@ class ExecutionManager:
         if trading_session is None:
             raise SessionNotStarted(f"no trading session for {session_date}")
 
+        # Recheck after locking: a stale allocation cannot acquire another strategy's ticker.
+        owners = load_symbol_owners(session, proposal.account_id, self._clock.now())
+        strategies = set(proposal.strategies)
+        owner = owners.get(proposal.instrument.symbol)
+        effect = effective_effect(proposal.side, proposal.position_effect)
+        if effect.is_entry:
+            if len(strategies) != 1 or (owner is not None and owner != strategies):
+                raise SymbolOwnershipConflict(f"SYMBOL_OWNED: {proposal.instrument.symbol}")
+        elif (
+            proposal.strategy_id != "eod_flatten"
+            and owner is not None
+            and not (strategies - {"eod_flatten"}).issubset(owner)
+        ):
+            raise SymbolOwnershipConflict(f"SYMBOL_OWNED: {proposal.instrument.symbol}")
+
         prefix = f"paper-{proposal.strategy_id}-{session_date:%Y%m%d}-"
         existing = session.scalar(
             select(func.count())
@@ -181,11 +201,13 @@ class ExecutionManager:
         client_order_id = make_client_order_id(
             proposal.strategy_id, session_date, (existing or 0) + 1
         )
-        is_entry = proposal.side is Side.BUY
+        effect = effective_effect(proposal.side, proposal.position_effect)
+        is_entry = effect.is_entry
         intent = OrderIntent(
             account_id=proposal.account_id,
             instrument_id=proposal.instrument.id,
             side=proposal.side.value,
+            position_effect=effect.value,
             quantity=proposal.quantity,
             order_type=proposal.order_type.value,
             limit_price=proposal.limit_price,
@@ -220,6 +242,7 @@ class ExecutionManager:
             client_order_id=client_order_id,
             broker_order_id=None,
             side=proposal.side.value,
+            position_effect=effect.value,
             type=proposal.order_type.value,
             time_in_force=proposal.time_in_force.value,
             limit_price=proposal.limit_price,
@@ -296,6 +319,9 @@ class ExecutionManager:
                     client_order_id=order.client_order_id,
                     symbol=instrument.symbol,
                     side=Side(order.side),
+                    position_effect=PositionEffect(order.position_effect)
+                    if order.position_effect
+                    else None,
                     order_type=OrderType(order.type),
                     qty=order.qty,
                     limit_price=order.limit_price,
@@ -341,9 +367,7 @@ class ExecutionManager:
     def _settles_on(self, ts: datetime) -> date:
         info = self._calendar.session_at(ts)
         day = info.session_date if info is not None else ts.astimezone(NEW_YORK).date()
-        for _ in range(self._config.paper_broker.settlement_days):
-            day = self._calendar.next_session_after(day).session_date
-        return day
+        return settlement_date(self._calendar, day, self._config.paper_broker.settlement_days)
 
     def sync_fills(self) -> int:
         """Import broker fills (idempotent) and pick up broker-side cancels/expiries."""
@@ -406,6 +430,20 @@ class ExecutionManager:
                     transition_order(
                         session, order, target, reason="BROKER_" + target.value, now=now
                     )
+
+    def cancel_entries(self, *, account_id: UUID, reason: str) -> None:
+        with self._sf() as session:
+            orders = session.scalars(
+                select(Order.id)
+                .join(OrderIntent, OrderIntent.id == Order.intent_id)
+                .where(
+                    Order.account_id == account_id,
+                    OrderIntent.is_entry.is_(True),
+                    Order.status.not_in([s.value for s in TERMINAL]),
+                )
+            ).all()
+        for order_id in orders:
+            self.cancel(order_id, reason=reason)
 
     def cancel_stale_entries(self, *, ttl: timedelta) -> int:
         """Cancel entry orders still open at the broker after ``ttl``; exits are left alone."""
@@ -471,7 +509,9 @@ class ExecutionManager:
                     transition_order(session, order, target, reason=reason, now=now)
             return OrderStatus(order.status)
 
-    def cancel_flatten_exits(self, *, account_id: UUID, minute: datetime) -> None:
+    def cancel_flatten_exits(
+        self, *, account_id: UUID, minute: datetime, covers_only: bool = False
+    ) -> None:
         """Supersede resting exits without releasing uncertain broker reservations.
 
         Keep this minute's flatten order: a repeated tick must not cancel an order whose
@@ -484,6 +524,7 @@ class ExecutionManager:
                 .where(
                     Order.account_id == account_id,
                     OrderIntent.is_entry.is_(False),
+                    Order.position_effect == PositionEffect.CLOSE_SHORT if covers_only else true(),
                     Order.status.in_([s.value for s in OPEN_AT_BROKER]),
                 )
             ).all()

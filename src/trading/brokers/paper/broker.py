@@ -5,10 +5,10 @@ the application ledger, so reconciliation compares two independent records.
 """
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -26,11 +26,19 @@ from trading.brokers.paper.faults import FaultPlan
 from trading.brokers.paper.fill_model import VenueOrderView, estimate_fees, evaluate_fill
 from trading.core.clock import Clock
 from trading.core.config import PaperBrokerConfig
-from trading.core.enums import OrderType, Side
-from trading.core.money import is_multiple_of, quantize_price, trade_cash_amount
+from trading.core.enums import OrderType, PositionEffect, Side, effective_effect
+from trading.core.money import (
+    is_multiple_of,
+    quantize_cash,
+    quantize_price,
+    split_position,
+    trade_cash_amount,
+)
+from trading.data.calendar import NEW_YORK, MarketCalendar, XnysCalendar, settlement_date
 from trading.data.instruments import InstrumentInfo, qty_increment
 from trading.data.models import Bar, Quote
-from trading.db.models.venue import VenueAccount, VenueFill, VenueOrder
+from trading.db.models.market import CorporateAction
+from trading.db.models.venue import VenueAccount, VenueAction, VenueFill, VenueOrder
 
 _OPEN = (BrokerOrderStatus.ACCEPTED.value, BrokerOrderStatus.PARTIALLY_FILLED.value)
 
@@ -44,6 +52,8 @@ class PaperBroker:
         config: PaperBrokerConfig,
         instruments: Mapping[str, InstrumentInfo],
         clock: Clock,
+        allow_short: bool = False,
+        calendar: MarketCalendar | None = None,
         faults: FaultPlan = FaultPlan(),  # noqa: B008  (frozen, immutable default)
     ) -> None:
         self._sf = session_factory
@@ -51,8 +61,11 @@ class PaperBroker:
         self._cfg = config
         self._instruments = instruments
         self._clock = clock
+        self._calendar = calendar
+        self._settlement_cutoff: tuple[date, date] | None = None
+        self._allow_short = allow_short
         self._faults = faults
-        self._last_ask: dict[str, Decimal] = {}
+        self._quotes: dict[str, Quote] = {}
 
     # ---- helpers -------------------------------------------------------------------------
 
@@ -66,21 +79,111 @@ class PaperBroker:
             raise BrokerRejected("UNKNOWN_ACCOUNT")
         return account
 
-    def _ledger(self, session: Session) -> tuple[Decimal, dict[str, Decimal]]:
-        """Cash and positions derived from this venue's own fills."""
+    def _settled_through(self, today: date) -> date:
+        """Latest sale date whose proceeds have settled by this exchange-local day."""
+        if self._settlement_cutoff is not None and self._settlement_cutoff[0] == today:
+            return self._settlement_cutoff[1]
+        days = self._cfg.settlement_days
+        span = timedelta(days=30 + 3 * days)
+        calendar = self._calendar or XnysCalendar(today - span, today + span)
+        trade_day = today
+        while settlement_date(calendar, trade_day, days) > today:
+            trade_day -= timedelta(days=1)
+        self._settlement_cutoff = (today, trade_day)
+        return trade_day
+
+    def _ledger(
+        self, session: Session, *, settled_only: bool = False
+    ) -> tuple[Decimal, dict[str, Decimal], dict[str, Decimal]]:
         cash = self._account(session).starting_cash
+        actions = session.scalars(
+            select(VenueAction).where(VenueAction.account_ref == self._ref)
+        ).all()
+        cash += sum((action.cash_delta for action in actions), Decimal(0))
         positions: dict[str, Decimal] = {}
-        fills = session.scalars(
-            select(VenueFill)
+        costs: dict[str, Decimal] = {}
+        fills = session.execute(
+            select(VenueFill, VenueOrder.position_effect)
+            .join(VenueOrder, VenueOrder.client_order_id == VenueFill.client_order_id)
             .where(VenueFill.account_ref == self._ref)
-            .order_by(VenueFill.ts, VenueFill.execution_id)
+            .order_by(VenueFill.seq)
         )
-        for f in fills:
-            side = Side(f.side)
-            cash += trade_cash_amount(side, f.qty, f.price) - f.fees
-            delta = f.qty if side is Side.BUY else -f.qty
-            positions[f.symbol] = positions.get(f.symbol, Decimal(0)) + delta
-        return cash, {s: q for s, q in positions.items() if q != 0}
+        for fill, raw_effect in fills:
+            side = Side(fill.side)
+            effect = effective_effect(side, PositionEffect(raw_effect) if raw_effect else None)
+            cash -= fill.fees
+            if (
+                not settled_only
+                or effect is not PositionEffect.CLOSE_LONG
+                or fill.ts.astimezone(NEW_YORK).date()
+                <= self._settled_through(self._clock.now().astimezone(NEW_YORK).date())
+            ):
+                cash += trade_cash_amount(side, fill.qty, fill.price)
+            adjusted_qty, adjusted_price = fill.qty, fill.price
+            for action in actions:
+                if fill.symbol == action.symbol and fill.seq <= action.last_fill_seq:
+                    adjusted_qty = adjusted_qty * action.ratio_to / action.ratio_from
+                    adjusted_price = adjusted_price * action.ratio_from / action.ratio_to
+            held = positions.get(fill.symbol, Decimal(0))
+            if side is Side.SELL and held <= 0:
+                costs[fill.symbol] = quantize_price(
+                    (abs(held) * costs.get(fill.symbol, Decimal(0)) + adjusted_qty * adjusted_price)
+                    / (abs(held) + adjusted_qty)
+                )
+            positions[fill.symbol] = held + (adjusted_qty if side is Side.BUY else -adjusted_qty)
+        return cash, {s: q for s, q in positions.items() if q != 0}, costs
+
+    def quantity_step(self, symbol: str) -> Decimal:
+        return qty_increment(self._instruments[symbol], self._cfg)
+
+    def apply_action(
+        self, session: Session, *, action: CorporateAction, symbol: str, expected_qty: Decimal
+    ) -> None:
+        self._account(session, lock=True)
+        if session.get(VenueAction, (self._ref, action.id)):
+            return
+        open_order = session.scalar(
+            select(VenueOrder.client_order_id)
+            .where(
+                VenueOrder.account_ref == self._ref,
+                VenueOrder.symbol == symbol,
+                VenueOrder.status.in_(_OPEN),
+            )
+            .limit(1)
+        )
+        if open_order:
+            raise BrokerRejected("CORPORATE_ACTION_OPEN_ORDER")
+        _, positions, costs = self._ledger(session)
+        if positions.get(symbol, Decimal(0)) != expected_qty:
+            raise BrokerRejected("CORPORATE_ACTION_POSITION_MISMATCH")
+        if expected_qty and action.action_type == "SPLIT":
+            if action.ratio_from is None or action.ratio_to is None:
+                raise BrokerRejected("split missing ratio")
+            split_position(
+                expected_qty,
+                costs.get(symbol, Decimal(0)) if expected_qty < 0 else Decimal(0),
+                action.ratio_from,
+                action.ratio_to,
+                self.quantity_step(symbol),
+            )
+            self._quotes.pop(symbol, None)
+        seq = session.scalar(
+            select(func.max(VenueFill.seq)).where(VenueFill.account_ref == self._ref)
+        )
+        session.add(
+            VenueAction(
+                account_ref=self._ref,
+                action_id=action.id,
+                symbol=symbol,
+                last_fill_seq=seq or 0,
+                ratio_from=action.ratio_from or Decimal(1),
+                ratio_to=action.ratio_to or Decimal(1),
+                cash_delta=quantize_cash(
+                    positions.get(symbol, Decimal(0)) * (action.cash_amount or Decimal(0))
+                ),
+            )
+        )
+        session.flush()
 
     def _state(self, session: Session, row: VenueOrder) -> BrokerOrderState:
         fills = session.scalars(
@@ -102,10 +205,17 @@ class PaperBroker:
             updated_at=row.updated_at,
         )
 
+    def _fresh_ask(self, symbol: str) -> Decimal | None:
+        quote = self._quotes.get(symbol)
+        if quote is None or quote.bid <= 0 or quote.ask < quote.bid:
+            return None
+        age = (self._clock.now() - quote.ts).total_seconds()
+        return quote.ask if 0 <= age <= self._cfg.quote_max_age_seconds else None
+
     def _reservation_price(self, row: VenueOrder) -> Decimal | None:
         if row.limit_price is not None:
             return row.limit_price
-        return self._last_ask.get(row.symbol)
+        return self._fresh_ask(row.symbol)
 
     # ---- account -------------------------------------------------------------------------
 
@@ -121,7 +231,7 @@ class PaperBroker:
     def get_account(self) -> BrokerAccountState:
         self._guard()
         with self._sf() as session:
-            cash, positions = self._ledger(session)
+            cash, positions, _ = self._ledger(session)
         return BrokerAccountState(cash=cash, positions=positions, as_of=self._clock.now())
 
     # ---- orders --------------------------------------------------------------------------
@@ -145,13 +255,18 @@ class PaperBroker:
                 price = req.limit_price
                 if price is None or price <= 0 or not is_multiple_of(price, instrument.tick_size):
                     raise BrokerRejected("INVALID_TICK_SIZE")
-            self._check_capacity(session, req)
+            try:
+                effect = effective_effect(req.side, req.position_effect)
+            except ValueError as exc:
+                raise BrokerRejected("INVALID_POSITION_EFFECT") from exc
+            self._check_capacity(session, req.symbol, effect, req.qty, req.limit_price)
             row = VenueOrder(
                 client_order_id=coid,
                 broker_order_id=f"B-{coid}",
                 account_ref=self._ref,
                 symbol=req.symbol,
                 side=req.side.value,
+                position_effect=req.position_effect,
                 type=req.order_type.value,
                 tif=req.time_in_force.value,
                 limit_price=req.limit_price,
@@ -170,42 +285,79 @@ class PaperBroker:
             raise BrokerTimeout(f"injected timeout after accepting {coid}")
         return state
 
-    def _check_capacity(self, session: Session, req: BrokerOrderRequest) -> None:
-        cash, positions = self._ledger(session)
-        open_rows = session.scalars(
+    def _check_capacity(
+        self,
+        session: Session,
+        symbol: str,
+        effect: PositionEffect,
+        qty: Decimal,
+        limit: Decimal | None,
+        *,
+        filling: VenueOrder | None = None,
+        fee: Decimal | None = None,
+    ) -> None:
+        cash, positions, costs = self._ledger(session, settled_only=effect.is_entry)
+        held = positions.get(symbol, Decimal(0))
+        directed = -held if effect.is_short else held
+        if effect is PositionEffect.OPEN_SHORT and not self._allow_short:
+            raise BrokerRejected("SHORT_DISABLED")
+        if directed < 0:
+            raise BrokerRejected("INSUFFICIENT_POSITION")
+        rows = session.scalars(
             select(VenueOrder).where(
                 VenueOrder.account_ref == self._ref, VenueOrder.status.in_(_OPEN)
             )
-        ).all()
-        if req.side is Side.BUY:
-            ref_price = (
-                req.limit_price if req.limit_price is not None else self._last_ask.get(req.symbol)
+        )
+        reserved = Decimal(0)
+        pending_exit = Decimal(0)
+        for row in rows:
+            pending = effective_effect(
+                Side(row.side), PositionEffect(row.position_effect) if row.position_effect else None
             )
-            if ref_price is None:
-                raise BrokerRejected("NO_REFERENCE_PRICE")
-            required = req.qty * ref_price + estimate_fees(Side.BUY, req.qty, ref_price, self._cfg)
-            reserved = Decimal(0)
-            for row in open_rows:
-                if row.side != Side.BUY.value:
-                    continue
-                price = self._reservation_price(row)
-                if price is None:
+            remaining = row.qty - row.filled_qty
+            if row is filling:
+                remaining -= qty
+            if remaining <= 0:
+                continue
+            if row.symbol == symbol:
+                if pending.is_short != effect.is_short:
+                    raise BrokerRejected("INSUFFICIENT_POSITION")
+                if pending == effect and not effect.is_entry:
+                    pending_exit += remaining
+            if effect.is_entry and pending.is_entry:
+                price = self._entry_price(row.symbol, pending, row.limit_price)
+                reserved += remaining * price + estimate_fees(
+                    pending.side, remaining, price, self._cfg
+                )
+            elif effect.is_entry and pending is PositionEffect.CLOSE_SHORT:
+                cover_price = self._reservation_price(row)
+                if cover_price is None:
                     raise BrokerRejected("NO_REFERENCE_PRICE")
-                remaining = row.qty - row.filled_qty
-                reserved += remaining * price + estimate_fees(Side.BUY, remaining, price, self._cfg)
-            if cash - reserved < required:
-                raise BrokerRejected("INSUFFICIENT_FUNDS")
-        else:
-            open_sells = sum(
-                (
-                    r.qty - r.filled_qty
-                    for r in open_rows
-                    if r.side == Side.SELL.value and r.symbol == req.symbol
-                ),
-                Decimal(0),
-            )
-            if req.qty > positions.get(req.symbol, Decimal(0)) - open_sells:
+                reserved += estimate_fees(pending.side, remaining, cover_price, self._cfg)
+        if not effect.is_entry:
+            if qty + pending_exit > directed:
                 raise BrokerRejected("INSUFFICIENT_POSITION")
+            return
+        for held_symbol, shares in positions.items():
+            if shares < 0:
+                ask = self._fresh_ask(held_symbol)
+                if ask is None:
+                    raise BrokerRejected("NO_REFERENCE_PRICE")
+                basis = costs[held_symbol]
+                reserved += -shares * (basis + max(basis, ask))
+        price = self._entry_price(symbol, effect, limit)
+        required_fee = fee if fee is not None else estimate_fees(effect.side, qty, price, self._cfg)
+        if cash - reserved < qty * price + required_fee:
+            raise BrokerRejected("INSUFFICIENT_FUNDS")
+
+    def _entry_price(self, symbol: str, effect: PositionEffect, limit: Decimal | None) -> Decimal:
+        ask = self._fresh_ask(symbol)
+        if effect.is_short and ask is None:
+            raise BrokerRejected("NO_REFERENCE_PRICE")
+        price = limit if limit is not None else ask
+        if price is None:
+            raise BrokerRejected("NO_REFERENCE_PRICE")
+        return max(price, ask or price) if effect.is_short else price
 
     def cancel_order(self, client_order_id: str) -> BrokerOrderState:
         self._guard()
@@ -241,7 +393,7 @@ class PaperBroker:
             select(VenueFill, VenueOrder.broker_order_id)
             .join(VenueOrder, VenueOrder.client_order_id == VenueFill.client_order_id)
             .where(VenueFill.account_ref == self._ref)
-            .order_by(VenueFill.ts, VenueFill.execution_id)
+            .order_by(VenueFill.seq)
         )
         if since is not None:
             stmt = stmt.where(VenueFill.ts >= since)
@@ -269,14 +421,11 @@ class PaperBroker:
     ) -> list[BrokerFill]:
         """Advance the simulation one tick: evaluate every open order against current data."""
         self._guard()
-        for symbol, quote in quotes.items():
-            if quote.ask > 0:
-                self._last_ask[symbol] = quote.ask
+        self._quotes.update(quotes)
         now = self._clock.now()
         produced: list[BrokerFill] = []
         with self._sf.begin() as session:
             self._account(session, lock=True)
-            cash, positions = self._ledger(session)
             rows = session.scalars(
                 select(VenueOrder)
                 .where(VenueOrder.account_ref == self._ref, VenueOrder.status.in_(_OPEN))
@@ -307,12 +456,21 @@ class PaperBroker:
                 if decision is None:
                     continue
                 side = Side(row.side)
-                cash_delta = trade_cash_amount(side, decision.qty, decision.price) - decision.fees
-                held = positions.get(row.symbol, Decimal(0))
-                if (side is Side.BUY and cash + cash_delta < 0) or (
-                    side is Side.SELL and decision.qty > held
-                ):
-                    continue  # the venue never fills beyond cash or position
+                effect = effective_effect(
+                    side, PositionEffect(row.position_effect) if row.position_effect else None
+                )
+                try:
+                    self._check_capacity(
+                        session,
+                        row.symbol,
+                        effect,
+                        decision.qty,
+                        decision.price,
+                        filling=row,
+                        fee=decision.fees,
+                    )
+                except BrokerRejected:
+                    continue
                 session.add(
                     VenueFill(
                         execution_id=decision.execution_id,
@@ -335,8 +493,7 @@ class PaperBroker:
                     if row.filled_qty >= row.qty
                     else BrokerOrderStatus.PARTIALLY_FILLED.value
                 )
-                cash += cash_delta
-                positions[row.symbol] = held + (decision.qty if side is Side.BUY else -decision.qty)
+                session.flush()
                 produced.append(
                     BrokerFill(
                         execution_id=decision.execution_id,

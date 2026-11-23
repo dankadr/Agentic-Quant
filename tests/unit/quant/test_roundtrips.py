@@ -30,3 +30,8 @@ def test_reentry_is_a_separate_episode_and_open_lot_is_not_a_closed_trade() -> N
         ]
     )
     assert [t.pnl for t in trips] == [D("2"), D("-3.1")]
+
+
+def test_short_partial_covers_close_once_with_all_fees() -> None:
+    trips = roundtrips([fill(0, "-2", "-0.2"), fill(1, "1", "4.9"), fill(2, "1", "-1.1")])
+    assert [t.pnl for t in trips] == [D("3.6")]

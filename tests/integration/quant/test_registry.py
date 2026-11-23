@@ -28,8 +28,14 @@ def test_seed_strategies_is_idempotent_and_budgeted(db: Session) -> None:
         "fundamental_watchlist",
         "consensus_shadow",
     } == set(rows)
-    assert rows["orb_v1"].capital_budget == 35000  # 35% of deployment starting cash
-    assert rows["orb_v1"].params_json["opening_range_minutes"] == 15
+    assert (
+        rows["orb_v1"].capital_budget
+        == CFG.system.starting_cash_usd * CFG.strategies["orb_v1"].allocation_pct
+    )
+    assert (
+        rows["orb_v1"].params_json["opening_range_minutes"]
+        == CFG.strategies["orb_v1"].params["opening_range_minutes"]
+    )
     assert rows["orb_v1"].version == "1.0.0"
 
 

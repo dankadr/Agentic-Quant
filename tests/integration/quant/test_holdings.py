@@ -2,11 +2,13 @@ from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tests.factories import T0
 from tests.integration.portfolio.helpers import NEXT_DAY, broker_fill, new_order, open_account
 from tests.integration.quant.test_registry import CFG
+from trading.db.models.portfolio import Position
 from trading.portfolio.ledger import apply_fill
 from trading.quant.holdings import load_holdings
 from trading.quant.registry import seed_strategies
@@ -33,12 +35,29 @@ def test_a_new_round_trip_starts_a_fresh_holding(db: Session) -> None:
     assert (h.qty, h.avg_cost, h.opened_at) == (D("0.5"), D("110"), DAY2)
 
 
-def test_a_rounding_residue_is_not_a_holding(db: Session) -> None:
-    """Review C1 (dust): a sub-increment residue must not block re-entry forever."""
+def test_a_subincrement_owner_balance_remains_until_the_final_fill(db: Session) -> None:
     seed_strategies(db, CFG, now=T0)
     acct = open_account(db)
     _trade(db, acct, "b1", "BUY", "1.0", "100", T0)
     _trade(db, acct, "s1", "SELL", "0.99996667", "101", T0 + timedelta(hours=1))
+    (holding,) = load_holdings(db, acct, DAY2)
+    assert (
+        holding.strategy_id,
+        holding.symbol,
+        holding.qty,
+        holding.avg_cost,
+        holding.opened_at,
+    ) == (
+        "orb_v1",
+        "SPY",
+        D("0.00003333"),
+        D("100"),
+        T0,
+    )
+    position_qty = select(Position.qty).where(Position.account_id == acct)
+    assert db.scalar(position_qty) == holding.qty
+    _trade(db, acct, "s2", "SELL", "0.00003333", "101", DAY2)
+    assert db.scalar(position_qty) == 0
     assert load_holdings(db, acct, DAY2) == ()
 
 
@@ -101,3 +120,26 @@ def test_unfilled_cancellation_does_not_consume_but_open_order_blocks(db: Sessio
     db.flush()
     h = holdings.load_entry_history(db, acct, T0, T0 + timedelta(minutes=5))[("orb_v1", "SPY")]
     assert (h.entries, h.last_exit_at, h.pending) == (0, None, True)
+
+
+def test_pending_short_sleeves_use_ask_and_attribution(db: Session) -> None:
+    from trading.quant.holdings import load_open_buy_by_strategy
+
+    seed_strategies(db, CFG, now=T0)
+    acct = open_account(db)
+    row = new_order(
+        db,
+        acct,
+        "short",
+        side="SELL",
+        qty="2",
+        limit="90",
+        strategy_ids=["orb_v1", "vwap_v1"],
+        attribution={"orb_v1": "-1.5", "vwap_v1": "-0.5"},
+    )
+    row.position_effect = "OPEN_SHORT"
+    db.flush()
+    assert load_open_buy_by_strategy(db, acct, asks={"SPY": D("100")}) == {
+        "orb_v1": D("150"),
+        "vwap_v1": D("50"),
+    }

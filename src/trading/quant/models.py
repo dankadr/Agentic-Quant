@@ -9,7 +9,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
-from trading.core.enums import Side
+from trading.core.enums import PositionEffect, Side, effective_effect
 from trading.core.money import NoFloatDecimal
 from trading.core.time import UtcDatetime, isoformat_z
 from trading.data.calendar import SessionInfo
@@ -28,6 +28,7 @@ class SignalProposal(BaseModel):
     strategy_version: str = Field(min_length=1)
     symbol: str = Field(min_length=1)
     side: Side
+    position_effect: PositionEffect | None = None
     generated_at: UtcDatetime
     expires_at: UtcDatetime
     market_snapshot_id: UUID
@@ -42,13 +43,12 @@ class SignalProposal(BaseModel):
             raise ValueError("expires_at must be after generated_at")
         if self.expires_at - self.generated_at > MAX_SIGNAL_TTL:
             raise ValueError("signal TTL exceeds the 5 minute cap")
-        if (
-            self.side is Side.BUY
-            and self.stop_price is not None
-            and self.limit_price is not None
-            and self.stop_price >= self.limit_price
-        ):
-            raise ValueError("a long's stop must be below its limit price")
+        effect = effective_effect(self.side, self.position_effect)
+        if effect.is_entry and self.stop_price is not None and self.limit_price is not None:
+            if effect.is_short and self.stop_price <= self.limit_price:
+                raise ValueError("a short's stop must be above its limit price")
+            if not effect.is_short and self.stop_price >= self.limit_price:
+                raise ValueError("a long's stop must be below its limit price")
         return self
 
     @computed_field  # type: ignore[prop-decorator]
@@ -59,6 +59,8 @@ class SignalProposal(BaseModel):
             f"{self.strategy_id}|{self.strategy_version}|{self.symbol}|{self.side}|"
             f"{isoformat_z(self.generated_at)}|{self.market_snapshot_id}"
         )
+        if self.position_effect is not None and self.position_effect.is_short:
+            key += f"|{self.position_effect}"
         return uuid5(NAMESPACE_URL, key)
 
 
@@ -97,6 +99,7 @@ class StrategyInput:
     positions: Mapping[str, Decimal] = field(default_factory=dict)  # symbol -> total shares held
     # True while the system is FLATTENING: liquidate now, not only inside the pre-close window.
     flatten_now: bool = False
+    allow_short: bool = False
 
 
 class SignalStrategy(Protocol):

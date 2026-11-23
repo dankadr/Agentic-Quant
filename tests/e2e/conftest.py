@@ -8,20 +8,26 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 import uvicorn
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
-from tests.integration.portfolio.helpers import NEXT_DAY, broker_fill, new_order
+from tests.factories import make_snapshot
+from tests.integration.portfolio.helpers import NEXT_DAY, broker_fill, get_instrument, new_order
 from trading.api.app import create_app
 from trading.api.auth import Role, create_principal
 from trading.core.clock import ManualClock
 from trading.core.config import Settings, load_config
+from trading.core.enums import PositionEffect
 from trading.data.calendar import MarketCalendar
 from trading.data.instruments import upsert_universe
+from trading.db.models.research import Signal
+from trading.jobs.lease import EXECUTOR_LEASE, acquire_lease
 from trading.portfolio.ledger import apply_fill, open_paper_account
+from trading.portfolio.valuation import record_equity_snapshot, value_portfolio
 from trading.quant.proposals import propose_config
 from trading.quant.registry import seed_strategies
 from trading.quant.research import record_experiment
@@ -38,16 +44,76 @@ class Demo:
     viewer_key: str
     operator_key: str
     reviewer_key: str
+    allow_short: bool
 
 
-def _seed(db: Session, sf: sessionmaker[Session]) -> dict[str, str]:
+def _seed_short_positions(db: Session, account_id: UUID) -> None:
+    trades = [
+        ("SPY", PositionEffect.OPEN_LONG, "1", "100"),
+        ("QQQ", PositionEffect.OPEN_SHORT, "3", "100"),
+        ("QQQ", PositionEffect.CLOSE_SHORT, "1", "97"),
+        ("AAPL", PositionEffect.OPEN_SHORT, "1", "100"),
+        ("AAPL", PositionEffect.CLOSE_SHORT, "1", "104"),
+    ]
+    for index, (symbol, effect, qty, price) in enumerate(trades):
+        at = NOW - timedelta(minutes=10 - index)
+        client_id = f"e2e-shorts-{index}"
+        order = new_order(
+            db,
+            account_id,
+            client_id,
+            side=effect.side,
+            qty=qty,
+            limit=price,
+            symbol=symbol,
+        )
+        order.position_effect = effect
+        apply_fill(
+            db,
+            account_id=account_id,
+            fill=replace(
+                broker_fill(order, client_id + "-1", qty=qty, price=price, symbol=symbol), ts=at
+            ),
+            settles_on=NEXT_DAY,
+            now=at,
+        )
+    mark = make_snapshot(db, now=NOW, data_hash="e2e-short")
+    db.add(
+        Signal(
+            strategy_id="orb_v1",
+            strategy_version="1.0.0",
+            instrument_id=get_instrument(db, "QQQ").id,
+            generated_at=NOW,
+            expires_at=NOW + timedelta(minutes=1),
+            snapshot_id=mark.id,
+            side="SELL",
+            position_effect="OPEN_SHORT",
+            target_notional=Decimal(300),
+            status="ALLOCATED",
+        )
+    )
+    state = value_portfolio(
+        db,
+        account_id,
+        marks={"SPY": Decimal(102)},
+        ask_by_symbol={"QQQ": Decimal(104)},
+        as_of=NOW,
+        session_date=NOW.date(),
+        cfg=CFG.paper_broker,
+    )
+    record_equity_snapshot(db, state, kind="INTRADAY")
+
+
+def _seed(
+    db: Session, sf: sessionmaker[Session], *, short_positions: bool = False
+) -> dict[str, str]:
     instruments = upsert_universe(db, CFG.universe)
     db.execute(
         text("update system_state set trading_state = 'PAPER_RUNNING', risk_state = 'NORMAL'")
     )
     seed_strategies(db, CFG, now=OPEN)
     acct_id = open_paper_account(db, name="paper-primary", starting_cash=Decimal("1000"), now=OPEN)
-    for i in range(0, 61):
+    for i in range(60 if short_positions else 61):
         kind = "SESSION_START" if i == 0 else "INTRADAY"
         eq = Decimal("1000") + Decimal(str(round((i % 7 - 3) * 0.15 + i * 0.02, 2)))
         db.execute(
@@ -95,6 +161,11 @@ def _seed(db: Session, sf: sessionmaker[Session]) -> dict[str, str]:
         settles_on=NEXT_DAY,
         now=OPEN + timedelta(minutes=50),
     )
+    if short_positions:
+        _seed_short_positions(db, acct_id)
+        assert acquire_lease(
+            db, name=EXECUTOR_LEASE, holder="e2e-short-snapshot", now=NOW, ttl=timedelta(hours=1)
+        )
     spy = instruments["SPY"].id
     for m in range(0, 60):
         db.execute(
@@ -149,12 +220,18 @@ def _seed(db: Session, sf: sessionmaker[Session]) -> dict[str, str]:
 
 @pytest.fixture
 def demo(
-    db: Session, session_factory: sessionmaker[Session], calendar: MarketCalendar
+    db: Session,
+    session_factory: sessionmaker[Session],
+    calendar: MarketCalendar,
+    request: pytest.FixtureRequest,
 ) -> Iterator[Demo]:
-    keys = _seed(db, session_factory)
+    allow_short = getattr(request, "param", None)
+    keys = _seed(db, session_factory, short_positions=allow_short is not None)
     app = create_app(
         settings=Settings(),
-        config=CFG,
+        config=CFG.model_copy(
+            update={"risk": CFG.risk.model_copy(update={"allow_short": bool(allow_short)})}
+        ),
         session_factory=session_factory,
         clock=ManualClock(NOW),
         calendar=calendar,
@@ -168,7 +245,13 @@ def demo(
     assert server.started, "server did not start"
     port = server.servers[0].sockets[0].getsockname()[1]
     try:
-        yield Demo(f"http://127.0.0.1:{port}", keys["viewer1"], keys["op1"], keys["reviewer"])
+        yield Demo(
+            f"http://127.0.0.1:{port}",
+            keys["viewer1"],
+            keys["op1"],
+            keys["reviewer"],
+            bool(allow_short),
+        )
     finally:
         server.should_exit = True
         thread.join(timeout=10)

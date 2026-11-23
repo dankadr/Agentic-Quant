@@ -108,6 +108,9 @@ th.num { text-align: right; }
 tbody tr { transition: background-color 120ms var(--ease-out); }
 @media (hover: hover) and (pointer: fine) { tbody tr:hover { background: var(--raised); } }
 td.wrap { white-space: normal; min-width: 200px; }
+.position-direction { display: block; }
+.short-balances dd { text-align: right; }
+.position-summary th, .position-summary td { padding-inline: 6px; }
 .chip { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 6px; font-size: 12px; background: var(--raised); border: 1px solid var(--border); }
 .chip.good { color: var(--good); background: var(--good-bg); border-color: transparent; }
 .chip.bad { color: var(--bad); background: var(--bad-bg); border-color: transparent; }

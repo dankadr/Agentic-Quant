@@ -72,7 +72,7 @@ def replay_session(
         raise ReplayError("the executor lease is held by another process; replay on a scratch DB")
 
     try:
-        provider = CsvReplayProvider(fixtures_dir)
+        provider = CsvReplayProvider(fixtures_dir, availability_clock=clock.now)
         runtime = build_runtime(
             session_factory=session_factory,
             config=config,

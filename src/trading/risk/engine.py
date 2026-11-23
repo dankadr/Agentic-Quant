@@ -12,7 +12,7 @@ from decimal import Decimal
 from trading.control.state import RiskState, TradingState, blocks_order
 from trading.core.codes import RejectionCode
 from trading.core.config import PaperBrokerConfig, RiskPolicy
-from trading.core.enums import AssetType, OrderType, Side, TimeInForce
+from trading.core.enums import AssetType, OrderType, PositionEffect, TimeInForce, effective_effect
 from trading.core.fees import estimate_fees
 from trading.core.money import is_multiple_of
 from trading.data.calendar import CalendarUnavailable, MarketCalendar
@@ -55,7 +55,17 @@ class DeterministicRiskEngine:
 
         instrument = proposal.instrument
         symbol = instrument.symbol
-        is_entry = proposal.side is Side.BUY
+        try:
+            effect = effective_effect(proposal.side, proposal.position_effect)
+        except ValueError:
+            return RiskEvaluation(
+                False,
+                (RiskReason(RejectionCode.UNSUPPORTED_ORDER),),
+                self._limits_version,
+                False,
+                None,
+            )
+        is_entry = effect.is_entry
         view = market.symbols.get(symbol)
         quote = view.quote if view is not None else None
         pf = account.portfolio
@@ -65,6 +75,8 @@ class DeterministicRiskEngine:
             ref_price = proposal.limit_price
         elif quote is not None and quote.ask > 0:
             ref_price = quote.ask
+        if effect is PositionEffect.OPEN_SHORT and quote is not None and ref_price is not None:
+            ref_price = max(quote.ask, ref_price)
         notional = (
             proposal.quantity * ref_price
             if ref_price is not None and ref_price > 0 and proposal.quantity > 0
@@ -146,12 +158,24 @@ class DeterministicRiskEngine:
             or instrument.asset_type not in _SUPPORTED_ASSETS
         ):
             deny(RejectionCode.UNSUPPORTED_ORDER)
-        if not is_entry:
-            held = _ZERO
-            if pf is not None:
-                held = next((p.qty for p in pf.positions if p.symbol == symbol), _ZERO)
-            sellable = held - account.open_sell_qty_by_symbol.get(symbol, _ZERO)
-            if proposal.quantity > sellable:
+        held = next((p.qty for p in pf.positions if p.symbol == symbol), _ZERO) if pf else _ZERO
+        if effect is PositionEffect.OPEN_SHORT:
+            if (
+                not policy.allow_short
+                or held > 0
+                or account.open_buy_notional_by_symbol.get(symbol)
+            ):
+                deny(RejectionCode.SHORT_NOT_ALLOWED)
+        elif effect is PositionEffect.OPEN_LONG:
+            if held < 0 or account.open_short_notional_by_symbol.get(symbol):
+                deny(RejectionCode.SHORT_NOT_ALLOWED)
+        else:
+            available = (
+                -held - account.open_cover_qty_by_symbol.get(symbol, _ZERO)
+                if effect.is_short
+                else held - account.open_sell_qty_by_symbol.get(symbol, _ZERO)
+            )
+            if proposal.quantity > available:
                 deny(RejectionCode.SHORT_NOT_ALLOWED)
         if proposal.limit_price is not None and (
             proposal.limit_price <= 0
@@ -170,6 +194,7 @@ class DeterministicRiskEngine:
             symbol_total = (
                 pf.exposure_by_symbol.get(symbol, _ZERO)
                 + account.open_buy_notional_by_symbol.get(symbol, _ZERO)
+                + account.open_short_notional_by_symbol.get(symbol, _ZERO)
                 + notional
             )
             if symbol_total > policy.max_symbol_exposure_pct * equity:
@@ -177,6 +202,7 @@ class DeterministicRiskEngine:
             sector_total = (
                 pf.exposure_by_sector.get(sector, _ZERO)
                 + account.open_buy_notional_by_sector.get(sector, _ZERO)
+                + account.open_short_notional_by_sector.get(sector, _ZERO)
                 + notional
             )
             if sector_total > policy.max_sector_exposure_pct * equity:
@@ -184,23 +210,27 @@ class DeterministicRiskEngine:
             gross_total = (
                 pf.gross_exposure
                 + sum(account.open_buy_notional_by_symbol.values(), _ZERO)
+                + sum(account.open_short_notional_by_symbol.values(), _ZERO)
                 + notional
             )
             if gross_total > policy.max_gross_exposure_pct * equity:
                 deny(RejectionCode.EXPOSURE_LIMIT, "gross")
 
-            fees = estimate_fees(Side.BUY, proposal.quantity, ref_price or _ZERO, self._paper)
+            fees = estimate_fees(proposal.side, proposal.quantity, ref_price or _ZERO, self._paper)
             if notional + fees > pf.buying_power:
                 deny(RejectionCode.INSUFFICIENT_CASH)
             # Settled cash is used: unsettled proceeds do not count toward the reserve.
-            cash_after = pf.settled_cash - pf.reserved_cash - notional - fees
+            cash_after = pf.buying_power - notional - fees
             if cash_after < policy.min_cash_reserve_pct * equity:
                 deny(RejectionCode.CASH_RESERVE_LIMIT)
             if account.new_entries_today >= policy.max_new_entries_per_day:
                 deny(RejectionCode.MAX_DAILY_ENTRIES)
-            open_symbols = {p.symbol for p in pf.positions if p.qty > 0} | {
+            open_symbols = {p.symbol for p in pf.positions if p.qty != 0} | {
                 s for s, n in account.open_buy_notional_by_symbol.items() if n > 0
             }
+            open_symbols.update(
+                s for s, n in account.open_short_notional_by_symbol.items() if n > 0
+            )
             if symbol not in open_symbols and len(open_symbols) >= policy.max_open_symbols:
                 deny(RejectionCode.MAX_OPEN_SYMBOLS)
         elif is_entry and account.new_entries_today >= policy.max_new_entries_per_day:

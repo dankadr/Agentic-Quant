@@ -1124,6 +1124,11 @@
       },
       "OrderOut": {
         "properties": {
+          "action": {
+            "readOnly": true,
+            "title": "Action",
+            "type": "string"
+          },
           "avg_fill_price": {
             "anyOf": [
               {
@@ -1181,6 +1186,9 @@
             ],
             "title": "Limit Price"
           },
+          "position_effect": {
+            "$ref": "#/components/schemas/PositionEffect"
+          },
           "qty": {
             "title": "Qty",
             "type": "string"
@@ -1219,11 +1227,12 @@
           }
         },
         "required": [
+          "side",
+          "position_effect",
           "id",
           "client_order_id",
           "broker_order_id",
           "symbol",
-          "side",
           "type",
           "limit_price",
           "qty",
@@ -1233,7 +1242,8 @@
           "status_reason",
           "created_at",
           "updated_at",
-          "fills"
+          "fills",
+          "action"
         ],
         "title": "OrderOut",
         "type": "object"
@@ -1573,6 +1583,18 @@
             "title": "Realized Pnl",
             "type": "string"
           },
+          "restricted_short_proceeds": {
+            "title": "Restricted Short Proceeds",
+            "type": "string"
+          },
+          "short_collateral": {
+            "title": "Short Collateral",
+            "type": "string"
+          },
+          "short_liability": {
+            "title": "Short Liability",
+            "type": "string"
+          },
           "unrealized_pnl": {
             "title": "Unrealized Pnl",
             "type": "string"
@@ -1586,15 +1608,36 @@
           "realized_pnl",
           "unrealized_pnl",
           "exposure",
-          "currency"
+          "currency",
+          "short_liability",
+          "short_collateral",
+          "restricted_short_proceeds"
         ],
         "title": "PortfolioOut",
         "type": "object"
+      },
+      "PositionEffect": {
+        "enum": [
+          "OPEN_LONG",
+          "CLOSE_LONG",
+          "OPEN_SHORT",
+          "CLOSE_SHORT"
+        ],
+        "title": "PositionEffect",
+        "type": "string"
       },
       "PositionOut": {
         "properties": {
           "average_cost": {
             "title": "Average Cost",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "LONG",
+              "SHORT"
+            ],
+            "title": "Direction",
             "type": "string"
           },
           "mark": {
@@ -1621,6 +1664,44 @@
           },
           "qty": {
             "title": "Qty",
+            "type": "string"
+          },
+          "realized_pnl": {
+            "title": "Realized Pnl",
+            "type": "string"
+          },
+          "restricted_short_proceeds": {
+            "title": "Restricted Short Proceeds",
+            "type": "string"
+          },
+          "short_collateral": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Collateral"
+          },
+          "short_liability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Liability"
+          },
+          "signed_qty": {
+            "title": "Signed Qty",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
             "type": "string"
           },
           "strategy_ids": {
@@ -1653,7 +1734,14 @@
           "mark",
           "market_value",
           "unrealized_pnl",
-          "strategy_ids"
+          "strategy_ids",
+          "direction",
+          "signed_qty",
+          "size",
+          "realized_pnl",
+          "short_liability",
+          "short_collateral",
+          "restricted_short_proceeds"
         ],
         "title": "PositionOut",
         "type": "object"
@@ -2034,6 +2122,11 @@
       },
       "SignalOut": {
         "properties": {
+          "action": {
+            "readOnly": true,
+            "title": "Action",
+            "type": "string"
+          },
           "expires_at": {
             "format": "date-time",
             "title": "Expires At",
@@ -2058,6 +2151,9 @@
               }
             ],
             "title": "Limit Price"
+          },
+          "position_effect": {
+            "$ref": "#/components/schemas/PositionEffect"
           },
           "reason_codes": {
             "items": {
@@ -2103,18 +2199,20 @@
           }
         },
         "required": [
+          "side",
+          "position_effect",
           "id",
           "strategy_id",
           "strategy_version",
           "symbol",
-          "side",
           "generated_at",
           "expires_at",
           "target_notional",
           "stop_price",
           "limit_price",
           "reason_codes",
-          "status"
+          "status",
+          "action"
         ],
         "title": "SignalOut",
         "type": "object"
@@ -2443,6 +2541,10 @@
       },
       "SystemStatus": {
         "properties": {
+          "allow_short": {
+            "title": "Allow Short",
+            "type": "boolean"
+          },
           "last_data_at": {
             "anyOf": [
               {
@@ -2517,6 +2619,7 @@
         "required": [
           "mode",
           "trading_enabled",
+          "allow_short",
           "trading_state",
           "risk_state",
           "risk_reason",
@@ -2578,6 +2681,18 @@
             ],
             "title": "Closed At"
           },
+          "closing_action": {
+            "title": "Closing Action",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "LONG",
+              "SHORT"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
           "fees": {
             "title": "Fees",
             "type": "string"
@@ -2604,6 +2719,10 @@
           "opened_at": {
             "format": "date-time",
             "title": "Opened At",
+            "type": "string"
+          },
+          "opening_action": {
+            "title": "Opening Action",
             "type": "string"
           },
           "qty": {
@@ -2635,7 +2754,10 @@
           "gross_pnl",
           "fees",
           "net_pnl",
-          "hold_minutes"
+          "hold_minutes",
+          "direction",
+          "opening_action",
+          "closing_action"
         ],
         "title": "TradeOut",
         "type": "object"
@@ -3263,6 +3385,11 @@
       },
       "trading__api__routes__transactions__FillOut": {
         "properties": {
+          "action": {
+            "readOnly": true,
+            "title": "Action",
+            "type": "string"
+          },
           "execution_id": {
             "title": "Execution Id",
             "type": "string"
@@ -3278,6 +3405,9 @@
           "order_status": {
             "title": "Order Status",
             "type": "string"
+          },
+          "position_effect": {
+            "$ref": "#/components/schemas/PositionEffect"
           },
           "price": {
             "title": "Price",
@@ -3313,9 +3443,10 @@
           }
         },
         "required": [
+          "side",
+          "position_effect",
           "ts",
           "symbol",
-          "side",
           "qty",
           "price",
           "notional",
@@ -3323,7 +3454,8 @@
           "slippage_estimate",
           "execution_id",
           "order_status",
-          "strategies"
+          "strategies",
+          "action"
         ],
         "title": "FillOut",
         "type": "object"
@@ -6661,7 +6793,7 @@
     },
     "/v1/trades": {
       "get": {
-        "description": "Round trips per (strategy, symbol, UTC day), built from the fill attribution.",
+        "description": "Attributed episodes opened or closed in the requested UTC window.",
         "operationId": "get_trades_v1_trades_get",
         "parameters": [
           {

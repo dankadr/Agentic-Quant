@@ -17,6 +17,20 @@ multi-day backtest engine, performance reporting against a benchmark, walk-forwa
 research tooling, and a reviewed strategy-config proposal workflow. Research agents and the ChatGPT
 MCP come in Plans C–D.
 
+## Paper short positions
+
+`risk.allow_short` defaults to `false`. When enabled for the internal paper simulator, the
+deterministic ORB and VWAP strategies can open intraday shorts on the configured universe.
+Research agents retain their advisory role. Paper shorts assume shares are available to borrow.
+Borrow fees are omitted. Sale proceeds stay restricted, and the simulator reserves separate
+collateral equal to the greater of remaining entry proceeds or current exposure at the ask.
+Turning the flag off blocks fresh short entries and increases. Existing covers and flattening
+continue under the usual exit checks.
+
+The dashboard shows position direction, size, P&L, short collateral, liability and restricted
+proceeds. `/v1/system/status` reports the loaded flag. See the
+[paper short rollout runbook](docs/runbooks/paper-shorts.md) for migration and enablement.
+
 ## Requirements
 
 Python 3.12, [uv](https://docs.astral.sh/uv/), Docker + Docker Compose v2.
@@ -84,6 +98,15 @@ one-sided t-test with Holm correction. `backtest_evaluator` plugs a real backtes
 Multi-day **synthetic** fixtures: `scripts/make_synthetic_fixtures.py --days N`.
 
 ## Strategy parameters
+
+Each ticker belongs to one trading strategy at a time, starting when its entry order is
+accepted. Other strategies skip that ticker until the position is flat and every pending order
+is resolved, including partial fills and orders with an unknown outcome. Reservations survive
+restarts and session boundaries. Simultaneous eligible entries use stable strategy-id order
+(ORB before VWAP); an entry that cannot be sized does not reserve the ticker. The owner alone
+manages its position; safety flattening can always exit, and research agents may still analyze
+any ticker. Existing shared positions may unwind, but cannot receive additional entries.
+
 
 Parameters live in the `strategies` table and change only through
 `POST /v1/strategies/{id}/propose-config` (stored `PENDING_REVIEW`), a review by a *different*
@@ -187,6 +210,17 @@ for scratch provisioning, activation, interpretation and rollback.
 
 ## Paper run
 
+The owner-approved **high-risk paper profile** (2026-11-16) targets $20,000 per ORB/VWAP entry,
+with up to 20 new entries per day, 8 held symbols, 20% per-symbol and 40% per-sector exposure.
+The daily-loss halt is 5% and the drawdown halt is 10%; these are halt thresholds, not guaranteed
+maximum realized losses. Gross exposure remains capped at 80%, with a 20% minimum cash reserve.
+The ORB/VWAP capital sleeves remain 35%/30%, so targets are still constrained by available capital.
+ORB uses a 10-minute opening range and 1.0 volume confirmation. VWAP uses a 20-bar lookback,
+25 minimum bars, 1.5 entry z-score and a 12 bps slope limit. Both permit two entries per symbol
+per day with a 15-minute cooldown. Exits and market-data quality requirements are unchanged.
+Existing stored strategy parameters change only through approved proposals at the next session
+start; editing YAML or restarting a worker does not apply them mid-session.
+
 ```bash
 KEY=...   # operator key from create-api-key
 curl -s -H "Authorization: Bearer $KEY" localhost:8000/v1/system/status          # note "version"
@@ -216,8 +250,17 @@ trading additionally needs a market data provider adapter.
 ## Known limitations
 
 - Market data comes from Alpaca's free IEX feed only (see above); there is no consolidated (SIP) data.
-- Corporate actions are ingested and the ledger can apply them, but the paper venue does not model
-  them, so they are not applied automatically (it would break reconciliation).
+- Fixture replays ingest visible splits and cash dividends from `corporate_actions.csv`. The
+  paper venue and account ledger apply them together. The online Alpaca market-data integration
+  lacks a corporate-action feed. Before a carried short can trade, verify every intervening session
+  against an independent authoritative corporate-action source for the entire configured universe.
+  Put the reviewed ex-date's actions in `DIR/corporate_actions.csv` with the header
+  `symbol,action_type,ex_date,announced_at,ratio_from,ratio_to,cash_amount`. Use `SPLIT` or
+  `CASH_DIVIDEND` and supply timestamps with UTC offsets. For a verified no-action day, provide
+  just the header. Run `uv run trading verify-paper-actions --path DIR --date YYYY-MM-DD` for each
+  session. The command records the file digest and provider/date/symbol verification atomically
+  with its actions. The worker checks coverage before processing orders and raises a reconciliation
+  incident when coverage is missing. After verification, reconcile the paper account.
 - Synthetic backtests prove plumbing, not profitability; the scripted intent source remains for tests.
 - TQQQ (leveraged) is in the universe at the owner's request, in its own sector bucket; it is
   outside the spec's "no leverage" intent and is capped by the same risk limits.

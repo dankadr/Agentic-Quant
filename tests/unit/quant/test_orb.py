@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 
@@ -162,3 +163,13 @@ def test_other_strategies_holdings_do_not_trigger_exits(calendar: MarketCalendar
 def test_invalid_parameters_are_rejected_at_construction(bad: dict) -> None:  # type: ignore[type-arg]
     with pytest.raises(ValueError):
         strategy(**bad)
+
+
+def test_bearish_entry_requires_short_flag(calendar: MarketCalendar) -> None:
+    data = inp(calendar, orb_rows(breakout_close="99.60"), quotes={"SPY": ("99.59", "99.61")})
+    assert strategy().evaluate(data) == []
+    (signal,) = strategy().evaluate(replace(data, allow_short=True))
+    assert signal.position_effect == "OPEN_SHORT"
+    assert signal.side == Side.SELL
+    assert signal.limit_price is not None and signal.stop_price is not None
+    assert signal.limit_price < signal.stop_price

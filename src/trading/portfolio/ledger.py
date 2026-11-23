@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from trading.brokers.base import BrokerFill
-from trading.core.enums import Side
+from trading.core.enums import PositionEffect, Side, effective_effect
 from trading.core.errors import TradingError
 from trading.core.money import quantize_cash, quantize_price, trade_cash_amount
 from trading.db.models.portfolio import Account, CashLedgerEntry, Position
@@ -74,9 +74,10 @@ def apply_fill(
 ) -> AppliedFill | None:
     """Apply one broker fill transactionally: fill row, cash, position, order. Idempotent.
 
-    ``settles_on`` is when SALE PROCEEDS settle; debits are settled on the trade date.
+    Long sales settle on ``settles_on``. Short proceeds enter restricted cash immediately.
     All checks run before the first write, so a rejected fill leaves nothing behind.
     """
+    session.get(Account, account_id, with_for_update=True)
     order = session.scalars(
         select(Order)
         .where(Order.client_order_id == fill.client_order_id, Order.account_id == account_id)
@@ -101,9 +102,14 @@ def apply_fill(
     assert_transition(previous_status, new_status)
 
     position = session.get(Position, (account_id, order.instrument_id), with_for_update=True)
-    if fill.side is Side.SELL and (position is None or fill.qty > position.qty):
-        held = Decimal(0) if position is None else position.qty
-        raise LedgerInvariantError(f"oversell: {fill.execution_id} sells {fill.qty}, holds {held}")
+    effect = effective_effect(
+        fill.side, PositionEffect(order.position_effect) if order.position_effect else None
+    )
+    held = position.qty if position else Decimal(0)
+    directed = -held if effect.is_short else held
+    if directed < 0 or (not effect.is_entry and fill.qty > directed):
+        raise LedgerInvariantError(f"oversell or invalid cover: {effect} {fill.qty}, holds {held}")
+    delta = fill.qty if fill.side is Side.BUY else -fill.qty
 
     # ---- all checks passed: write ----
     row = FillRow(
@@ -128,7 +134,7 @@ def apply_fill(
             currency="USD",
             source_type="TRADE",
             source_id=str(row.id),
-            settles_on=settles_on if amount > 0 else trade_date,
+            settles_on=settles_on if effect is PositionEffect.CLOSE_LONG else trade_date,
             reverses_id=None,
         )
     )
@@ -151,28 +157,30 @@ def apply_fill(
         position = Position(
             account_id=account_id,
             instrument_id=order.instrument_id,
-            qty=fill.qty,
-            average_cost=quantize_price(fill.price),
-            realized_pnl=quantize_cash(realized),
+            qty=Decimal(0),
+            average_cost=Decimal(0),
+            realized_pnl=Decimal(0),
             updated_at=now,
         )
         session.add(position)
-    elif fill.side is Side.BUY:
-        total_qty = position.qty + fill.qty
+    previous_basis = quantize_cash(abs(held) * position.average_cost)
+    if effect.is_entry:
         position.average_cost = quantize_price(
-            (position.qty * position.average_cost + fill.qty * fill.price) / total_qty
+            (abs(held) * position.average_cost + fill.qty * fill.price) / (abs(held) + fill.qty)
         )
-        position.qty = total_qty
-        position.realized_pnl = quantize_cash(position.realized_pnl + realized)
-        position.updated_at = now
-    else:
-        realized += (fill.price - position.average_cost) * fill.qty
-        position.qty -= fill.qty
-        position.realized_pnl = quantize_cash(position.realized_pnl + realized)
-        position.updated_at = now
+    elif not effect.is_short:
+        realized += (position.average_cost - fill.price) * delta
+    if effect.is_short:
+        # Release the difference of the rounded basis balances. Each partial cover then
+        # reconciles to its separately booked cash leg, including the final cash quantum.
+        remaining_basis = quantize_cash(abs(held + delta) * position.average_cost)
+        realized += amount + previous_basis - remaining_basis
+    position.qty = held + delta
+    position.realized_pnl = quantize_cash(position.realized_pnl + realized)
+    position.updated_at = now
 
     record_attribution(
-        session, order=order, fill_id=row.id, fill=fill, realized=quantize_cash(realized)
+        session, order=order, fill_id=row.id, fill=fill, realized=quantize_cash(realized), as_of=now
     )
 
     order.avg_fill_price = quantize_price(

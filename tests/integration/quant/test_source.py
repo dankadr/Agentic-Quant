@@ -141,7 +141,7 @@ def test_bars_ingested_after_the_decision_time_are_invisible(world: World) -> No
 
 
 def test_no_signal_without_volume_confirmation(world: World) -> None:
-    world.orb_day(breakout_volume="1000")
+    world.orb_day(breakout_volume="500")
     assert world.propose() == ()
 
 
@@ -419,7 +419,7 @@ def test_an_expired_macro_view_blocks_when_required_and_is_ignored_when_not(worl
 
 
 def test_no_signal_is_recorded_separately_from_faults_at_five_minute_sample(world: World) -> None:
-    world.orb_day(breakout_volume="1000")
+    world.orb_day(breakout_volume="500")
     at = t(20) + timedelta(seconds=5)
     # Supply fresh data but no breakout confirmation.
     for minute in range(16, 20):

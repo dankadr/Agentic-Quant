@@ -171,7 +171,7 @@ def test_backtest_evaluator_feeds_research_with_real_runs(
     # the override really reached the strategy row used by the run
     stored = db.execute(text("select params_json from strategies where id = 'orb_v1'")).scalar_one()
     assert stored["target_r"] == "2.0"  # the last evaluation ran with the last neighbour
-    assert stored["trade_notional"] == "12000"  # unrelated parameters are kept
+    assert stored["trade_notional"] == "20000"  # unrelated parameters are kept
 
 
 def test_backtest_full_run_returns_one_return_per_session(
@@ -195,3 +195,32 @@ def test_backtest_full_run_returns_one_return_per_session(
         text("select params_json->>'target_r' from strategies where id = 'orb_v1'")
     ).scalar_one()
     assert stored == "2.0"  # the override reached the strategy used by the run
+
+
+def test_fixture_replay_ingests_only_visible_actions(session_factory, db, tmp_path):
+    from tests.replay.orb_day import write_orb_day
+    from tests.replay.test_replay_strategies import orb_config
+
+    config = orb_config(max_hold_minutes=900, max_entries_per_symbol_per_day=1)
+    config = config.model_copy(
+        update={"risk": config.risk.model_copy(update={"allow_short": True})}
+    )
+    fx = write_orb_day(tmp_path / "day", bearish=True, rally_to=None)
+    (fx / "corporate_actions.csv").write_text(
+        "symbol,action_type,ex_date,announced_at,cash_amount\n"
+        "SPY,CASH_DIVIDEND,2026-10-20,2026-10-20T13:30:00Z,1\n"
+        "SPY,SPLIT,2026-10-20,2026-10-25T14:00:00Z,\n"
+    )
+    run_backtest(
+        session_factory, fixtures_dir=fx, start=MON, end=TUE, config=config, minutes_per_day=18
+    )
+    assert db.execute(text("SELECT action_type FROM corporate_actions")).scalars().all() == [
+        "CASH_DIVIDEND"
+    ]
+    assert (
+        db.scalar(text("SELECT count(*) FROM audit_events WHERE action='corporate_action.applied'"))
+        == 1
+    )
+    dividend = db.scalar(text("SELECT amount FROM cash_ledger WHERE source_type='DIVIDEND'"))
+    assert dividend < 0
+    assert dividend == db.scalar(text("SELECT cash_delta FROM paper_venue.venue_actions"))

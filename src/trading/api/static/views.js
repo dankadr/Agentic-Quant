@@ -37,6 +37,26 @@ function panel(title, opts) {
 
 function statusLevel(status) { return status === "COMPLETED" ? "good" : status === "RUNNING" ? "warn" : "bad"; }
 
+const PAPER_BORROW_NOTE = "Paper shorts assume shares are available to borrow. Borrow fees are omitted.";
+
+function paperShortStatus(allowShort) {
+  if (allowShort == null) return chip("Paper shorts status unavailable", "warn");
+  return allowShort ? chip("Paper shorts enabled", "accent") : chip("Paper shorts disabled");
+}
+
+function positionLabel(position) {
+  return append(el("div"), el("strong", position.symbol), el("span", position.direction, "position-direction muted small"));
+}
+
+function tradeAction(trade) { return chip(trade.action || trade.side); }
+
+const positionColumns = [
+  { label: "Position", get: positionLabel },
+  { label: "Size", num: true, get: x => x.size },
+  { label: "Entry", num: true, get: x => usd(x.average_cost) },
+  { label: "Unrealized P&L", num: true, get: x => x.unrealized_pnl == null ? "—" : signedUsd(x.unrealized_pnl), cls: x => trend(x.unrealized_pnl) },
+];
+
 function list(items) {
   const ul = el("ul", null, "plain");
   for (const i of items || []) ul.append(el("li", i));
@@ -208,6 +228,7 @@ function mountOverview(root, ctx) {
   const equity = panel("Equity (selected session, ET)", { cls: "col-8" });
   const now = panel("Agent roster", { cls: "col-4 agents-status" });
   const positions = panel("Open positions", { cls: "col-4" });
+  positions.node.classList.add("position-summary");
   const pnl = panel("Strategy P&L", { cls: "col-4" });
   const costs = panel("Session costs & reconciliation", { cls: "col-6" });
   const diagnostics = panel("Sampled NO_ENTRY evaluations", { cls: "col-6" });
@@ -303,11 +324,23 @@ function mountOverview(root, ctx) {
       return box;
     });
 
-    positions.set({ items: data.positions && data.positions.items, historical: ctx.explicit }, ({ items, historical }) => historical ? empty("Current positions unavailable for historical date") : !items ? empty("Positions unavailable") : table("Current open positions", [
-      { label: "Symbol", get: (x) => x.symbol }, { label: "Qty", num: true, get: (x) => x.qty },
-      { label: "Value", num: true, get: (x) => (x.market_value ? usd(x.market_value) : "-") },
-      { label: "P&L", num: true, get: (x) => (x.unrealized_pnl != null ? signedUsd(x.unrealized_pnl) : "-"), cls: (x) => trend(x.unrealized_pnl) },
-    ], items || [], "flat: no open positions"));
+    const shortBalances = p && {
+      liability: p.short_liability, collateral: p.short_collateral, proceeds: p.restricted_short_proceeds,
+    };
+    positions.set({ items: data.positions?.items, historical: ctx.explicit, allowShort: ctx.status?.allow_short, shortBalances }, ({ items, historical, allowShort, shortBalances }) => {
+      const box = el("div", null, "stack");
+      box.append(append(el("div"), paperShortStatus(allowShort)), el("p", PAPER_BORROW_NOTE, "muted small"));
+      if (historical) return append(box, empty("Current positions unavailable for historical date"));
+      if (Number(shortBalances?.liability) > 0 || items?.some(x => x.direction === "SHORT")) {
+        const kv = el("dl", null, "kv short-balances");
+        for (const [label, value] of [["Short liability", shortBalances?.liability], ["Short collateral", shortBalances?.collateral], ["Restricted proceeds", shortBalances?.proceeds]]) {
+          kv.append(el("dt", label), el("dd", value == null ? "Unavailable" : usd(value)));
+        }
+        box.append(kv);
+      }
+      box.append(items ? table("Current open positions", positionColumns, items, "flat: no open positions") : empty("Positions unavailable"));
+      return box;
+    });
 
     const strat = (r && r.strategies) || {};
     pnl.set({ strat, available: !!r }, () => !r ? empty("Report unavailable") : table("Strategy realized P&L for selected session", [
@@ -344,7 +377,7 @@ function filterBar(options, current, onPick, label) {
   return bar;
 }
 
-function mountTrading(root) {
+function mountTrading(root, ctx) {
   const grid = el("div", null, "grid");
   const positions = panel("Positions", { cls: "col-12" });
   const orders = panel("Orders", { cls: "col-12" });
@@ -355,13 +388,21 @@ function mountTrading(root) {
 
   function draw() {
     const d = cache;
-    positions.set(d.positions && d.positions.items, (items) => table("Positions", [
-      { label: "Symbol", get: (x) => x.symbol }, { label: "Qty", num: true, get: (x) => x.qty },
-      { label: "Avg cost", num: true, get: (x) => fmtMoney(x.average_cost) }, { label: "Mark", num: true, get: (x) => (x.mark ? fmtMoney(x.mark) : "-") },
-      { label: "Value", num: true, get: (x) => (x.market_value ? usd(x.market_value) : "-") },
-      { label: "Unrealized", num: true, get: (x) => (x.unrealized_pnl ? signedUsd(x.unrealized_pnl) : "-"), cls: (x) => trend(x.unrealized_pnl) },
-      { label: "By", get: (x) => (x.strategy_ids || []).join(", ") },
-    ], items || [], "flat: no open positions"));
+    positions.set({ items: d.positions?.items, allowShort: ctx.status?.allow_short }, ({ items, allowShort }) => {
+      const box = el("div", null, "stack");
+      box.append(append(el("div"), paperShortStatus(allowShort)), el("p", PAPER_BORROW_NOTE, "muted small"));
+      box.append(items ? table("Positions", [
+        ...positionColumns,
+        { label: "Realized P&L", num: true, get: x => signedUsd(x.realized_pnl), cls: x => trend(x.realized_pnl) },
+        { label: "Mark", num: true, get: x => x.mark == null ? "—" : usd(x.mark) },
+        { label: "Value", num: true, get: x => x.market_value == null ? "—" : usd(x.market_value) },
+        { label: "Short liability", num: true, get: x => x.short_liability == null ? "—" : usd(x.short_liability) },
+        { label: "Short collateral", num: true, get: x => x.short_collateral == null ? "—" : usd(x.short_collateral) },
+        { label: "Restricted proceeds", num: true, get: x => usd(x.restricted_short_proceeds) },
+        { label: "By", get: x => (x.strategy_ids || []).join(", ") },
+      ], items, "flat: no open positions") : empty("Positions unavailable"));
+      return box;
+    });
 
     const open = new Set(["CREATED", "RISK_APPROVED", "SUBMITTING", "SUBMITTED", "ACKNOWLEDGED", "PARTIALLY_FILLED", "UNKNOWN"]);
     const all = (d.orders && d.orders.items) || [];
@@ -371,7 +412,7 @@ function mountTrading(root) {
       box.append(filterBar([["all", "All"], ["open", "Open"], ["filled", "Filled"], ["other", "Rejected / canceled"]], orderFilter, (v) => { orderFilter = v; cacheSig(); draw(); }, "Order filter"));
       box.append(table("Orders", [
         { label: "Time (ET)", get: (o) => fmtDateTime(o.created_at) }, { label: "Symbol", get: (o) => o.symbol },
-        { label: "Side", get: (o) => chip(o.side, o.side === "BUY" ? "good" : "bad") }, { label: "Qty", num: true, get: (o) => o.qty },
+        { label: "Action", get: tradeAction }, { label: "Qty", num: true, get: (o) => o.qty },
         { label: "Filled", num: true, get: (o) => o.filled_qty }, { label: "Limit", num: true, get: (o) => (o.limit_price ? fmtMoney(o.limit_price) : "mkt") },
         { label: "Avg px", num: true, get: (o) => (o.avg_fill_price ? fmtMoney(o.avg_fill_price) : "-") },
         { label: "Status", get: (o) => chip(o.status + (o.status_reason ? ": " + o.status_reason : ""), o.status === "FILLED" ? "good" : open.has(o.status) ? "warn" : "") },
@@ -387,14 +428,14 @@ function mountTrading(root) {
       box.append(filterBar(ids.map((i) => [i, i === "all" ? "All" : i]), signalFilter, (v) => { signalFilter = v; cacheSig(); draw(); }, "Signal filter"));
       box.append(table("Signals", [
         { label: "Time (ET)", get: (s) => fmtDateTime(s.generated_at) }, { label: "Strategy", get: (s) => s.strategy_id }, { label: "Symbol", get: (s) => s.symbol },
-        { label: "Side", get: (s) => chip(s.side, s.side === "BUY" ? "good" : "bad") }, { label: "Notional", num: true, get: (s) => usd(s.target_notional) },
+        { label: "Action", get: tradeAction }, { label: "Notional", num: true, get: (s) => usd(s.target_notional) },
         { label: "Why", get: (s) => (s.reason_codes || []).join(", "), wrap: true }, { label: "Result", get: (s) => chip(s.status, s.status === "ALLOCATED" ? "good" : "") },
       ], shownSigs, "no signals match"));
       return box;
     });
   }
   function cacheSig() { /* filters change the panel signature; nothing else to invalidate */ }
-  return (data) => { cache = data; draw(); };
+  return (data, nextCtx) => { cache = data; ctx = nextCtx; draw(); };
 }
 
 
@@ -412,12 +453,12 @@ function mountTransactions(root) {
   function draw() {
     const t = cache.trades || { items: [], summary: null };
     summary.set(t.summary, (sm) => {
-      const row = el("div", null, "row");
+      const box = el("div", null, "stack"), row = el("div", null, "row");
       if (!sm || !sm.trades) { return empty("no trades in this window yet"); }
       const win = sm.trades ? Math.round((sm.wins / sm.trades) * 100) : 0;
       append(row, chip(sm.trades + (sm.trades === 1 ? " trade" : " trades")), chip(win + "% winners", win >= 50 ? "good" : "warn"),
         chip("net " + glyph(sm.net_pnl) + signedUsd(sm.net_pnl), Number(sm.net_pnl) >= 0 ? "good" : "bad"), chip("fees " + usd(sm.fees)));
-      return row;
+      return append(box, row, el("p", PAPER_BORROW_NOTE, "muted small"));
     });
     const ids = ["all", ...new Set(t.items.map((x) => x.strategy_id))];
     const shown = t.items.filter((x) => filter === "all" || x.strategy_id === filter);
@@ -425,11 +466,12 @@ function mountTransactions(root) {
       const box = el("div", null, "stack");
       box.append(filterBar(ids.map((i) => [i, i === "all" ? "All" : i]), filter, (v) => { filter = v; draw(); }, "Strategy filter"));
       box.append(table("Round trips", [
-        { label: "Opened (ET)", get: (x) => fmtDateTime(x.opened_at) }, { label: "Strategy", get: (x) => x.strategy_id }, { label: "Symbol", get: (x) => x.symbol },
+        { label: "Opened (ET)", get: (x) => fmtDateTime(x.opened_at) }, { label: "Strategy", get: (x) => x.strategy_id }, { label: "Position", get: positionLabel },
         { label: "State", get: (x) => chip(x.status, x.status === "OPEN" ? "warn" : "") },
         { label: "Held", num: true, get: (x) => (x.hold_minutes === null ? "-" : x.hold_minutes + "m") },
-        { label: "Qty", num: true, get: (x) => x.qty }, { label: "Entry", num: true, get: (x) => fmtMoney(x.avg_entry) },
-        { label: "Exit", num: true, get: (x) => (x.avg_exit ? fmtMoney(x.avg_exit) : "-") },
+        { label: "Qty", num: true, get: (x) => x.qty },
+        { label: "Entry", get: x => append(el("div", usd(x.avg_entry)), el("span", x.opening_action, "position-direction muted small")) },
+        { label: "Exit", get: x => x.avg_exit == null ? "—" : append(el("div", usd(x.avg_exit)), el("span", x.closing_action, "position-direction muted small")) },
         { label: "Fees", num: true, get: (x) => usd(x.fees) },
         { label: "Net P&L", num: true, get: (x) => glyph(x.net_pnl) + signedUsd(x.net_pnl), cls: (x) => trend(x.net_pnl) },
       ], shown, "no round trips match"));
@@ -437,7 +479,7 @@ function mountTransactions(root) {
     });
     fills.set(cache.fills && cache.fills.items, (items) => table("Fills", [
       { label: "Time (ET)", get: (f) => fmtDateTime(f.ts) + ":" + fmtTime(f.ts).slice(6) }, { label: "Symbol", get: (f) => f.symbol },
-      { label: "Side", get: (f) => chip(f.side, f.side === "BUY" ? "good" : "bad") }, { label: "Qty", num: true, get: (f) => f.qty },
+      { label: "Action", get: tradeAction }, { label: "Qty", num: true, get: (f) => f.qty },
       { label: "Price", num: true, get: (f) => fmtMoney(f.price) }, { label: "Notional", num: true, get: (f) => usd(f.notional) },
       { label: "Fees", num: true, get: (f) => usd(f.fees) }, { label: "Slippage est.", num: true, get: (f) => usd(f.slippage_estimate) },
       { label: "By", get: (f) => f.strategies.map((s) => s.strategy_id).join(", ") },

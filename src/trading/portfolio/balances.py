@@ -14,7 +14,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from trading.core.config import PaperBrokerConfig
-from trading.core.enums import Side
+from trading.core.enums import PositionEffect, Side, effective_effect
 from trading.core.errors import TradingError
 from trading.core.fees import estimate_fees
 from trading.core.money import quantize_cash
@@ -54,21 +54,33 @@ def reserved_for_open_buys(
     ask_by_symbol: Mapping[str, Decimal],
     cfg: PaperBrokerConfig,
 ) -> Decimal:
-    """Cash set aside for the unfilled part of every non-terminal BUY order (incl. est. fees)."""
+    """Reserve unfilled entries and cover fees. Existing collateral funds cover principal."""
     rows = session.execute(
         select(Order, Instrument.symbol)
         .join(Instrument, Instrument.id == Order.instrument_id)
         .where(
             Order.account_id == account_id,
-            Order.side == Side.BUY.value,
             Order.status.not_in([s.value for s in TERMINAL]),
         )
     ).all()
     reserved = Decimal(0)
     for order, symbol in rows:
+        side = Side(order.side)
+        effect = effective_effect(
+            side, PositionEffect(order.position_effect) if order.position_effect else None
+        )
+        if effect is PositionEffect.CLOSE_LONG:
+            continue
         price = order.limit_price if order.limit_price is not None else ask_by_symbol.get(symbol)
-        if price is None:
+        if effect is PositionEffect.OPEN_SHORT:
+            ask = ask_by_symbol.get(symbol)
+            if ask is None or ask <= 0:
+                raise MissingMark(f"no ask to reserve short collateral for {symbol} order")
+            price = max(order.limit_price or ask, ask)
+        if price is None or price <= 0:
             raise MissingMark(f"no reference price to reserve cash for {symbol} order")
         remaining = order.qty - order.filled_qty
-        reserved += remaining * price + estimate_fees(Side.BUY, remaining, price, cfg)
+        reserved += estimate_fees(side, remaining, price, cfg)
+        if effect.is_entry:
+            reserved += remaining * price
     return quantize_cash(reserved, ROUND_UP)

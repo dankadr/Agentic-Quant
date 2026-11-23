@@ -89,3 +89,26 @@ def test_action_for_unheld_instrument_is_processed_as_noop(db: Session) -> None:
     dividend = _action(db, inst.id, action_type="CASH_DIVIDEND", cash_amount=D("1"))
     assert apply_corporate_action(db, account_id=account_id, action=dividend, now=T0) is True
     assert cash_balances(db, account_id, as_of_date=DAY).total == D("1000.0000")
+
+
+def test_short_split_and_dividend_debit(db: Session) -> None:
+    account_id = open_account(db)
+    order = new_order(db, account_id, "s1", side="SELL", qty="10")
+    order.position_effect = "OPEN_SHORT"
+    apply_fill(
+        db,
+        account_id=account_id,
+        fill=broker_fill(order, "s1", qty="10", price="50"),
+        settles_on=NEXT_DAY,
+        now=T0,
+    )
+    split = _action(db, order.instrument_id, action_type="SPLIT", ratio_from=D(1), ratio_to=D(2))
+    apply_corporate_action(db, account_id=account_id, action=split, now=T0)
+    position = db.scalars(select(Position)).one()
+    assert (position.qty, position.average_cost) == (-20, 25)
+    dividend = _action(db, order.instrument_id, action_type="CASH_DIVIDEND", cash_amount=D("0.5"))
+    apply_corporate_action(db, account_id=account_id, action=dividend, now=T0)
+    assert (position.realized_pnl, cash_balances(db, account_id, as_of_date=DAY).total) == (
+        -10,
+        1490,
+    )

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
@@ -172,3 +173,13 @@ def test_deterministic(calendar: MarketCalendar) -> None:
 def test_invalid_parameters_rejected(bad: dict) -> None:  # type: ignore[type-arg]
     with pytest.raises(ValueError):
         strategy(**bad)
+
+
+def test_bearish_entry_requires_short_flag(calendar: MarketCalendar) -> None:
+    data = inp(calendar, [str(200 - D(c)) for c in stretched()])
+    assert strategy().evaluate(data) == []
+    (signal,) = strategy().evaluate(replace(data, allow_short=True))
+    assert signal.position_effect == "OPEN_SHORT"
+    assert signal.side == Side.SELL
+    assert signal.limit_price is not None and signal.stop_price is not None
+    assert signal.limit_price < signal.stop_price
