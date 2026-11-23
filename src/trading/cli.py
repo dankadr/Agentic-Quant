@@ -35,7 +35,6 @@ from trading.documents.blobs import BlobStore
 from trading.jobs.lease import Lease
 from trading.monitoring.logging import configure_logging
 from trading.monitoring.metrics import start_metrics_server
-from trading.portfolio.corporate_actions import verify_paper_actions
 from trading.risk.halts import NotInHaltError, clear_drawdown_halt
 from trading.services.health import check_health, new_holder_id
 
@@ -625,6 +624,7 @@ def verify_actions(
     ),
 ) -> None:
     """Verify a complete daily online paper corporate-action file, including an empty action day."""
+    from trading.portfolio.corporate_actions import verify_paper_actions  # noqa: PLC0415
 
     settings = Settings()
     config = load_config(settings.config_dir)

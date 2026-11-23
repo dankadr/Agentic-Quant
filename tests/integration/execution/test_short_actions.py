@@ -319,3 +319,42 @@ def test_online_carry_requires_visible_verified_symbol_coverage(db, session_fact
     assert env.broker.get_account().cash == before.cash - (2 if cash_amount else 0)
     with session_factory() as s:
         assert s.scalar(text("SELECT count(*) FROM paper_venue.venue_actions")) == int(bool(cash_amount))
+
+
+@pytest.mark.parametrize("kind", ["SPLIT", "CASH_DIVIDEND"])
+def test_mixed_action_terms_cannot_be_verified_or_applied(db, session_factory, clock, calendar, tmp_path, kind):
+    from trading.data.alpaca_provider import PROVIDER_NAME
+    from trading.portfolio.corporate_actions import verify_paper_actions
+
+    env = build_env(db, session_factory, clock, calendar, allow_short=True)
+    env.tick()
+    entry = env.place(side=Side.SELL, effect=PositionEffect.OPEN_SHORT, qty="2", limit="98")
+    env.manager.submit(entry)
+    env.tick()
+    env.manager.sync_fills()
+    day = DAY + timedelta(days=1)
+    clock.set(clock.now() + timedelta(days=1))
+    now = clock.now()
+    before = env.broker.get_account()
+    (tmp_path / "corporate_actions.csv").write_text(
+        "symbol,action_type,ex_date,announced_at,ratio_from,ratio_to,cash_amount\n"
+        f"SPY,{kind},{day},{now.isoformat()},1,2,1\n"
+    )
+    with pytest.raises(ValueError, match="mixed"):
+        with session_factory.begin() as s:
+            verify_paper_actions(s, tmp_path, day, ["SPY"], now)
+    with session_factory.begin() as s:
+        assert s.scalar(text("SELECT count(*) FROM corporate_actions")) == 0
+        s.add(CorporateAction(instrument_id=env.instruments["SPY"].id, provider=PROVIDER_NAME,
+                              action_type=kind, ex_date=day, announced_at=now, ingested_at=now,
+                              ratio_from=D(1), ratio_to=D(2), cash_amount=D(1)))
+    with pytest.raises(TradingError, match="mixed"):
+        with session_factory.begin() as s:
+            apply_due_actions(s, account_id=env.account_id, broker=env.broker, session_date=day,
+                              now=now, provider=PROVIDER_NAME)
+    assert env.broker.get_account() == before
+    with session_factory() as s:
+        assert s.scalar(select(Position.qty)) == -2
+        assert s.scalar(text("SELECT count(*) FROM cash_ledger WHERE source_type='DIVIDEND'")) == 0
+        assert s.scalar(text("SELECT count(*) FROM paper_venue.venue_actions")) == 0
+        assert s.scalar(text("SELECT count(*) FROM audit_events WHERE action LIKE 'corporate_action.%'")) == 0

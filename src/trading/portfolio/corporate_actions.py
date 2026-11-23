@@ -16,7 +16,7 @@ from trading.core.money import quantize_cash, split_position
 from trading.data.alpaca_provider import PROVIDER_NAME
 from trading.data.calendar import NEW_YORK, MarketCalendar
 from trading.data.ingest import store_corporate_actions
-from trading.data.models import CorporateActionRecord
+from trading.data.models import CorporateActionRecord, validate_action_terms
 from trading.db.models.market import CorporateAction, Instrument
 from trading.db.models.ops import AuditEventRow
 from trading.db.models.portfolio import CashLedgerEntry, Position
@@ -137,10 +137,20 @@ def require_action_coverage(
             cursor += timedelta(days=1)
 
 
+def _validate_stored_action(action: CorporateAction) -> None:
+    try:
+        validate_action_terms(
+            action.action_type, action.ratio_from, action.ratio_to, action.cash_amount
+        )
+    except ValueError as exc:
+        raise LedgerInvariantError(f"invalid corporate action {action.id}: {exc}") from exc
+
+
 def apply_corporate_action(
     session: Session, *, account_id: UUID, action: CorporateAction, now: datetime
 ) -> bool:
     """Process ``action`` for the account. Returns False if it was already processed."""
+    _validate_stored_action(action)
     target = f"{account_id}:{action.id}"
     if session.scalar(
         select(AuditEventRow.id).where(
@@ -235,19 +245,7 @@ def apply_due_actions(
         )
     ).all()
     for action, symbol in due:
-        if action.action_type == "SPLIT":
-            if (
-                not action.ratio_from
-                or not action.ratio_to
-                or min(action.ratio_from, action.ratio_to) <= 0
-            ):
-                raise LedgerInvariantError(f"invalid split {action.id}")
-        elif (
-            action.action_type != "CASH_DIVIDEND"
-            or action.cash_amount is None
-            or action.cash_amount < 0
-        ):
-            raise LedgerInvariantError(f"invalid corporate action {action.id}")
+        _validate_stored_action(action)
         later_applied = session.scalar(
             select(CorporateAction.id)
             .join(
