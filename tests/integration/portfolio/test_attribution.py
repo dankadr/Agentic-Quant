@@ -144,15 +144,18 @@ def test_cover_realized_pnl_and_signed_allocations(db: Session) -> None:
     assert rows(db)["orb_v1"] == (D("-3"), D("0.03"), D("4.97"))
 
 
-def test_final_shared_cover_preserves_each_owners_distinct_entry_basis(db: Session) -> None:
+@pytest.mark.parametrize("application_delay", [0, 60])
+def test_final_shared_cover_preserves_each_owners_distinct_entry_basis(
+    db: Session, application_delay: int
+) -> None:
     account = setup(db)
     for strategy, price in (("orb_v1", "100"), ("vwap_v1", "200")):
         order = new_order(db, account, strategy, side="SELL", qty="1", strategy_ids=[strategy])
         order.position_effect = "OPEN_SHORT"
-        fill(db, account, order, strategy, "1", price)
+        fill(db, account, order, strategy, "1", price, at=T0 + timedelta(seconds=application_delay))
     cover = new_order(db, account, "cover", qty="2", strategy_ids=["orb_v1", "vwap_v1"])
     cover.position_effect = "CLOSE_SHORT"
-    fill(db, account, cover, "cover", "2", "150")
+    fill(db, account, cover, "cover", "2", "150", at=T0 + timedelta(seconds=application_delay * 2))
     assert rows(db)["orb_v1"][2] == D("-50")
     assert rows(db)["vwap_v1"][2] == D("50")
 

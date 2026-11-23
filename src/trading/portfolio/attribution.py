@@ -5,6 +5,7 @@ and skipped, never allowed to block a fill. Per fill: quantity follows the order
 weights and always sums to the fill. Each short owner realizes its own basis and allocated fees.
 """
 
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -38,7 +39,13 @@ def _split(total: Decimal, weights: dict[str, Decimal], quantum: Decimal) -> dic
 
 
 def record_attribution(
-    session: Session, *, order: Order, fill_id: UUID, fill: BrokerFill, realized: Decimal
+    session: Session,
+    *,
+    order: Order,
+    fill_id: UUID,
+    fill: BrokerFill,
+    realized: Decimal,
+    as_of: datetime,
 ) -> None:
     intent = session.get(OrderIntent, order.intent_id)
     if intent is None:
@@ -79,7 +86,7 @@ def record_attribution(
     if order.position_effect in (PositionEffect.OPEN_SHORT, PositionEffect.CLOSE_SHORT):
         holdings = {
             h.strategy_id: h
-            for h in load_holdings(session, order.account_id, fill.ts)
+            for h in load_holdings(session, order.account_id, as_of)
             if h.symbol == fill.symbol
         }
         cash = _split(

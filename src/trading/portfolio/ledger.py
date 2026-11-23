@@ -180,7 +180,7 @@ def apply_fill(
     position.updated_at = now
 
     record_attribution(
-        session, order=order, fill_id=row.id, fill=fill, realized=quantize_cash(realized)
+        session, order=order, fill_id=row.id, fill=fill, realized=quantize_cash(realized), as_of=now
     )
 
     order.avg_fill_price = quantize_price(
