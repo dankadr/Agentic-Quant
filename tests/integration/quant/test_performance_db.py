@@ -214,18 +214,30 @@ def test_legacy_netted_order_uses_each_signed_leg(db: Session) -> None:
     seed_strategies(db, CFG, now=T0)
     account = open_account(db)
     trade(db, account, "old", "BUY", "3", "100", T0, "orb_v1")
-    for index, (side, weights) in enumerate([
-        ("BUY", {"orb_v1": "-3", "vwap_v1": "5"}),
-        ("SELL", {"orb_v1": "3", "vwap_v1": "-5"}),
-    ], 1):
-        order = new_order(db, account, f"net{index}", side=side, qty="2",
-                          strategy_ids=list(weights), attribution=weights)
+    for index, (side, weights) in enumerate(
+        [
+            ("BUY", {"orb_v1": "-3", "vwap_v1": "5"}),
+            ("SELL", {"orb_v1": "3", "vwap_v1": "-5"}),
+        ],
+        1,
+    ):
+        order = new_order(
+            db,
+            account,
+            f"net{index}",
+            side=side,
+            qty="2",
+            strategy_ids=list(weights),
+            attribution=weights,
+        )
         at = T0 + timedelta(minutes=index)
         fill = replace(broker_fill(order, f"net{index}", qty="2", price="100"), ts=at)
         apply_fill(db, account_id=account, fill=fill, settles_on=NEXT_DAY, now=at)
     episodes = load_trade_episodes(db, account, end=END)
     assert [(e.strategy_id, e.entry_qty, e.exit_qty) for e in episodes] == [
-        ("orb_v1", 3, 3), ("vwap_v1", 5, 5), ("orb_v1", 3, 0),
+        ("orb_v1", 3, 3),
+        ("vwap_v1", 5, 5),
+        ("orb_v1", 3, 0),
     ]
 
 
@@ -234,16 +246,22 @@ def test_short_owners_realize_their_own_basis(db: Session) -> None:
 
     seed_strategies(db, CFG, now=T0)
     account = open_account(db)
-    for index, (owner, effect, size, price) in enumerate([
-        ("orb_v1", "OPEN_SHORT", "1", "100"), ("vwap_v1", "OPEN_SHORT", "1", "120"),
-        ("vwap_v1", "CLOSE_SHORT", ".5", "110"), ("orb_v1", "CLOSE_SHORT", "1", "110"),
-        ("vwap_v1", "CLOSE_SHORT", ".5", "110"),
-    ]):
+    for index, (owner, effect, size, price) in enumerate(
+        [
+            ("orb_v1", "OPEN_SHORT", "1", "100"),
+            ("vwap_v1", "OPEN_SHORT", "1", "120"),
+            ("vwap_v1", "CLOSE_SHORT", ".5", "110"),
+            ("orb_v1", "CLOSE_SHORT", "1", "110"),
+            ("vwap_v1", "CLOSE_SHORT", ".5", "110"),
+        ]
+    ):
         side = "BUY" if effect == "CLOSE_SHORT" else "SELL"
         order = new_order(db, account, f"short{index}", side=side, qty=size, strategy_ids=[owner])
         order.position_effect = effect
         at = T0 + timedelta(minutes=index)
-        fill = replace(broker_fill(order, f"short{index}", qty=size, price=price, fees="0.01"), ts=at)
+        fill = replace(
+            broker_fill(order, f"short{index}", qty=size, price=price, fees="0.01"), ts=at
+        )
         apply_fill(db, account_id=account, fill=fill, settles_on=NEXT_DAY, now=at)
     expected = {"orb_v1": D("-10.02"), "vwap_v1": D("9.97")}
     assert {e.strategy_id: e.pnl for e in load_roundtrips(db, account, end=END)} == expected

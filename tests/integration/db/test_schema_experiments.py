@@ -173,7 +173,10 @@ def test_short_migrations_preserve_existing_long_quantity_and_basis(
         saved = db.get(Position, identity)
         assert saved is not None
         assert (saved.qty, saved.average_cost, saved.realized_pnl, saved.updated_at) == (
-            Decimal("0.3125"), Decimal("99.875"), Decimal("1.2500"), T0,
+            Decimal("0.3125"),
+            Decimal("99.875"),
+            Decimal("1.2500"),
+            T0,
         )
     command.downgrade(_config(url), "0012")
     with Session(engine) as db:

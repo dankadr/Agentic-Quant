@@ -230,11 +230,14 @@ def get_positions(
         is_short = position.qty < 0
         if mark and (
             (Decimal(mark["qty"]) < 0) != is_short
-            or (is_short and (
-                Decimal(mark["qty"]) != position.qty
-                or Decimal(mark["average_cost"]) != position.average_cost
-                or (snap is not None and snap.ts < position.updated_at)
-            ))
+            or (
+                is_short
+                and (
+                    Decimal(mark["qty"]) != position.qty
+                    or Decimal(mark["average_cost"]) != position.average_cost
+                    or (snap is not None and snap.ts < position.updated_at)
+                )
+            )
         ):
             mark = {}  # A pre-fill or pre-split snapshot cannot value the current short.
         market_value = Decimal(mark["market_value"]) if mark else None

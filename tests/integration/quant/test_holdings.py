@@ -41,8 +41,18 @@ def test_a_subincrement_owner_balance_remains_until_the_final_fill(db: Session) 
     _trade(db, acct, "b1", "BUY", "1.0", "100", T0)
     _trade(db, acct, "s1", "SELL", "0.99996667", "101", T0 + timedelta(hours=1))
     (holding,) = load_holdings(db, acct, DAY2)
-    assert (holding.strategy_id, holding.symbol, holding.qty, holding.avg_cost, holding.opened_at) == (
-        "orb_v1", "SPY", D("0.00003333"), D("100"), T0,
+    assert (
+        holding.strategy_id,
+        holding.symbol,
+        holding.qty,
+        holding.avg_cost,
+        holding.opened_at,
+    ) == (
+        "orb_v1",
+        "SPY",
+        D("0.00003333"),
+        D("100"),
+        T0,
     )
     position_qty = select(Position.qty).where(Position.account_id == acct)
     assert db.scalar(position_qty) == holding.qty

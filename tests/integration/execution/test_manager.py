@@ -181,7 +181,7 @@ def test_decision_cannot_be_reused(env: Env) -> None:
 
 def test_client_order_ids_sequential_per_strategy_and_day(env: Env) -> None:
     a, b = env.place(), env.place()
-    other = env.place(strategy="orbXv1")  # '_' must not behave like a LIKE wildcard
+    other = env.place(strategy="orbXv1", symbol="QQQ")  # '_' must not behave like a LIKE wildcard
     c = env.place()
     ids = [env.row(i, "client_order_id").client_order_id for i in (a, b, other, c)]
     assert ids == [
@@ -526,8 +526,8 @@ def test_lease_lost_just_before_the_broker_call_never_reaches_the_broker(
     assert env.status(order_id) == "SUBMITTING"  # the next leader's reconciliation resolves it
 
 
-def test_netted_order_records_every_contributing_strategy(env: Env) -> None:
-    oid = env.place(strategy_ids=("orb_v1", "vwap_v1"))
+def test_legacy_shared_exit_records_every_contributing_strategy(env: Env) -> None:
+    oid = env.place(side=Side.SELL, strategy_ids=("orb_v1", "vwap_v1"))
     assert env.scalar("select strategy_ids from order_intents") == ["orb_v1", "vwap_v1"]
     assert (
         env.row(oid).client_order_id == "paper-orb_v1-20261019-0001"

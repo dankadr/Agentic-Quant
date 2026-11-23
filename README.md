@@ -99,6 +99,15 @@ Multi-day **synthetic** fixtures: `scripts/make_synthetic_fixtures.py --days N`.
 
 ## Strategy parameters
 
+Each ticker belongs to one trading strategy at a time, starting when its entry order is
+accepted. Other strategies skip that ticker until the position is flat and every pending order
+is resolved, including partial fills and orders with an unknown outcome. Reservations survive
+restarts and session boundaries. Simultaneous eligible entries use stable strategy-id order
+(ORB before VWAP); an entry that cannot be sized does not reserve the ticker. The owner alone
+manages its position; safety flattening can always exit, and research agents may still analyze
+any ticker. Existing shared positions may unwind, but cannot receive additional entries.
+
+
 Parameters live in the `strategies` table and change only through
 `POST /v1/strategies/{id}/propose-config` (stored `PENDING_REVIEW`), a review by a *different*
 operator (`POST /v1/config-proposals/{id}/approve|reject`), and application at the **next session

@@ -142,7 +142,9 @@ def test_short_portfolio_reserves_proceeds_and_values_liability_at_ask(
     assert short["restricted_short_proceeds"] == "200.0000"
     (signal,) = client.get("/v1/signals", headers=headers).json()["items"]
     assert (signal["side"], signal["position_effect"], signal["action"]) == (
-        "SELL", "OPEN_SHORT", "SELL to open",
+        "SELL",
+        "OPEN_SHORT",
+        "SELL to open",
     )
     assert client.get("/v1/system/status", headers=headers).json()["allow_short"] is False
 

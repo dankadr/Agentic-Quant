@@ -229,7 +229,9 @@ def demo(
     keys = _seed(db, session_factory, short_positions=allow_short is not None)
     app = create_app(
         settings=Settings(),
-        config=CFG.model_copy(update={"risk": CFG.risk.model_copy(update={"allow_short": bool(allow_short)})}),
+        config=CFG.model_copy(
+            update={"risk": CFG.risk.model_copy(update={"allow_short": bool(allow_short)})}
+        ),
         session_factory=session_factory,
         clock=ManualClock(NOW),
         calendar=calendar,
@@ -244,7 +246,11 @@ def demo(
     port = server.servers[0].sockets[0].getsockname()[1]
     try:
         yield Demo(
-            f"http://127.0.0.1:{port}", keys["viewer1"], keys["op1"], keys["reviewer"], bool(allow_short)
+            f"http://127.0.0.1:{port}",
+            keys["viewer1"],
+            keys["op1"],
+            keys["reviewer"],
+            bool(allow_short),
         )
     finally:
         server.should_exit = True

@@ -62,4 +62,9 @@ def test_venue_actions_are_append_only(migrated: Engine) -> None:
     for privilege in ("UPDATE", "DELETE"):
         assert not _can(migrated, "paper_venue.venue_actions", privilege)
     with migrated.connect() as c:
-        assert c.scalar(text("SELECT count(*) FROM pg_trigger WHERE tgname='venue_actions_append_only'")) == 1
+        assert (
+            c.scalar(
+                text("SELECT count(*) FROM pg_trigger WHERE tgname='venue_actions_append_only'")
+            )
+            == 1
+        )

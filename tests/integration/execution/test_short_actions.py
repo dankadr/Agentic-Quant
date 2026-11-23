@@ -13,6 +13,7 @@ from trading.jobs.lease import renew_lease
 from trading.monitoring.report import daily_report
 from trading.portfolio.corporate_actions import apply_due_actions
 from trading.quant.holdings import load_holdings
+from trading.quant.ownership import load_symbol_owners
 from trading.quant.registry import seed_strategies
 from trading.quant.roundtrips import load_roundtrips, load_trade_episodes
 
@@ -66,6 +67,7 @@ def test_carried_short_split_dividend_and_cover(db, session_factory, clock, cale
         assert s.scalar(select(Position.qty)) == -4
         (lot,) = load_holdings(s, env.account_id, now)
         assert lot.qty == -4
+        assert load_symbol_owners(s, env.account_id, now) == {"SPY": frozenset({"orb_v1"})}
         assert lot.avg_cost == s.scalar(select(Position.average_cost))
     assert run(env).status == "OK"
     cover = env.place(side=Side.BUY, effect=PositionEffect.CLOSE_SHORT, qty="4", limit="51")
@@ -75,6 +77,7 @@ def test_carried_short_split_dividend_and_cover(db, session_factory, clock, cale
     assert env.broker.get_account().positions == {}
     with session_factory() as s:
         assert s.scalar(select(Position.qty)) == 0
+        assert load_symbol_owners(s, env.account_id, clock.now()) == {}
         end = clock.now() + timedelta(seconds=1)
         (trip,) = load_roundtrips(s, env.account_id, end=end)
         assert trip.pnl == s.scalar(select(Position.realized_pnl))
@@ -84,9 +87,11 @@ def test_carried_short_split_dividend_and_cover(db, session_factory, clock, cale
         assert episode.entry_notional == 4 * lot.avg_cost
         daily = daily_report(s, tomorrow, config=CFG, provider="p")
         first_day = daily_report(s, DAY, config=CFG, provider="p")
-        assert D(daily["strategies"]["orb_v1"]["net_pnl"]) + D(
-            first_day["strategies"]["orb_v1"]["net_pnl"]
-        ) == trip.pnl
+        assert (
+            D(daily["strategies"]["orb_v1"]["net_pnl"])
+            + D(first_day["strategies"]["orb_v1"]["net_pnl"])
+            == trip.pnl
+        )
     assert run(env).status == "OK"
 
 
@@ -281,7 +286,9 @@ def test_session_start_adjusts_marks_and_rejects_late_actions(
 
 
 @pytest.mark.parametrize("cash_amount", [None, "1"])
-def test_online_carry_requires_visible_verified_symbol_coverage(db, session_factory, clock, calendar, tmp_path, cash_amount):
+def test_online_carry_requires_visible_verified_symbol_coverage(
+    db, session_factory, clock, calendar, tmp_path, cash_amount
+):
     from tests.integration.execution.env import REF
     from trading.data.alpaca_provider import PROVIDER_NAME
     from trading.portfolio.corporate_actions import require_action_coverage, verify_paper_actions
@@ -298,9 +305,16 @@ def test_online_carry_requires_visible_verified_symbol_coverage(db, session_fact
     before = env.broker.get_account()
     with session_factory.begin() as s:
         assert renew_lease(s, env.lease, now=clock.now(), ttl=timedelta(days=2))
-    runtime = build_runtime(session_factory=session_factory, config=CFG, clock=clock,
-                            lease=env.lease, calendar=calendar, provider=None,
-                            provider_name=PROVIDER_NAME, account_name=REF)
+    runtime = build_runtime(
+        session_factory=session_factory,
+        config=CFG,
+        clock=clock,
+        lease=env.lease,
+        calendar=calendar,
+        provider=None,
+        provider_name=PROVIDER_NAME,
+        account_name=REF,
+    )
     clock.set(now)
     result = runtime.processor.run_tick(now)
     assert result.risk_state.value == "RECONCILIATION_REQUIRED"
@@ -313,16 +327,22 @@ def test_online_carry_requires_visible_verified_symbol_coverage(db, session_fact
     with session_factory.begin() as s:
         verify_paper_actions(s, tmp_path, tomorrow, ["SPY"], now)
         with pytest.raises(TradingError, match="SPY"):
-            require_action_coverage(s, env.account_id, tomorrow, now - timedelta(seconds=1), calendar)
+            require_action_coverage(
+                s, env.account_id, tomorrow, now - timedelta(seconds=1), calendar
+            )
         require_action_coverage(s, env.account_id, tomorrow, now, calendar)
     runtime.processor.start_session(tomorrow)
     assert env.broker.get_account().cash == before.cash - (2 if cash_amount else 0)
     with session_factory() as s:
-        assert s.scalar(text("SELECT count(*) FROM paper_venue.venue_actions")) == int(bool(cash_amount))
+        assert s.scalar(text("SELECT count(*) FROM paper_venue.venue_actions")) == int(
+            bool(cash_amount)
+        )
 
 
 @pytest.mark.parametrize("kind", ["SPLIT", "CASH_DIVIDEND"])
-def test_mixed_action_terms_cannot_be_verified_or_applied(db, session_factory, clock, calendar, tmp_path, kind):
+def test_mixed_action_terms_cannot_be_verified_or_applied(
+    db, session_factory, clock, calendar, tmp_path, kind
+):
     from trading.data.alpaca_provider import PROVIDER_NAME
     from trading.portfolio.corporate_actions import verify_paper_actions
 
@@ -345,16 +365,37 @@ def test_mixed_action_terms_cannot_be_verified_or_applied(db, session_factory, c
             verify_paper_actions(s, tmp_path, day, ["SPY"], now)
     with session_factory.begin() as s:
         assert s.scalar(text("SELECT count(*) FROM corporate_actions")) == 0
-        s.add(CorporateAction(instrument_id=env.instruments["SPY"].id, provider=PROVIDER_NAME,
-                              action_type=kind, ex_date=day, announced_at=now, ingested_at=now,
-                              ratio_from=D(1), ratio_to=D(2), cash_amount=D(1)))
+        s.add(
+            CorporateAction(
+                instrument_id=env.instruments["SPY"].id,
+                provider=PROVIDER_NAME,
+                action_type=kind,
+                ex_date=day,
+                announced_at=now,
+                ingested_at=now,
+                ratio_from=D(1),
+                ratio_to=D(2),
+                cash_amount=D(1),
+            )
+        )
     with pytest.raises(TradingError, match="mixed"):
         with session_factory.begin() as s:
-            apply_due_actions(s, account_id=env.account_id, broker=env.broker, session_date=day,
-                              now=now, provider=PROVIDER_NAME)
+            apply_due_actions(
+                s,
+                account_id=env.account_id,
+                broker=env.broker,
+                session_date=day,
+                now=now,
+                provider=PROVIDER_NAME,
+            )
     assert env.broker.get_account() == before
     with session_factory() as s:
         assert s.scalar(select(Position.qty)) == -2
         assert s.scalar(text("SELECT count(*) FROM cash_ledger WHERE source_type='DIVIDEND'")) == 0
         assert s.scalar(text("SELECT count(*) FROM paper_venue.venue_actions")) == 0
-        assert s.scalar(text("SELECT count(*) FROM audit_events WHERE action LIKE 'corporate_action.%'")) == 0
+        assert (
+            s.scalar(
+                text("SELECT count(*) FROM audit_events WHERE action LIKE 'corporate_action.%'")
+            )
+            == 0
+        )

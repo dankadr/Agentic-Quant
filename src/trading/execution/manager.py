@@ -51,6 +51,7 @@ from trading.jobs.outbox import emit_event
 from trading.monitoring.logging import get_logger
 from trading.monitoring.metrics import ORDERS_BY_STATUS
 from trading.portfolio.ledger import apply_fill
+from trading.quant.ownership import load_symbol_owners
 from trading.risk.models import ProposedOrder
 from trading.risk.service import RecordedDecision, proposal_terms
 
@@ -66,6 +67,10 @@ class RiskNotApproved(TradingError):
 
 class DecisionAlreadyUsed(TradingError):
     """A risk decision authorises exactly one order intent."""
+
+
+class SymbolOwnershipConflict(TradingError):
+    """An order would let another strategy act on a reserved ticker."""
 
 
 class InvalidStrategyId(TradingError):
@@ -171,6 +176,21 @@ class ExecutionManager:
         ).one_or_none()
         if trading_session is None:
             raise SessionNotStarted(f"no trading session for {session_date}")
+
+        # Recheck after locking: a stale allocation cannot acquire another strategy's ticker.
+        owners = load_symbol_owners(session, proposal.account_id, self._clock.now())
+        strategies = set(proposal.strategies)
+        owner = owners.get(proposal.instrument.symbol)
+        effect = effective_effect(proposal.side, proposal.position_effect)
+        if effect.is_entry:
+            if len(strategies) != 1 or (owner is not None and owner != strategies):
+                raise SymbolOwnershipConflict(f"SYMBOL_OWNED: {proposal.instrument.symbol}")
+        elif (
+            proposal.strategy_id != "eod_flatten"
+            and owner is not None
+            and not (strategies - {"eod_flatten"}).issubset(owner)
+        ):
+            raise SymbolOwnershipConflict(f"SYMBOL_OWNED: {proposal.instrument.symbol}")
 
         prefix = f"paper-{proposal.strategy_id}-{session_date:%Y%m%d}-"
         existing = session.scalar(

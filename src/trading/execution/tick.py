@@ -32,7 +32,7 @@ from trading.db.models.portfolio import Account, Position, TradingSession
 from trading.db.models.research import Strategy
 from trading.db.models.trading import Order, OrderIntent, RiskDecisionRow
 from trading.execution.intents import IntentSource, ProposalRequest
-from trading.execution.manager import ExecutionManager
+from trading.execution.manager import ExecutionManager, SymbolOwnershipConflict
 from trading.execution.reconcile import ReconciliationReport, reconcile_account
 from trading.execution.state_machine import TERMINAL
 from trading.jobs.lease import Lease, LeaseLost, assert_fence
@@ -675,11 +675,26 @@ class PaperTickProcessor:
             )
             if not recorded.evaluation.allowed:
                 return 1, None
-            order_id = self._manager.create_order(
-                session,
-                proposal=proposal,
-                decision=recorded,
-                market_snapshot_id=snapshot.id,
-                session_date=session_date,
-            )
+            try:
+                order_id = self._manager.create_order(
+                    session,
+                    proposal=proposal,
+                    decision=recorded,
+                    market_snapshot_id=snapshot.id,
+                    session_date=session_date,
+                )
+            except SymbolOwnershipConflict:
+                record_audit(
+                    session,
+                    actor="system",
+                    action="order.ownership_blocked",
+                    target=request.symbol,
+                    request_id=None,
+                    before=None,
+                    after=None,
+                    result="SYMBOL_OWNED",
+                    now=now,
+                    details={"strategy_id": request.strategy_id},
+                )
+                return 1, None
         return 1, order_id

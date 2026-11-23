@@ -140,7 +140,9 @@ def test_paper_shorts_on_a_phone(new_page, demo: Demo, tmp_path: Path) -> None: 
     from playwright.sync_api import expect
 
     color = "light" if demo.allow_short else "dark"
-    page = new_page(viewport={"width": 375, "height": 800}, color_scheme=color, reduced_motion="reduce")
+    page = new_page(
+        viewport={"width": 375, "height": 800}, color_scheme=color, reduced_motion="reduce"
+    )
     login(page, demo)
 
     overview = page.locator(".position-summary")

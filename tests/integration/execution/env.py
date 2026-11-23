@@ -32,6 +32,7 @@ from trading.db.models.portfolio import Account
 from trading.execution.manager import ExecutionManager
 from trading.jobs.lease import EXECUTOR_LEASE, Lease, acquire_lease
 from trading.portfolio.ledger import open_paper_account
+from trading.quant.registry import seed_strategies
 from trading.risk.halts import start_session
 from trading.risk.models import ProposedOrder, RiskEvaluation
 from trading.risk.service import RecordedDecision, proposal_terms
@@ -200,6 +201,7 @@ def build_env(
 ) -> Env:
     clock.set(NOW)
     instruments = upsert_universe(db, CFG.universe)
+    seed_strategies(db, CFG, now=NOW)
     account_id = open_paper_account(db, name=REF, starting_cash=D("1000"), now=NOW)
     start_session(db, account_id=account_id, session_date=DAY, start_equity=D("1000"), now=NOW)
     set_risk_state(db, risk_state=risk, reason="test", actor="t", now=NOW)

@@ -94,13 +94,17 @@ def test_comparison_queue_captures_configuration_at_session_boundary(session_fac
 
     config = load_config(Path("configs"))
     orb = config.strategies["orb_v1"]
-    config = config.model_copy(update={
-        "risk": config.risk.model_copy(update={"max_new_entries_per_day": 10}),
-        "strategies": {
-            **config.strategies,
-            "orb_v1": orb.model_copy(update={"params": {**orb.params, "max_entries_per_symbol_per_day": 1}}),
-        },
-    })
+    config = config.model_copy(
+        update={
+            "risk": config.risk.model_copy(update={"max_new_entries_per_day": 10}),
+            "strategies": {
+                **config.strategies,
+                "orb_v1": orb.model_copy(
+                    update={"params": {**orb.params, "max_entries_per_symbol_per_day": 1}}
+                ),
+            },
+        }
+    )
     clock = ManualClock(datetime(2026, 10, 19, 20, 15, 30, tzinfo=UTC))
     tick(session_factory, clock, calendar, config.agents, config=config)
     with session_factory() as session:

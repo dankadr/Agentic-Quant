@@ -93,7 +93,12 @@ def test_sleeve_remaining_limits_size() -> None:
 
 def test_symbol_cap_limits_size_and_counts_existing_exposure() -> None:
     result = alloc.allocate(
-        [signal(notional="80")], ctx(held_qty={"SPY": D("0.6")}, open_buy_notional={"SPY": D("10")})
+        [signal(notional="80")],
+        ctx(
+            holdings=(hold("orb_v1", "0.6"),),
+            held_qty={"SPY": D("0.6")},
+            open_buy_notional={"SPY": D("10")},
+        ),
     )
     (req,) = result.requests
     assert req.quantity == D(
@@ -102,7 +107,9 @@ def test_symbol_cap_limits_size_and_counts_existing_exposure() -> None:
 
 
 def test_no_headroom_means_no_order_with_a_reason() -> None:
-    result = alloc.allocate([signal()], ctx(held_qty={"SPY": D("1.0")}))
+    result = alloc.allocate(
+        [signal()], ctx(holdings=(hold("orb_v1", "1.0"),), held_qty={"SPY": D("1.0")})
+    )
     assert result.requests == ()
     assert [(n.outcome, n.reason) for n in result.notes] == [("DROPPED", "NO_BUDGET")]
 
@@ -207,7 +214,7 @@ def test_exactly_offsetting_signals_still_execute_the_exit() -> None:
     assert (req.side, req.quantity) == (Side.SELL, D("0.8"))
     assert req.attribution == {"vwap_v1": D("-0.8")}
     reasons = {(n.strategy_id, n.reason) for n in result.notes if n.outcome == "DROPPED"}
-    assert reasons == {("orb_v1", "EXIT_PRIORITY")}
+    assert reasons == {("orb_v1", "SYMBOL_OWNED")}
 
 
 def test_blocked_entries_are_dropped_so_an_exit_is_never_netted_into_a_deniable_buy() -> None:
@@ -241,12 +248,12 @@ def test_never_creates_a_short_through_netting() -> None:
     assert any(n.reason == "NO_HOLDING" for n in result.notes)
 
 
-def test_two_strategies_buying_the_same_symbol_share_the_symbol_cap() -> None:
+def test_two_strategies_buying_the_same_symbol_have_one_owner() -> None:
     signals = [signal("orb_v1", notional="80"), signal("vwap_v1", notional="80")]
     result = alloc.allocate(signals, ctx())
     (req,) = result.requests
     assert req.quantity * D("100.10") <= D("100")  # 10% symbol cap shared, never 160
-    assert set(req.attribution) == {"orb_v1", "vwap_v1"}
+    assert set(req.attribution) == {"orb_v1"}
     assert sum(req.attribution.values()) == req.quantity
 
 
@@ -410,11 +417,13 @@ def test_flatten_defers_owner_with_uncertain_exit(direction: int, outstanding: s
     assert order.attribution == {"B": D(-direction * 5)}
     assert order.quantity == 5
 
+
 @pytest.mark.parametrize(("fractional", "each"), [(False, "0.5"), (True, "1.00005")])
 def test_flatten_combines_owner_fragments(fractional: bool, each: str) -> None:
     cover = signal("eod_flatten").model_copy(update={"position_effect": PositionEffect.CLOSE_SHORT})
     book = ctx(
-        instruments=instruments(fractional), held_qty={"SPY": -2 * D(each)},
+        instruments=instruments(fractional),
+        held_qty={"SPY": -2 * D(each)},
         holdings=(hold("A", "-" + each), hold("B", "-" + each)),
     )
     (order,) = alloc.allocate([cover], book).requests

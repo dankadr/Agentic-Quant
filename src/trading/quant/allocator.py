@@ -48,6 +48,7 @@ class AllocationContext:
     open_short_notional: Mapping[str, Decimal] = field(default_factory=dict)
     open_cover_qty: Mapping[str, Decimal] = field(default_factory=dict)
     asks: Mapping[str, Decimal] = field(default_factory=dict)
+    symbol_owners: Mapping[str, frozenset[str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,20 @@ class SleeveAllocator:
         for symbol, group in by_symbol.items():
             instrument = ctx.instruments.get(symbol)
             held = ctx.held_qty.get(symbol, _ZERO)
+            owners = set((ctx.symbol_owners or {}).get(symbol, ()))
+            if ctx.symbol_owners is None:
+                owners.update(
+                    h.strategy_id for h in ctx.holdings if h.symbol == symbol and h.qty != 0
+                )
+                owners.update(strategy for strategy, sym, _ in ctx.in_flight if sym == symbol)
+            if not owners and (
+                held != 0
+                or ctx.open_buy_notional.get(symbol)
+                or ctx.open_short_notional.get(symbol)
+                or ctx.open_sell_qty.get(symbol)
+                or ctx.open_cover_qty.get(symbol)
+            ):
+                owners.add("")
             live: list[SignalProposal] = []
             for sig in group:
                 effect = effective_effect(sig.side, sig.position_effect)
@@ -161,11 +176,11 @@ class SleeveAllocator:
             )
             entry_legs: list[_Leg] = []
             for sig in entries:
+                if owners and owners != {sig.strategy_id}:
+                    drop(sig, "SYMBOL_OWNED")
+                    continue
                 if exit_legs or reserved.get(symbol):
                     drop(sig, "EXIT_PRIORITY")
-                    continue
-                if len({entry.side for entry in entries}) > 1:
-                    drop(sig, "OPPOSITE_DIRECTION")
                     continue
                 price = sig.limit_price or mark
                 if price is not None and sig.side is Side.SELL:
@@ -201,6 +216,7 @@ class SleeveAllocator:
                 headroom -= qty * price
                 sleeve_used[sig.strategy_id] += qty * price
                 entry_legs.append(_Leg(sig, sig.strategy_id, qty))
+                owners.add(sig.strategy_id)
 
             legs_all = [*entry_legs, *exit_legs]
             if not legs_all:

@@ -133,7 +133,10 @@ def test_an_open_position_is_an_open_trade(
 
 
 def test_short_episodes_and_long_episode_on_same_symbol(
-    client: TestClient, db: Session, acct, viewer_key: str,
+    client: TestClient,
+    db: Session,
+    acct,
+    viewer_key: str,
 ) -> None:  # type: ignore[no-untyped-def]
     fill(db, acct, "os", "SELL", "2", "100", T0, effect=PositionEffect.OPEN_SHORT)
     same_day_cover = T0 + timedelta(minutes=30)
@@ -141,7 +144,10 @@ def test_short_episodes_and_long_episode_on_same_symbol(
     headers = bearer(viewer_key)
     (short,) = client.get("/v1/trades?date=2026-10-19", headers=headers).json()["items"]
     assert (short["direction"], short["status"], short["avg_entry"], short["avg_exit"]) == (
-        "SHORT", "OPEN", "100", "98",
+        "SHORT",
+        "OPEN",
+        "100",
+        "98",
     )
     fill(db, acct, "cs2", "BUY", "1", "99", DAY2, effect=PositionEffect.CLOSE_SHORT)
     round_trip(db, acct, "l", "orb_v1", "SPY", "98", "101", DAY2 + timedelta(minutes=5))

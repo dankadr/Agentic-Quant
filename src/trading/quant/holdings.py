@@ -15,6 +15,7 @@ from trading.execution.state_machine import TERMINAL
 from trading.portfolio.adjustments import applied_splits, split_factor
 from trading.portfolio.balances import MissingMark
 from trading.quant.models import EntryHistory, Holding
+from trading.quant.position_cycles import load_current_cycle_fills
 
 _TERMINAL = tuple(s.value for s in TERMINAL)
 
@@ -32,33 +33,19 @@ def load_holdings(session: Session, account_id: UUID, as_of: datetime) -> tuple[
     A lot starts at the first buy after the strategy was last flat, so yesterday's closed round
     trips never age or re-price today's entry.
     """
-    rows = session.execute(
-        text(
-            "SELECT a.strategy_id, i.symbol, a.allocated_qty AS qty, f.price, f.ts"
-            " FROM strategy_attribution a"
-            " JOIN fills f ON f.id = a.fill_id"
-            " JOIN orders o ON o.id = f.order_id"
-            " JOIN instruments i ON i.id = o.instrument_id"
-            " LEFT JOIN order_events e ON e.order_id = o.id AND e.reason = 'fill'"
-            " AND e.payload_json->>'execution_id' = f.execution_id"
-            " WHERE o.account_id = :acct AND f.ts <= :as_of"
-            " ORDER BY a.strategy_id, i.symbol, f.ts, e.seq, f.execution_id"
-        ),
-        {"acct": account_id, "as_of": as_of},
-    ).all()
+    fills = load_current_cycle_fills(session, account_id, as_of)
     lots: dict[tuple[str, str], _Lot] = {}
-    splits = applied_splits(session, account_id, as_of)
-    for r in rows:
-        factor = split_factor(splits, r.symbol, r.ts)
-        qty = Decimal(r.qty) * factor
-        lot = lots.setdefault((r.strategy_id, r.symbol), _Lot(r.ts))
-        if lot.qty == 0:
-            lot = lots[(r.strategy_id, r.symbol)] = _Lot(r.ts)
-        if lot.qty * qty >= 0 and qty:
-            lot.cost = quantize_price(
-                (abs(lot.qty) * lot.cost + abs(qty) * r.price / factor) / abs(lot.qty + qty)
-            )
-        lot.qty += qty
+    for fill in fills:
+        for strategy, qty in fill.attribution.items():
+            key = (strategy, fill.symbol)
+            lot = lots.setdefault(key, _Lot(fill.ts))
+            if lot.qty == 0:
+                lot = lots[key] = _Lot(fill.ts)
+            if lot.qty * qty >= 0 and qty:
+                lot.cost = quantize_price(
+                    (abs(lot.qty) * lot.cost + abs(qty) * fill.price) / abs(lot.qty + qty)
+                )
+            lot.qty += qty
     return tuple(
         Holding(strategy, symbol, lot.qty, lot.cost, lot.opened_at)
         for (strategy, symbol), lot in sorted(lots.items())

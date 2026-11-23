@@ -7,6 +7,7 @@ parameters are read from the ``strategies`` table, which only changes at session
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -43,6 +44,7 @@ from trading.quant.holdings import (
 )
 from trading.quant.models import SignalProposal, SignalStrategy, StrategyInput
 from trading.quant.orb import OrbStrategy
+from trading.quant.ownership import load_symbol_owners
 from trading.quant.vwap import VwapStrategy
 from trading.risk.service import build_account_view
 
@@ -133,6 +135,7 @@ class StrategyIntentSource:
                 strategies = self._strategies(session)
             if not strategies:
                 return ()
+            owners = load_symbol_owners(session, self._account_id, now)
             trading_state = get_system_state(session).trading_state
             data = StrategyInput(
                 snapshot=snapshot,
@@ -158,13 +161,37 @@ class StrategyIntentSource:
             diagnostics: list[dict[str, Any]] = []
             for strategy in strategies:
                 try:
-                    signals.extend(strategy.evaluate(data))
+                    strategy_data = data
+                    if strategy.strategy_id != "eod_flatten":
+                        # Preserve index features, but do not evaluate foreign tickers for trades.
+                        strategy_data = replace(
+                            data,
+                            snapshot=replace(
+                                snapshot,
+                                symbols={
+                                    symbol: (
+                                        replace(view, tradable=False)
+                                        if symbol in owners
+                                        and strategy.strategy_id not in owners[symbol]
+                                        else view
+                                    )
+                                    for symbol, view in snapshot.symbols.items()
+                                },
+                            ),
+                        )
+                    signals.extend(strategy.evaluate(strategy_data))
                     diagnostics.extend(
                         {
                             "strategy_id": strategy.strategy_id,
                             "symbol": symbol,
                             "outcome": "NO_ENTRY",
-                            "reason": reason,
+                            "reason": (
+                                "SYMBOL_OWNED"
+                                if symbol in owners
+                                and strategy.strategy_id not in owners[symbol]
+                                and strategy.strategy_id != "eod_flatten"
+                                else reason
+                            ),
                         }
                         for symbol, reason in getattr(strategy, "entry_diagnostics", {}).items()
                         if reason != "SIGNAL"
@@ -203,6 +230,7 @@ class StrategyIntentSource:
             )
             ctx = AllocationContext(
                 equity=portfolio.equity,
+                symbol_owners=owners,
                 now=now,
                 marks=marks,
                 holdings=data.holdings,

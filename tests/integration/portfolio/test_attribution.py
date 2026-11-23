@@ -144,28 +144,62 @@ def test_cover_realized_pnl_and_signed_allocations(db: Session) -> None:
     assert rows(db)["orb_v1"] == (D("-3"), D("0.03"), D("4.97"))
 
 
+def test_final_shared_cover_preserves_each_owners_distinct_entry_basis(db: Session) -> None:
+    account = setup(db)
+    for strategy, price in (("orb_v1", "100"), ("vwap_v1", "200")):
+        order = new_order(db, account, strategy, side="SELL", qty="1", strategy_ids=[strategy])
+        order.position_effect = "OPEN_SHORT"
+        fill(db, account, order, strategy, "1", price)
+    cover = new_order(db, account, "cover", qty="2", strategy_ids=["orb_v1", "vwap_v1"])
+    cover.position_effect = "CLOSE_SHORT"
+    fill(db, account, cover, "cover", "2", "150")
+    assert rows(db)["orb_v1"][2] == D("-50")
+    assert rows(db)["vwap_v1"][2] == D("50")
+
+
 @pytest.mark.parametrize(("fractional", "partial"), [(False, "1"), (True, "2.0001")])
-def test_shared_canceled_short_flattens_all_owner_fragments(db: Session, fractional: bool, partial: str) -> None:
+def test_shared_canceled_short_flattens_all_owner_fragments(
+    db: Session, fractional: bool, partial: str
+) -> None:
     from tests.unit.quant.test_allocator import alloc, ctx, instruments, signal
     from trading.core.enums import PositionEffect
     from trading.quant.holdings import load_holdings, load_in_flight
 
     account = setup(db)
     owners = ["orb_v1", "vwap_v1"]
-    order = new_order(db, account, "shared", side="SELL", qty="4", strategy_ids=owners,
-                      attribution=dict.fromkeys(owners, "-2"))
+    order = new_order(
+        db,
+        account,
+        "shared",
+        side="SELL",
+        qty="4",
+        strategy_ids=owners,
+        attribution=dict.fromkeys(owners, "-2"),
+    )
     order.position_effect = "OPEN_SHORT"
     fill(db, account, order, "partial", partial, "100")
     order.status = "CANCELED"
     db.flush()
-    book = ctx(holdings=load_holdings(db, account, T0), held_qty={"SPY": -D(partial)},
-               instruments=instruments(fractional), in_flight=load_in_flight(db, account))
-    flatten = signal("eod_flatten").model_copy(update={"position_effect": PositionEffect.CLOSE_SHORT})
+    book = ctx(
+        holdings=load_holdings(db, account, T0),
+        held_qty={"SPY": -D(partial)},
+        instruments=instruments(fractional),
+        in_flight=load_in_flight(db, account),
+    )
+    flatten = signal("eod_flatten").model_copy(
+        update={"position_effect": PositionEffect.CLOSE_SHORT}
+    )
     (request,) = alloc.allocate([flatten], book).requests
     assert request.quantity == D(partial)
     assert request.attribution == dict.fromkeys(owners, D(partial) / 2)
-    cover = new_order(db, account, "flatten", qty=partial, strategy_ids=owners,
-                      attribution={s: str(q) for s, q in request.attribution.items()})
+    cover = new_order(
+        db,
+        account,
+        "flatten",
+        qty=partial,
+        strategy_ids=owners,
+        attribution={s: str(q) for s, q in request.attribution.items()},
+    )
     cover.position_effect = "CLOSE_SHORT"
     fill(db, account, cover, "cover", partial, "101")
     assert load_holdings(db, account, T0) == ()
